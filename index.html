@@ -6512,6 +6512,74 @@ const Scene = (()=>{
     mirrorUniforms: null
   };
 
+  const billboardObjects = new Set();
+  const REFLECTION_FLIP_AXIS = 'y';
+
+  function markBillboard(obj){
+    if(!obj) return obj;
+    try{
+      obj.userData = obj.userData || {};
+      obj.userData.billboard = true;
+    }catch{}
+    billboardObjects.add(obj);
+    return obj;
+  }
+
+  function unmarkBillboard(obj){
+    if(!obj) return;
+    billboardObjects.delete(obj);
+    if(obj.userData){
+      delete obj.userData.__mirrorFlipped;
+      delete obj.userData.__mirrorOrigScale;
+    }
+  }
+
+  function applyMirrorBillboardFlip(active){
+    const axis = REFLECTION_FLIP_AXIS;
+    billboardObjects.forEach(obj=>{
+      if(!obj || !obj.userData || !obj.userData.billboard){
+        billboardObjects.delete(obj);
+        return;
+      }
+      if(!obj.parent){
+        billboardObjects.delete(obj);
+        return;
+      }
+      if(active){
+        if(obj.userData.__mirrorFlipped) return;
+        if(obj.userData.__mirrorOrigScale){
+          obj.userData.__mirrorOrigScale.copy(obj.scale);
+        } else {
+          obj.userData.__mirrorOrigScale = obj.scale.clone();
+        }
+        const s = obj.scale;
+        if(axis === 'x'){
+          s.x = (s.x === 0 ? 0 : -s.x);
+        } else if(axis === 'y'){
+          s.y = (s.y === 0 ? 0 : -s.y);
+        } else {
+          s.z = (s.z === 0 ? 0 : -s.z);
+        }
+        obj.userData.__mirrorFlipped = true;
+      } else {
+        if(!obj.userData.__mirrorFlipped) return;
+        if(obj.userData.__mirrorOrigScale){
+          obj.scale.copy(obj.userData.__mirrorOrigScale);
+        } else {
+          const s = obj.scale;
+          if(axis === 'x'){
+            s.x = (s.x === 0 ? 0 : -s.x);
+          } else if(axis === 'y'){
+            s.y = (s.y === 0 ? 0 : -s.y);
+          } else {
+            s.z = (s.z === 0 ? 0 : -s.z);
+          }
+        }
+        obj.userData.__mirrorFlipped = false;
+      }
+    });
+  }
+
   const PRESENT_LIGHT_BG = new THREE.Color(0xf6f7fb);
   const PRESENT_DARK_BG = new THREE.Color(0x0f172a);
 
@@ -6570,6 +6638,8 @@ const Scene = (()=>{
     };
     FancyGraphics.decor.add(mirror);
     FancyGraphics.groups.mirror = mirror;
+    mirror.onBeforeRender = ()=>{ applyMirrorBillboardFlip(true); };
+    mirror.onAfterRender = ()=>{ applyMirrorBillboardFlip(false); };
 
     const solidGround = new THREE.Mesh(
       new THREE.PlaneGeometry(400,400),
@@ -7056,7 +7126,7 @@ const Scene = (()=>{
       const spr = new THREE.Sprite(mat);
       spr.scale.set(0.9, 0.44, 1);
       spr.renderOrder = 2000;
-      return spr;
+      return markBillboard(spr);
     } else {
       // Simple mode (current behavior)
       const canvas=document.createElement('canvas');
@@ -7082,8 +7152,7 @@ const Scene = (()=>{
       const sprite=new THREE.Sprite(material);
       sprite.scale.set(0.5, 0.32, 1);
       sprite.renderOrder=2; // above solids, below edge overlays
-      sprite.userData.billboard = true;
-      return sprite;
+      return markBillboard(sprite);
     }
   }
   // 3D label sprite for arrays (ID and name) - improved with depth testing
@@ -7122,23 +7191,20 @@ const Scene = (()=>{
     tex.magFilter = THREE.LinearFilter;
     tex.generateMipmaps = true;
 
-    const mat = new THREE.MeshBasicMaterial({
+    const mat = new THREE.SpriteMaterial({
       map: tex,
       transparent: true,
       depthTest: true,
-      depthWrite: false,
-      side: THREE.DoubleSide
+      depthWrite: false
     });
     mat.toneMapped = false;
 
-    const geo = new THREE.PlaneGeometry(1, 1);
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Sprite(mat);
     const aspect = w/h;
     // Slightly reduce width/height to avoid a stretched look while preserving aspect
     mesh.scale.set(1.0*aspect, 1.0, 1);   // world-unit size
     mesh.userData.isLabel = true;
-    mesh.userData.billboard = true;
-    return mesh;
+    return markBillboard(mesh);
   }
   const COLORS = {
     empty: 0xffffff,      // empty cells: clean white
@@ -8559,7 +8625,7 @@ const Scene = (()=>{
     // Rehydrate value sprites for this array after render
     try{
       const vs = window.valueSprites || new Map();
-      vs.forEach((sprite,key)=>{ if(String(key).startsWith(`${arr.id}:`)){ try{ sprite.parent?.remove(sprite); sprite.material?.map?.dispose?.(); sprite.material?.dispose?.(); }catch{} vs.delete(key); } });
+      vs.forEach((sprite,key)=>{ if(String(key).startsWith(`${arr.id}:`)){ try{ unmarkBillboard(sprite); sprite.parent?.remove(sprite); sprite.material?.map?.dispose?.(); sprite.material?.dispose?.(); }catch{} vs.delete(key); } });
       Object.values(arr.chunks||{}).forEach(ch=>{
         (ch.cells||[]).forEach(c=>{
           try{
@@ -8899,7 +8965,7 @@ const Scene = (()=>{
   function buildAxes(arr){
     // remove old
     // Remove previous labels safely from their actual parent
-    arr.labels?.forEach(s=>{ try{ s.parent?.remove(s); s.material?.dispose?.(); s.material?.map?.dispose?.(); s.geometry?.dispose?.(); }catch{} }); arr.labels=[];
+    arr.labels?.forEach(s=>{ try{ if(s?.userData?.billboard) unmarkBillboard(s); s.parent?.remove(s); s.material?.dispose?.(); s.material?.map?.dispose?.(); s.geometry?.dispose?.(); }catch{} }); arr.labels=[];
     const mk=(txt,color='#333333')=>{
       const c=document.createElement('canvas'); const ctx=c.getContext('2d'); const fs=64;
       ctx.font=`900 ${fs}px 'Roboto Mono', monospace`; const w=Math.ceil(ctx.measureText(txt).width);
@@ -8916,7 +8982,7 @@ const Scene = (()=>{
       const s=new THREE.Sprite(m);
       const targetH=0.6; // consistent height in world units
       const aspect=c.width/c.height; s.scale.set(targetH*aspect, targetH, 1);
-      return s;
+      return markBillboard(s);
     };
     const X=arr.size.x,Y=arr.size.y,Z=arr.size.z;
     const grabSize=0.7; // smaller rounded voxel for handle
@@ -10775,7 +10841,7 @@ const Scene = (()=>{
     
     // Remove old sprite if exists
     const oldSprite=valueSprites.get(key);
-    if(oldSprite){ oldSprite.parent?.remove(oldSprite); oldSprite.material.map?.dispose(); oldSprite.material.dispose(); valueSprites.delete(key); }
+    if(oldSprite){ try{ unmarkBillboard(oldSprite); }catch{} oldSprite.parent?.remove(oldSprite); oldSprite.material.map?.dispose(); oldSprite.material.dispose(); valueSprites.delete(key); }
     
     // Create new sprite if cell has content (prefer displayText if available)
     const displayText = cell.meta?.displayText;
@@ -10882,6 +10948,7 @@ const Scene = (()=>{
 
           if(pr.age > pr.life){
             const pos = pr.sprite.position.clone();
+            try{ unmarkBillboard(pr.sprite); }catch{}
             pr.sprite.parent?.remove(pr.sprite); pr.sprite.material?.map?.dispose?.(); pr.sprite.material?.dispose?.();
 
             let newTexts = [], nextKind = null;
@@ -10941,6 +11008,7 @@ const Scene = (()=>{
               // Split into Unicode code points (grapheme clusters approximation)
               const chars = Array.from(raw).slice(0, 96);
               // Remove the big clone before raining
+              try{ unmarkBillboard(c.sprite); }catch{}
               c.sprite.parent?.remove(c.sprite);
               c.sprite.material.map?.dispose?.();
               c.sprite.material?.dispose?.();
@@ -10984,6 +11052,7 @@ const Scene = (()=>{
                 : String(pr.ch||'');
               // Replace char sprite with a number sprite at current position
               const pos = pr.sprite.position.clone();
+              try{ unmarkBillboard(pr.sprite); }catch{}
               pr.sprite.parent?.remove(pr.sprite);
               pr.sprite.material?.map?.dispose?.();
               pr.sprite.material?.dispose?.();
@@ -11002,6 +11071,7 @@ const Scene = (()=>{
               const n = (typeof pr.code==='number' && isFinite(pr.code)) ? pr.code : null;
               let bin = (n!=null) ? n.toString(2) : '';
               if(!bin) bin = '0';
+              try{ unmarkBillboard(pr.sprite); }catch{}
               pr.sprite.parent?.remove(pr.sprite);
               pr.sprite.material?.map?.dispose?.();
               pr.sprite.material?.dispose?.();
@@ -11019,6 +11089,7 @@ const Scene = (()=>{
 
           if(pr.kind === 'bit' && pr.age > pr.life){
             try{
+              try{ unmarkBillboard(pr.sprite); }catch{}
               pr.sprite.parent?.remove(pr.sprite);
               pr.sprite.material?.map?.dispose?.();
               pr.sprite.material?.dispose?.();
@@ -11089,6 +11160,7 @@ const Scene = (()=>{
       // Remove labels/grab
       (arr.labels||[]).forEach(s=>{
         try{
+          if(s?.userData?.billboard) unmarkBillboard(s);
           s.parent?.remove(s);
           s.material?.map?.dispose?.();
           s.material?.dispose?.();
@@ -11243,7 +11315,7 @@ const Scene = (()=>{
     if(!arr || !arr._frame) return;
     try{
       const old = arr._frame.userData?.labelSprite;
-      if(old){ old.parent?.remove(old); old.material?.map?.dispose?.(); old.material?.dispose?.(); old.geometry?.dispose?.(); }
+      if(old){ try{ if(old?.userData?.billboard) unmarkBillboard(old); }catch{} old.parent?.remove(old); old.material?.map?.dispose?.(); old.material?.dispose?.(); old.geometry?.dispose?.(); }
       const labelSprite = makeArrayLabelSprite(arr);
       // Initial position will be updated by updateArrayLabelPlacement
       labelSprite.position.set(0, arr.size.y/2 + 0.8, 0);
@@ -11264,7 +11336,7 @@ const Scene = (()=>{
         }
         // Rebuild value sprites for visible cells (clear first to prevent duplicates)
         try{
-          valueSprites.forEach((sprite,key)=>{ if(String(key).startsWith(`${arr.id}:`)){ try{ sprite.parent?.remove(sprite); sprite.material?.map?.dispose?.(); sprite.material?.dispose?.(); }catch{} valueSprites.delete(key); } });
+          valueSprites.forEach((sprite,key)=>{ if(String(key).startsWith(`${arr.id}:`)){ try{ unmarkBillboard(sprite); sprite.parent?.remove(sprite); sprite.material?.map?.dispose?.(); sprite.material?.dispose?.(); }catch{} valueSprites.delete(key); } });
           Object.values(arr.chunks||{}).forEach(ch=>{
             (ch.cells||[]).forEach(c=>{
               try{ const cell = Formula.getCell({arrId: arr.id, x:c.x, y:c.y, z:c.z}); if(cell && (cell.value!=='' && cell.value!==null && cell.value!==undefined)) updateValueSprite(arr, c.x, c.y, c.z, cell); }catch{}
