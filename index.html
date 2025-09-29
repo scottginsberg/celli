@@ -98,8 +98,23 @@ input[type=text]{width:100%;padding:8px 10px;border-radius:10px;border:1px solid
 
 /* 2D Sheet + merged Fx UI */
 .intro-centered{width:860px !important; height:520px !important; left:50% !important; top:50% !important; bottom:auto !important; transform:translate(-50%,-50%) !important}
-#sheet{position:fixed; left:16px; bottom:16px; width:760px; height:440px; background:var(--panel); border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow); padding:12px; z-index:10001; display:flex; flex-direction:column; transition:all .9s cubic-bezier(0.34,1.56,0.64,1)}
+#sheet{position:fixed; left:16px; bottom:16px; width:760px; height:440px; background:var(--panel); border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow); padding:12px; z-index:10001; display:flex; flex-direction:column; transition:all .9s cubic-bezier(0.34,1.56,0.64,1); overflow:hidden}
 .intro-max{width:95vw !important; height:95vh !important; left:50% !important; top:50% !important; bottom:auto !important; transform:translate(-50%,-50%) !important}
+body.crystal-2d #sheet{background:linear-gradient(150deg, rgba(255,255,255,0.22) 0%, rgba(221,238,255,0.28) 42%, rgba(236,233,255,0.18) 100%); border:1px solid rgba(255,255,255,0.58); box-shadow:0 30px 60px rgba(15,23,42,0.25), inset 0 1px 0 rgba(255,255,255,0.75); backdrop-filter:blur(26px) saturate(185%); -webkit-backdrop-filter:blur(26px) saturate(185%); position:fixed;}
+body.crystal-2d #sheet::before{content:""; position:absolute; inset:-12% -18%; border-radius:28px; background:radial-gradient(120% 140% at 12% 8%, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.05) 55%), radial-gradient(140% 140% at 88% 92%, rgba(147,197,253,0.35) 0%, rgba(147,197,253,0.0) 65%); opacity:0.7; pointer-events:none; filter:blur(4px);}
+body.crystal-2d #sheet::after{content:""; position:absolute; inset:-2px; border-radius:inherit; border:1px solid rgba(255,255,255,0.4); mix-blend-mode:soft-light; opacity:0.7; pointer-events:none;}
+body.crystal-2d #sheet .sheet-head{background:rgba(255,255,255,0.22); border-bottom:1px solid rgba(255,255,255,0.45); box-shadow:inset 0 1px 0 rgba(255,255,255,0.6); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);}
+body.crystal-2d #sheet .sheet-title{color:#0f172a; text-shadow:0 1px 12px rgba(148,163,209,0.45);}
+body.crystal-2d #sheet .sheet-ctrls .btn{background:rgba(255,255,255,0.55); border-color:rgba(148,163,209,0.45); color:#1f2937; box-shadow:0 12px 24px rgba(15,23,42,0.18); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);}
+body.crystal-2d #sheet .sheet-ctrls .btn:hover{border-color:rgba(59,130,246,0.55);}
+body.crystal-2d table.sheet th{background:linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(229,240,255,0.28) 100%); border:1px solid rgba(255,255,255,0.45); color:#0f172a; text-shadow:0 1px 10px rgba(255,255,255,0.55); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);}
+body.crystal-2d table.sheet td{background:rgba(255,255,255,0.58); border:1px solid rgba(255,255,255,0.38); color:#0b1220; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);}
+body.crystal-2d table.sheet td.sel{background:rgba(96,165,250,0.32) !important; box-shadow:0 0 0 1px rgba(59,130,246,0.5) inset;}
+body.crystal-2d table.sheet td.hovered{background:rgba(147,197,253,0.28) !important; border-color:rgba(96,165,250,0.5) !important;}
+body.crystal-2d table.sheet td.cell:hover{background:rgba(191,219,254,0.33) !important;}
+body.crystal-2d .note-tooltip{background:rgba(59,130,246,0.82); box-shadow:0 10px 22px rgba(59,130,246,0.28); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);}
+body.crystal-2d #sheetHeaderCard{background:rgba(241,245,255,0.52); border:1px solid rgba(255,255,255,0.58); box-shadow:0 26px 48px rgba(15,23,42,0.22); backdrop-filter:blur(28px) saturate(175%); -webkit-backdrop-filter:blur(28px) saturate(175%);}
+body.crystal-2d #sheetHeaderCard.wipe{background:rgba(229,239,255,0.58);}
 /* No body fade; overlay handles it */
 .sheet-resizer{position:absolute; right:6px; bottom:6px; width:12px; height:12px; background:var(--accent); border-radius:3px; cursor:nwse-resize}
 .sheet-head{display:flex;flex-direction:column;gap:8px; padding:8px; border-bottom:1px solid var(--line)}
@@ -343,7 +358,12 @@ document.addEventListener('click', function(e){
     <button class="btn" id="presentToggleBtn">🎨 Present: OFF</button>
     <button class="btn" id="graphicsSettingsBtn">🎛️ Graphic Settings</button>
   </div>
-  
+
+  <label class="row" style="padding:0 12px 6px; justify-content:space-between; align-items:center; font-weight:600;">
+    <span>Crystal 2D Style</span>
+    <input type="checkbox" id="crystal2DToggle">
+  </label>
+
   <!-- Data Import/Export -->
   <div class="row" style="padding:0 12px 6px;">
     <button class="btn" id="importFileBtn">📁 Import File</button>
@@ -788,7 +808,7 @@ const Store = createStore((set,get)=>({
   arrays: {}, nextArrayId:1, lastCreatedArrayId:null,
   selection:{arrayId:null, focus:null, anchor:null, range:null},
   scene:{physics:false, showGrid:true, showAxes:true},
-  ui:{zLayer:0, fxOpen:false, addressMode:'local', lastInteraction:'3d', viewMode:'standard'},
+  ui:{zLayer:0, fxOpen:false, addressMode:'local', lastInteraction:'3d', viewMode:'standard', crystal2D:false},
   gridPhase:{x:null,y:null,z:null},
   namedBlocks:new Map(), // name -> {x,y,z, data: [layers[z][y][x]] }
   hidden:new Set(), // aKey(cell) -> hidden (per-cell visual mask)
@@ -1096,12 +1116,14 @@ const Store = createStore((set,get)=>({
         }catch{}
 
         // Restore full state (including rebuilt emission maps)
-        set({ 
-          arrays, 
+        const restoredUi = {...get().ui, ...(data.ui||{})};
+        if(restoredUi.crystal2D !== true){ restoredUi.crystal2D = false; }
+        set({
+          arrays,
           nextArrayId: data.nextArrayId||get().nextArrayId,
           globalState: new Map(Object.entries(data.globalState||{})),
           selection: data.selection||get().selection,
-          ui: {...get().ui, ...(data.ui||{})},
+          ui: restoredUi,
           scene: {...get().scene, ...(data.scene||{})},
           interactions: {...get().interactions, ...(data.interactions||{})},
           namedBlocks: new Map(Object.entries(data.namedBlocks||{})),
@@ -2024,6 +2046,19 @@ const Actions = {
   },
   toggleGrid: ()=>{ Store.setState(s=>({scene:{...s.scene, showGrid:!s.scene.showGrid}})); Scene.setGridVisible(Store.getState().scene.showGrid); },
   toggleAxes: ()=>{ Store.setState(s=>({scene:{...s.scene, showAxes:!s.scene.showAxes}})); Scene.setAxesVisible(Store.getState().scene.showAxes); },
+  setCrystal2D: (enabled)=>{
+    const next = !!enabled;
+    Store.setState(s=>({ ui:{...s.ui, crystal2D: next} }));
+    window.UI?.applyCrystalStyle?.(next);
+    return next;
+  },
+  toggleCrystal2D: ()=>{
+    const prev = !!Store.getState().ui?.crystal2D;
+    const next = !prev;
+    Actions.setCrystal2D(next);
+    window.UI?.renderSheet?.();
+    return next;
+  },
   togglePresentMode: ()=> Scene.togglePresentMode(),
   updateGraphicsSettings: (patch)=> Scene.updateGraphicsSettings(patch || {}),
   // Render mode removed - always use simple mode
@@ -11384,12 +11419,15 @@ const Scene = (()=>{
     const grabW = new THREE.Vector3(); grab.getWorldPosition(grabW);
 
     const camW = camera.position;
-    const toCam = new THREE.Vector3().subVectors(camW, grabW).normalize();
+    const toCam = new THREE.Vector3().subVectors(camW, grabW);
+    toCam.y = 0;
+    if(toCam.lengthSq() < 1e-6){ toCam.set(0,0,1); }
+    toCam.normalize();
 
-    // offsets: a little above in world Y, and a little toward the camera
+    // offsets: a little above in world Y, and a little toward the camera (horizontal only)
     const up = new THREE.Vector3(0,1,0);
-    const above   = up.multiplyScalar(0.35 + label.scale.y*0.5);
-    const inFront = toCam.multiplyScalar(0.25);
+    const above   = up.multiplyScalar(0.35 + Math.abs(label.scale.y)*0.5);
+    const inFront = toCam.multiplyScalar(0.3);
 
     const targetW = grabW.clone().add(above).add(inFront);
 
@@ -11424,7 +11462,7 @@ const UI = (()=>{
     focusChip:document.getElementById('focusChip'), inspect:document.getElementById('inspect'),
     centerHome:document.getElementById('centerHome'), viewMainframe:document.getElementById('viewMainframe'),
     toggleGrid:document.getElementById('toggleGrid'), toggleAxes:document.getElementById('toggleAxes'),
-    presentToggle:document.getElementById('presentToggleBtn'), graphicsSettingsBtn:document.getElementById('graphicsSettingsBtn'),
+    presentToggle:document.getElementById('presentToggleBtn'), graphicsSettingsBtn:document.getElementById('graphicsSettingsBtn'), crystalToggle:document.getElementById('crystal2DToggle'),
     physicsBtn:document.getElementById('physicsBtn'), reset:document.getElementById('reset'),
     status:document.getElementById('statusChip'),
     sheetTitle:document.getElementById('sheetTitle'),
@@ -11546,6 +11584,23 @@ const UI = (()=>{
     else { els.presentToggle.classList.remove('good'); }
   }
 
+  let lastCrystalState = document.body?.classList?.contains('crystal-2d') || false;
+  function applyCrystalStyle(enabled){
+    const want = !!enabled;
+    if(els.crystalToggle && els.crystalToggle.checked !== want){
+      els.crystalToggle.checked = want;
+    }
+    if(lastCrystalState === want){
+      if(!want){ try{ document.body.classList.remove('crystal-2d'); }catch{} }
+      return;
+    }
+    lastCrystalState = want;
+    try{
+      if(want){ document.body.classList.add('crystal-2d'); }
+      else { document.body.classList.remove('crystal-2d'); }
+    }catch{}
+  }
+
   function showGraphicsPanel(){
     if(!graphicsPanel) return;
     graphicsPanelVisible = true;
@@ -11568,12 +11623,17 @@ const UI = (()=>{
     console.log('UI.init: starting, checking elements...');
     console.log('UI.init: found elements:', {
       centerHome: !!els.centerHome,
-      viewMainframe: !!els.viewMainframe, 
+      viewMainframe: !!els.viewMainframe,
       toggleGrid: !!els.toggleGrid,
       toggleAxes: !!els.toggleAxes,
       physicsBtn: !!els.physicsBtn,
       reset: !!els.reset
     });
+    if(!Store.getState().ui?.crystal2D){
+      try{ document.body.classList.remove('crystal-2d'); }catch{}
+      lastCrystalState = false;
+      if(els.crystalToggle){ els.crystalToggle.checked = false; }
+    }
     // Touch-mode scaling
     try{ if(("ontouchstart" in window) || (navigator.maxTouchPoints>0) || (navigator.msMaxTouchPoints>0)){ document.body.classList.add('touch'); } }catch{}
     els.apply.onclick=()=>{ 
@@ -11681,6 +11741,16 @@ const UI = (()=>{
         syncGraphicsSettings();
       };
       setGraphicsControlsEnabled(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
+    }
+    applyCrystalStyle(Store.getState().ui?.crystal2D);
+    if(els.crystalToggle){
+      els.crystalToggle.checked = !!Store.getState().ui?.crystal2D;
+      if(!els.crystalToggle._wired){
+        els.crystalToggle._wired = true;
+        els.crystalToggle.addEventListener('change',(e)=>{
+          Actions.setCrystal2D?.(!!e.target.checked);
+        });
+      }
     }
     if(els.graphicsSettingsBtn){
       els.graphicsSettingsBtn.onclick=()=>{ toggleGraphicsPanel(); };
@@ -12747,6 +12817,7 @@ const UI = (()=>{
     // Guard: avoid destroying cells between mousedown and click; allow highlight only
     if(window.__awaiting2DClick){ try{ highlightSheetCell(); }catch{} return; }
     const arr=currentArray(); if(!arr) return;
+    applyCrystalStyle(Store.getState().ui?.crystal2D);
     els.sheetTitle.textContent=`Array ${arr.id}${arr.name?` — "${arr.name}"`:''}`;
 
     // Update UI controls when sheet renders
@@ -13637,7 +13708,7 @@ const UI = (()=>{
     }catch(err){ console.warn('ensureIntroNote failed', err); }
   }
 
-  return {init, renderSheet, renderSheetCell, updateFocusChip, scrollSheetToSelection, openEditor, startDirectTyping, toggleFxPanel, getZLayer, updateStatus, getCell, triggerIntroCollapse, ensureIntroNote, hideIntroOverlay, debugIntroState, kickIntroSequence, startIntroExperience, inspect:(arr,pos)=>{ try{ const ch=arr.chunks[keyChunk(...Object.values(chunkOf(pos.x,pos.y,pos.z)))]; const c=ch?.cells?.find?.(t=>t.x===pos.x&&t.y===pos.y&&t.z===pos.z) || {value:'',formula:''}; const el=document.getElementById('inspect'); if(el) el.textContent=`Array #${arr.id} \"${arr.name}\"\nCell ${A1(pos.x)}${pos.y+1}${greek(pos.z)} @[${pos.x},${pos.y},${pos.z},${arr.id}]\nValue: ${JSON.stringify(c.value)}\nFormula: ${c.formula||''}`; }catch(e){ /* selection panel might be hidden */ } }};
+  return {init, renderSheet, applyCrystalStyle, renderSheetCell, updateFocusChip, scrollSheetToSelection, openEditor, startDirectTyping, toggleFxPanel, getZLayer, updateStatus, getCell, triggerIntroCollapse, ensureIntroNote, hideIntroOverlay, debugIntroState, kickIntroSequence, startIntroExperience, inspect:(arr,pos)=>{ try{ const ch=arr.chunks[keyChunk(...Object.values(chunkOf(pos.x,pos.y,pos.z)))]; const c=ch?.cells?.find?.(t=>t.x===pos.x&&t.y===pos.y&&t.z===pos.z) || {value:'',formula:''}; const el=document.getElementById('inspect'); if(el) el.textContent=`Array #${arr.id} \"${arr.name}\"\nCell ${A1(pos.x)}${pos.y+1}${greek(pos.z)} @[${pos.x},${pos.y},${pos.z},${arr.id}]\nValue: ${JSON.stringify(c.value)}\nFormula: ${c.formula||''}`; }catch(e){ /* selection panel might be hidden */ } }};
 })();
 
 // CRITICAL: Expose UI globally so window.UI?.renderSheetCell works
