@@ -2052,7 +2052,10 @@ tag('3D_TRANSLATE',["SCENE"],(anchor,arr,ast)=>{
       spawnWave();
     }catch(e){ console.warn('startDatafallDelete failed', e); }
   }
-  try{ Scene.startDatafallDelete = startDatafallDelete; }catch{}
+  globalThis.__startDatafallDelete = startDatafallDelete;
+  if(globalThis.Scene){
+    try{ globalThis.Scene.startDatafallDelete = startDatafallDelete; }catch{}
+  }
 
   if(!targetArr){ Actions.setCell(arr.id, anchor, '!ERR:TARGET', ast.raw, true); return; }
 
@@ -10573,6 +10576,13 @@ const Scene = (()=>{
   }
   return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, spawnDeleteExplosion, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord)};
 })();
+
+try{
+  if(globalThis.__startDatafallDelete){
+    Scene.startDatafallDelete = globalThis.__startDatafallDelete;
+    delete globalThis.__startDatafallDelete;
+  }
+}catch{}
 
 /* ===========================
    UI
