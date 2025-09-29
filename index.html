@@ -5596,6 +5596,78 @@ tag('EXEC_AT',["ACTION"],(anchor,arr,ast,tx)=>{
   Formula.executeAt(target, formula, tx);
 });
 
+// Global queue so DELETE formulas issued before the Scene module hydrates can be
+// replayed once the renderer is ready. Keep on globalThis so reloads share it.
+const __queuedStartDatafallDeletes = Array.isArray(globalThis.__queuedStartDatafallDeletes)
+  ? globalThis.__queuedStartDatafallDeletes
+  : (globalThis.__queuedStartDatafallDeletes = []);
+const __queuedStartDatafallDeleteTimers = globalThis.__queuedStartDatafallDeleteTimers instanceof Map
+  ? globalThis.__queuedStartDatafallDeleteTimers
+  : (globalThis.__queuedStartDatafallDeleteTimers = new Map());
+function queueStartDatafallDelete(arrId){
+  try{
+    if(arrId===null || arrId===undefined) return;
+    const key = String(arrId);
+    if(!key || key === 'NaN') return;
+    if(!__queuedStartDatafallDeletes.includes(key)) __queuedStartDatafallDeletes.push(key);
+  }catch{}
+}
+function ensureQueuedStartDatafallFallback(arrId){
+  try{
+    const key = String(arrId);
+    if(!key || key === 'NaN') return;
+    if(__queuedStartDatafallDeleteTimers.has(key)) return;
+    const handle = setTimeout(()=>{
+      try{
+        if(!globalThis.Scene?.getScene?.()){
+          const idNum = +key;
+          const id = Number.isFinite(idNum) ? idNum : key;
+          Actions.deleteArray?.(id);
+        }
+      }catch{}
+      __queuedStartDatafallDeleteTimers.delete(key);
+    }, 4000);
+    __queuedStartDatafallDeleteTimers.set(key, handle);
+  }catch{}
+}
+function clearQueuedStartDatafallFallback(arrId){
+  try{
+    const key = String(arrId);
+    const handle = __queuedStartDatafallDeleteTimers.get(key);
+    if(handle){
+      clearTimeout(handle);
+      __queuedStartDatafallDeleteTimers.delete(key);
+    }
+  }catch{}
+}
+function flushQueuedStartDatafallDeletes(handler){
+  if(typeof handler !== 'function') return;
+  const seen = new Set();
+  while(__queuedStartDatafallDeletes.length){
+    const key = __queuedStartDatafallDeletes.shift();
+    if(key===null || key===undefined) continue;
+    if(seen.has(key)) continue;
+    seen.add(key);
+    let arr=null;
+    try{
+      const S = Store.getState();
+      if(S?.arrays){
+        arr = S.arrays[key];
+        if(!arr){
+          const num = +key;
+          if(Number.isFinite(num)) arr = S.arrays[num];
+        }
+      }
+    }catch{}
+    if(arr){
+      try{
+        clearQueuedStartDatafallFallback(arr.id ?? key);
+        handler(arr);
+      }catch{}
+    }
+  }
+}
+
 // DELETE(...targets) — delete arrays by id or ref; default self
 tag('DELETE',["ACTION"], (anchor,arr,ast)=>{
   try{
@@ -5629,7 +5701,14 @@ tag('DELETE',["ACTION"], (anchor,arr,ast)=>{
     targets.forEach(id=>{
       try{
         const A = Store.getState().arrays[id];
-        if(A){ try{ Scene.startDatafallDelete?.(A); }catch{} }
+        if(A){
+          const sceneModule = globalThis.Scene;
+          if(sceneModule?.startDatafallDelete){
+            try{ sceneModule.startDatafallDelete(A); }catch{ queueStartDatafallDelete(A.id); }
+          } else {
+            queueStartDatafallDelete(A.id);
+          }
+        }
         ok++;
       }catch{}
     });
@@ -6737,6 +6816,8 @@ const Scene = (()=>{
     try{ const cur=(Store.getState().ui&&Store.getState().ui.viewMode)||'standard'; Scene.applyViewMode?.(cur); }catch{}
     // Ensure the first frame renders even if nothing changes immediately after init
     try{ if(typeof window.__RENDER_READY==='undefined'){ renderer.render(scene, camera); window.__RENDER_READY = true; } }catch{}
+    // Replay any queued datafall deletes that fired before the scene was ready
+    try{ flushQueuedStartDatafallDeletes(startDatafallDelete); }catch{}
   }
   // Camera persistence helpers
   function captureCamera(){
@@ -10081,7 +10162,12 @@ const Scene = (()=>{
   function startDatafallDelete(arr){
     try{
       if(!arr || !arr.id){ return; }
-      if(!scene){ Actions.deleteArray?.(arr.id); return; }
+      if(!scene){
+        queueStartDatafallDelete(arr.id);
+        ensureQueuedStartDatafallFallback(arr.id);
+        return;
+      }
+      clearQueuedStartDatafallFallback(arr.id);
 
       try{
         if(!arr._frame) renderArray(arr);
@@ -10667,6 +10753,7 @@ const Scene = (()=>{
   }
   return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, spawnDeleteExplosion, startDatafallDelete, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord)};
 })();
+try{ globalThis.Scene = Scene; }catch{}
 
 /* ===========================
    UI
