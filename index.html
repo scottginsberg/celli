@@ -6465,12 +6465,12 @@ const Scene = (()=>{
     lights: true,
     darkBg: false,
     bloomEnabled: true,
-    bloomStrength: 0.12,
-    bloomRadius: 0.25,
-    exposure: 1.05,
+    bloomStrength: 0.15,
+    bloomRadius: 0.10,
+    exposure: 0.5,
     dofEnabled: true,
-    dofAperture: 0.004,
-    dofMaxBlur: 0.0025,
+    dofAperture: 0.002,
+    dofMaxBlur: 0.001,
     transmission: true,
     mirror: true,
     solidGround: false,
@@ -6775,6 +6775,7 @@ const Scene = (()=>{
       scene.fog = FancyGraphics.base.fog || null;
       if(FancyGraphics.passes.outline) FancyGraphics.passes.outline.selectedObjects = [];
     }
+    updateShellVisibilityGlobal();
     refreshCellMaterials();
     return FancyGraphics.enabled;
   }
@@ -6871,6 +6872,22 @@ const Scene = (()=>{
         });
       }catch{}
       needsRender = true;
+    }
+
+    function updateShellVisibilityGlobal(){
+      const showShells = !FancyGraphics.enabled;
+      try{
+        const arrays = Store.getState().arrays || {};
+        Object.values(arrays).forEach(arr=>{
+          if(!arr) return;
+          const arrVisible = !arr.hidden;
+          Object.values(arr.chunks||{}).forEach(ch=>{
+            if(!ch?.meshShell) return;
+            const lod = (ch.currentLOD == null) ? 1 : ch.currentLOD;
+            ch.meshShell.visible = showShells && arrVisible && (lod === 1);
+          });
+        });
+      }catch{}
     }
     // Instance bounce store
   const activeInstanceAnims = new Map(); // key `${arrId}:${z}:${type}:${idx}` -> {cancel,busy:true}
@@ -7105,16 +7122,23 @@ const Scene = (()=>{
     tex.magFilter = THREE.LinearFilter;
     tex.generateMipmaps = true;
 
-    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false });
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthTest: true,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
     mat.toneMapped = false;
 
-    const spr = new THREE.Sprite(mat);
+    const geo = new THREE.PlaneGeometry(1, 1);
+    const mesh = new THREE.Mesh(geo, mat);
     const aspect = w/h;
     // Slightly reduce width/height to avoid a stretched look while preserving aspect
-    spr.scale.set(1.0*aspect, 1.0, 1);   // world-unit size
-    spr.userData.isLabel = true;
-    spr.userData.billboard = true;
-    return spr;
+    mesh.scale.set(1.0*aspect, 1.0, 1);   // world-unit size
+    mesh.userData.isLabel = true;
+    mesh.userData.billboard = true;
+    return mesh;
   }
   const COLORS = {
     empty: 0xffffff,      // empty cells: clean white
@@ -7315,6 +7339,7 @@ const Scene = (()=>{
 
       oldMaterials.forEach(mat=>{ try{ mat?.dispose?.(); }catch{} });
       rebuildCellMaterialRefs();
+      updateShellVisibilityGlobal();
       needsRender = true;
     }catch(e){ console.warn('refreshCellMaterials failed', e); }
   }
@@ -8181,6 +8206,8 @@ const Scene = (()=>{
           this.meshLOD1 = meshSolid;
           this.meshGhost = meshGhost;
           this.meshShell = meshShell;
+          const lod = (this.currentLOD == null || this.currentLOD < 0) ? 1 : this.currentLOD;
+          this.meshShell.visible = !FancyGraphics.enabled && (lod === 1);
           // Use twin meshes for ghosting: solid shows unblocked, ghost shows blocked
           try{ this.meshGhost.visible = true; }catch{}
           // Tag for picking and ghost-mask application
@@ -8328,7 +8355,7 @@ const Scene = (()=>{
         }
       }
       if(this.meshGhost) this.meshGhost.visible = (level===1);
-      if(this.meshShell) this.meshShell.visible = (level===1);
+      if(this.meshShell) this.meshShell.visible = (level===1) && !FancyGraphics.enabled;
       if(this.meshLOD2){
         this.meshLOD2.visible = (level===2 && !this.array._headOnZ);
         // Ensure pickability when LOD2 is visible: leave LOD1 raycastable but visually invisible
@@ -8872,7 +8899,7 @@ const Scene = (()=>{
   function buildAxes(arr){
     // remove old
     // Remove previous labels safely from their actual parent
-    arr.labels?.forEach(s=>{ try{ s.parent?.remove(s); s.material?.dispose?.(); s.material?.map?.dispose?.(); }catch{} }); arr.labels=[];
+    arr.labels?.forEach(s=>{ try{ s.parent?.remove(s); s.material?.dispose?.(); s.material?.map?.dispose?.(); s.geometry?.dispose?.(); }catch{} }); arr.labels=[];
     const mk=(txt,color='#333333')=>{
       const c=document.createElement('canvas'); const ctx=c.getContext('2d'); const fs=64;
       ctx.font=`900 ${fs}px 'Roboto Mono', monospace`; const w=Math.ceil(ctx.measureText(txt).width);
@@ -8961,6 +8988,10 @@ const Scene = (()=>{
       if(ch.meshLOD1){
         const pickVisible = v && (ch.currentLOD===1 || (ch.meshLOD2 && ch.meshLOD2.visible));
         ch.meshLOD1.visible = pickVisible;
+      }
+      if(ch.meshShell){
+        const lod = (ch.currentLOD == null) ? 1 : ch.currentLOD;
+        ch.meshShell.visible = v && (lod === 1) && !FancyGraphics.enabled;
       }
       const mk=`${arr.id}:${keyChunk(ch.coord.x,ch.coord.y,ch.coord.z)}`; const m=chunkMeshes.get(mk); if(m) m.visible=v;
     });
@@ -11212,7 +11243,7 @@ const Scene = (()=>{
     if(!arr || !arr._frame) return;
     try{
       const old = arr._frame.userData?.labelSprite;
-      if(old){ old.parent?.remove(old); old.material?.map?.dispose?.(); old.material?.dispose?.(); }
+      if(old){ old.parent?.remove(old); old.material?.map?.dispose?.(); old.material?.dispose?.(); old.geometry?.dispose?.(); }
       const labelSprite = makeArrayLabelSprite(arr);
       // Initial position will be updated by updateArrayLabelPlacement
       labelSprite.position.set(0, arr.size.y/2 + 0.8, 0);
