@@ -6638,8 +6638,31 @@ const Scene = (()=>{
     };
     FancyGraphics.decor.add(mirror);
     FancyGraphics.groups.mirror = mirror;
-    mirror.onBeforeRender = ()=>{ applyMirrorBillboardFlip(true); };
-    mirror.onAfterRender = ()=>{ applyMirrorBillboardFlip(false); };
+
+    const originalMirrorBefore = mirror.onBeforeRender ? mirror.onBeforeRender.bind(mirror) : null;
+    const originalMirrorAfter = mirror.onAfterRender ? mirror.onAfterRender.bind(mirror) : null;
+
+    mirror.onBeforeRender = function(...args){
+      applyMirrorBillboardFlip(true);
+      if(originalMirrorBefore){
+        try{
+          originalMirrorBefore(...args);
+        }catch(err){
+          applyMirrorBillboardFlip(false);
+          throw err;
+        }
+      }
+    };
+
+    mirror.onAfterRender = function(...args){
+      try{
+        if(originalMirrorAfter){
+          originalMirrorAfter(...args);
+        }
+      }finally{
+        applyMirrorBillboardFlip(false);
+      }
+    };
 
     const solidGround = new THREE.Mesh(
       new THREE.PlaneGeometry(400,400),
@@ -7309,24 +7332,24 @@ const Scene = (()=>{
         const params = {
           color: new THREE.Color(0xffffff),
           vertexColors: true,
-          roughness: frosted ? 0.65 : 0.32,
-          metalness: frosted ? 0.04 : 0.22,
-          envMapIntensity: frosted ? 1.4 : 1.2,
+          roughness: frosted ? 0.78 : 0.32,
+          metalness: frosted ? 0.06 : 0.22,
+          envMapIntensity: frosted ? 1.3 : 1.2,
           clearcoat: 0.35,
-          clearcoatRoughness: frosted ? 0.45 : 0.2,
+          clearcoatRoughness: frosted ? 0.55 : 0.2,
           reflectivity: 0.5,
-          depthWrite: !frosted,
+          depthWrite: true,
           depthTest: true
         };
         if(frosted){
           Object.assign(params, {
             transparent: true,
-            opacity: 0.78,
-            transmission: 0.92,
-            thickness: 1.2,
-            ior: 1.2,
+            opacity: 0.9,
+            transmission: 0.58,
+            thickness: 1.4,
+            ior: 1.18,
             attenuationColor: new THREE.Color(0xcfe3ff),
-            attenuationDistance: 2.4
+            attenuationDistance: 1.25
           });
         }else{
           Object.assign(params, {
