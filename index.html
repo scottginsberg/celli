@@ -434,6 +434,10 @@ document.addEventListener('click', function(e){
         <input type="checkbox" id="gfxMirror">
       </label>
       <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Solid Ground</span>
+        <input type="checkbox" id="gfxGround">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
         <span>Deforming Grid</span>
         <input type="checkbox" id="gfxWaveGrid">
       </label>
@@ -699,6 +703,13 @@ const playClickSound = (()=>{
     return ()=>{};
   }
 })();
+let lastCellClickSound = 0;
+function playCellClick(){
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if(now - lastCellClickSound < 260) return;
+  lastCellClickSound = now;
+  playClickSound();
+}
 // Early touch detection so initial sizing uses correct mode (coarse pointer or small screen with touch)
 try{
   const coarse = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
@@ -1211,7 +1222,7 @@ const Store = createStore((set,get)=>({
       console.log('Arrays created');
       
       // Create home array directly (avoid formulas during init)
-      const home = Actions.createArray({id:1,name:"Celli's Home", size:{x:8,y:4,z:8}, hidden:false});
+      const home = Actions.createArray({id:1,name:"Celli's Home", size:{x:8,y:4,z:8}, hidden:false, offset:{x:0,y:1,z:0}});
       
       // Simple content setup matching reference spreadsheet
       console.log('Setting up content...');
@@ -6462,6 +6473,7 @@ const Scene = (()=>{
     dofMaxBlur: 0.0025,
     transmission: true,
     mirror: true,
+    solidGround: false,
     waveGrid: true,
     fogEnabled: false,
     fogDensity: 0.012,
@@ -6478,7 +6490,8 @@ const Scene = (()=>{
     settings: { ...FancyDefaults },
     composer: null,
     passes: {},
-    groups: { lights: null, mirror: null, waveGrid: null },
+    groups: { lights: null, mirror: null, waveGrid: null, ground: null },
+    shadowLights: [],
     decor: null,
     hdriTexture: null,
     hdriPromise: null,
@@ -6490,6 +6503,7 @@ const Scene = (()=>{
       toneMapping: null,
       exposure: 1,
       shadowMap: false,
+      shadowAutoUpdate: true,
       physicallyCorrectLights: false,
       clearColor: null,
       clearAlpha: 1
@@ -6530,6 +6544,7 @@ const Scene = (()=>{
     FancyGraphics.decor = new THREE.Group();
     FancyGraphics.decor.visible = false;
     scene.add(FancyGraphics.decor);
+    FancyGraphics.shadowLights = [];
 
     const mirror = new Reflector(new THREE.PlaneGeometry(400,400), {
       textureWidth: Math.max(256, window.innerWidth),
@@ -6556,6 +6571,17 @@ const Scene = (()=>{
     FancyGraphics.decor.add(mirror);
     FancyGraphics.groups.mirror = mirror;
 
+    const solidGround = new THREE.Mesh(
+      new THREE.PlaneGeometry(400,400),
+      new THREE.MeshStandardMaterial({ color: 0xe6e9ef, roughness: 0.85, metalness: 0.1 })
+    );
+    solidGround.rotation.x = -Math.PI/2;
+    solidGround.position.y = -0.51;
+    solidGround.receiveShadow = true;
+    solidGround.visible = false;
+    FancyGraphics.decor.add(solidGround);
+    FancyGraphics.groups.ground = solidGround;
+
     const waveGrid = new THREE.Mesh(new THREE.PlaneGeometry(400,400,180,180), makeWaveGridMaterial());
     waveGrid.rotation.x = -Math.PI/2;
     waveGrid.position.y = -0.48;
@@ -6567,7 +6593,22 @@ const Scene = (()=>{
     const fill = new THREE.DirectionalLight(0xffffff, 1.4); fill.position.set(10, 6, 12);
     const rim = new THREE.DirectionalLight(0xffffff, 2.6); rim.position.set(0, 8, -14);
     const hemi = new THREE.HemisphereLight(0xdbeafe, 0x0f172a, 0.6);
-    [key, fill, rim, hemi].forEach(light=>{ light.castShadow = false; lights.add(light); });
+    key.castShadow = false;
+    key.shadow.mapSize.set(2048,2048);
+    key.shadow.camera.near = 0.5;
+    key.shadow.camera.far = 200;
+    key.shadow.camera.left = -80;
+    key.shadow.camera.right = 80;
+    key.shadow.camera.top = 80;
+    key.shadow.camera.bottom = -80;
+    key.shadow.bias = -0.0008;
+    FancyGraphics.shadowLights.push(key);
+    lights.add(key);
+
+    [fill, rim, hemi].forEach(light=>{
+      light.castShadow = false;
+      lights.add(light);
+    });
     FancyGraphics.decor.add(lights);
     FancyGraphics.groups.lights = lights;
   }
@@ -6675,8 +6716,8 @@ const Scene = (()=>{
       FancyGraphics.passes.afterimage.uniforms['damp'].value = FancyGraphics.settings.motionDamping;
     }
     if(FancyGraphics.groups.lights){ FancyGraphics.groups.lights.visible = FancyGraphics.settings.lights; }
-    if(FancyGraphics.groups.mirror){ FancyGraphics.groups.mirror.visible = FancyGraphics.settings.mirror; }
     if(FancyGraphics.groups.waveGrid){ FancyGraphics.groups.waveGrid.visible = FancyGraphics.settings.waveGrid; }
+    refreshShadowCasting();
     if(FancyGraphics.settings.hdri){
       ensureFancyHDRI().then((tex)=>{ if(FancyGraphics.enabled && FancyGraphics.settings.hdri){ scene.environment = tex; } }).catch(()=>{});
     } else {
@@ -6701,27 +6742,31 @@ const Scene = (()=>{
       FancyGraphics.base.toneMapping = renderer?.toneMapping ?? null;
       FancyGraphics.base.exposure = renderer?.toneMappingExposure ?? 1;
       FancyGraphics.base.shadowMap = renderer?.shadowMap?.enabled ?? false;
+      FancyGraphics.base.shadowAutoUpdate = renderer?.shadowMap?.autoUpdate ?? true;
       FancyGraphics.base.physicallyCorrectLights = renderer?.physicallyCorrectLights ?? false;
       FancyGraphics.base.clearColor = cloneColorOrNull(renderer?.getClearColor ? renderer.getClearColor(new THREE.Color()) : new THREE.Color(0xf6f7fb));
       FancyGraphics.base.clearAlpha = renderer?.getClearAlpha ? renderer.getClearAlpha() : 1;
 
       ensureFancyDecor();
       ensureFancyComposer();
-      FancyGraphics.decor.visible = true;
+      FancyGraphics.decor.visible = FancyGraphics.settings.waveGrid || FancyGraphics.settings.mirror || FancyGraphics.settings.solidGround;
       grid.visible = false;
       renderer.physicallyCorrectLights = true;
-      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.enabled = FancyGraphics.settings.solidGround;
+      if(renderer.shadowMap.enabled){ renderer.shadowMap.type = THREE.PCFSoftShadowMap; }
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       FancyGraphics.clock = new THREE.Clock();
       FancyGraphics.enabled = true;
       applyFancyRuntimeSettings();
     } else {
       FancyGraphics.enabled = false;
+      refreshShadowCasting();
       if(FancyGraphics.decor) FancyGraphics.decor.visible = false;
       grid.visible = !!FancyGraphics.base.gridVisible;
       setupRenderer();
       renderer.setClearColor(FancyGraphics.base.clearColor || new THREE.Color(0xf6f7fb), FancyGraphics.base.clearAlpha ?? 1);
       renderer.shadowMap.enabled = FancyGraphics.base.shadowMap ?? false;
+      renderer.shadowMap.autoUpdate = FancyGraphics.base.shadowAutoUpdate ?? true;
       renderer.physicallyCorrectLights = FancyGraphics.base.physicallyCorrectLights ?? false;
       renderer.toneMapping = FancyGraphics.base.toneMapping ?? THREE.NoToneMapping;
       renderer.toneMappingExposure = FancyGraphics.base.exposure ?? 1;
@@ -6748,6 +6793,12 @@ const Scene = (()=>{
     Object.keys(incoming).forEach(key=>{
       if(key in FancyGraphics.settings){ FancyGraphics.settings[key] = incoming[key]; }
     });
+    if(Object.prototype.hasOwnProperty.call(incoming, 'solidGround') && incoming.solidGround){
+      FancyGraphics.settings.mirror = false;
+    }
+    if(FancyGraphics.settings.solidGround){
+      FancyGraphics.settings.mirror = false;
+    }
     const affectsMaterials = Object.prototype.hasOwnProperty.call(incoming, 'transmission');
     if(FancyGraphics.enabled){
       applyFancyRuntimeSettings();
@@ -6792,6 +6843,35 @@ const Scene = (()=>{
     function clearHoverCell(){ setHoverCell(null); }
     const temp=new THREE.Object3D(), tempM=new THREE.Matrix4();
     let needsRender = false;
+    function refreshShadowCasting(){
+      const enable = FancyGraphics.enabled && FancyGraphics.settings.solidGround;
+      renderer.shadowMap.enabled = enable;
+      renderer.shadowMap.autoUpdate = enable;
+      if(enable){
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.shadowMap.autoUpdate = true;
+      }
+      if(FancyGraphics.groups.ground){ FancyGraphics.groups.ground.visible = enable; }
+      if(FancyGraphics.groups.mirror){
+        FancyGraphics.groups.mirror.visible = FancyGraphics.settings.mirror && !FancyGraphics.settings.solidGround;
+      }
+      if(FancyGraphics.decor){
+        const decorActive = FancyGraphics.enabled && (FancyGraphics.settings.waveGrid || FancyGraphics.settings.solidGround || FancyGraphics.settings.mirror);
+        FancyGraphics.decor.visible = decorActive;
+      }
+      FancyGraphics.shadowLights.forEach(light=>{ light.castShadow = enable; });
+      try{
+        Object.values(Store.getState().arrays||{}).forEach(arr=>{
+          Object.values(arr.chunks||{}).forEach(ch=>{
+            if(ch.meshLOD1) ch.meshLOD1.castShadow = enable;
+            if(ch.meshLOD2) ch.meshLOD2.castShadow = enable;
+            if(ch.meshGhost) ch.meshGhost.castShadow = false;
+            if(ch.meshShell) ch.meshShell.castShadow = false;
+          });
+        });
+      }catch{}
+      needsRender = true;
+    }
     // Instance bounce store
   const activeInstanceAnims = new Map(); // key `${arrId}:${z}:${type}:${idx}` -> {cancel,busy:true}
   // InteractionManager: transient overlaps and gobble checks
@@ -7139,24 +7219,24 @@ const Scene = (()=>{
         const params = {
           color: new THREE.Color(0xffffff),
           vertexColors: true,
-          roughness: frosted ? 0.55 : 0.32,
-          metalness: frosted ? 0.08 : 0.22,
-          envMapIntensity: 1.2,
-          clearcoat: 0.25,
-          clearcoatRoughness: 0.2,
-          reflectivity: 0.45,
-          depthWrite: true,
+          roughness: frosted ? 0.65 : 0.32,
+          metalness: frosted ? 0.04 : 0.22,
+          envMapIntensity: frosted ? 1.4 : 1.2,
+          clearcoat: 0.35,
+          clearcoatRoughness: frosted ? 0.45 : 0.2,
+          reflectivity: 0.5,
+          depthWrite: !frosted,
           depthTest: true
         };
         if(frosted){
           Object.assign(params, {
             transparent: true,
-            opacity: 1.0,
-            transmission: 0.68,
-            thickness: 1.0,
-            ior: 1.45,
-            attenuationColor: new THREE.Color(0xffffff),
-            attenuationDistance: 6.0
+            opacity: 0.78,
+            transmission: 0.92,
+            thickness: 1.2,
+            ior: 1.2,
+            attenuationColor: new THREE.Color(0xcfe3ff),
+            attenuationDistance: 2.4
           });
         }else{
           Object.assign(params, {
@@ -8063,6 +8143,10 @@ const Scene = (()=>{
           const meshSolid = new THREE.InstancedMesh(geo, mats.solid, maxInstances);
           const meshGhost = new THREE.InstancedMesh(geo, mats.ghost, maxInstances);
           const meshShell = new THREE.InstancedMesh(GEO_SHELL, shellMat, maxInstances);
+          const shadowsEnabled = FancyGraphics.enabled && FancyGraphics.settings.solidGround;
+          meshSolid.castShadow = shadowsEnabled;
+          meshGhost.castShadow = false;
+          meshShell.castShadow = false;
           // Important for correct layering: ghosts first, then solids, then shells
           meshGhost.renderOrder = 1;
           meshSolid.renderOrder = 2;
@@ -10026,6 +10110,7 @@ const Scene = (()=>{
     
     // If the picked cell has an ONCLICK action, execute it immediately (3D)
     if(!cell) return;
+    playCellClick();
     try{
       const c2d = UI.getCell(arr.id, {x:cell.x,y:cell.y,z:cell.z});
       const actionRaw = String(c2d?.meta?.onClick||'').trim();
@@ -11244,6 +11329,7 @@ const UI = (()=>{
     dofMaxBlur: document.getElementById('gfxDofMaxBlur'),
     transmission: document.getElementById('gfxTransmission'),
     mirror: document.getElementById('gfxMirror'),
+    ground: document.getElementById('gfxGround'),
     waveGrid: document.getElementById('gfxWaveGrid'),
     fxaa: document.getElementById('gfxFxaa'),
     fog: document.getElementById('gfxFog'),
@@ -11301,7 +11387,11 @@ const UI = (()=>{
     if(graphicsControls.dofAperture){ graphicsControls.dofAperture.value = settings.dofAperture; updateSliderDisplay('dofAperture', settings.dofAperture); }
     if(graphicsControls.dofMaxBlur){ graphicsControls.dofMaxBlur.value = settings.dofMaxBlur; updateSliderDisplay('dofMaxBlur', settings.dofMaxBlur); }
     if(graphicsControls.transmission) graphicsControls.transmission.checked = !!settings.transmission;
-    if(graphicsControls.mirror) graphicsControls.mirror.checked = !!settings.mirror;
+    if(graphicsControls.ground) graphicsControls.ground.checked = !!settings.solidGround;
+    if(graphicsControls.mirror){
+      graphicsControls.mirror.checked = !!settings.mirror && !settings.solidGround;
+      graphicsControls.mirror.disabled = !!settings.solidGround;
+    }
     if(graphicsControls.waveGrid) graphicsControls.waveGrid.checked = !!settings.waveGrid;
     if(graphicsControls.fxaa) graphicsControls.fxaa.checked = !!settings.fxaa;
     if(graphicsControls.fog) graphicsControls.fog.checked = !!settings.fogEnabled;
@@ -11314,7 +11404,12 @@ const UI = (()=>{
   }
 
   function setGraphicsControlsEnabled(enabled){
-    Object.values(graphicsControls).forEach(ctrl=>{ if(ctrl) ctrl.disabled = !enabled; });
+    const settings = Scene.getGraphicsSettings ? Scene.getGraphicsSettings() : null;
+    Object.entries(graphicsControls).forEach(([key, ctrl])=>{
+      if(!ctrl) return;
+      const mirrorLocked = (key==='mirror' && settings?.solidGround);
+      ctrl.disabled = !enabled || mirrorLocked;
+    });
     if(graphicsPanelHint) graphicsPanelHint.style.display = enabled ? 'none' : 'block';
   }
 
@@ -11454,7 +11549,6 @@ const UI = (()=>{
     if(els.presentToggle){
       updatePresentButton(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
       els.presentToggle.onclick=()=>{
-        playClickSound();
         const state = Actions.togglePresentMode();
         updatePresentButton(state);
         setGraphicsControlsEnabled(state);
@@ -11463,11 +11557,11 @@ const UI = (()=>{
       setGraphicsControlsEnabled(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
     }
     if(els.graphicsSettingsBtn){
-      els.graphicsSettingsBtn.onclick=()=>{ playClickSound(); toggleGraphicsPanel(); };
+      els.graphicsSettingsBtn.onclick=()=>{ toggleGraphicsPanel(); };
     }
     if(graphicsClose && !graphicsClose._wired){
       graphicsClose._wired = true;
-      graphicsClose.addEventListener('click',(e)=>{ e.preventDefault(); playClickSound(); hideGraphicsPanel(); });
+      graphicsClose.addEventListener('click',(e)=>{ e.preventDefault(); hideGraphicsPanel(); });
     }
     if(els.physicsBtn) els.physicsBtn.onclick=Actions.togglePhysics;
     // Render mode button removed - always simple mode
@@ -11483,16 +11577,21 @@ const UI = (()=>{
 
     const checkboxBindings = {
       hdri:'hdri', lights:'lights', darkBg:'darkBg', bloom:'bloomEnabled',
-      dof:'dofEnabled', transmission:'transmission', mirror:'mirror', waveGrid:'waveGrid',
+      dof:'dofEnabled', transmission:'transmission', mirror:'mirror', ground:'solidGround', waveGrid:'waveGrid',
       fxaa:'fxaa', fog:'fogEnabled', outline:'outlineEnabled', motion:'motionEnabled'
     };
     Object.entries(checkboxBindings).forEach(([key, setting])=>{
       const ctrl = graphicsControls[key];
       if(!ctrl) return;
       ctrl.addEventListener('change',(e)=>{
-        Actions.updateGraphicsSettings({ [setting]: !!e.target.checked });
+        if(setting === 'solidGround'){
+          const next = !!e.target.checked;
+          const patch = next ? { solidGround: true, mirror: false } : { solidGround: false };
+          Actions.updateGraphicsSettings(patch);
+        }else{
+          Actions.updateGraphicsSettings({ [setting]: !!e.target.checked });
+        }
         syncGraphicsSettings();
-        playClickSound();
       });
     });
 
