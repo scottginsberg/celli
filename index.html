@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 
 <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-<title>Celli's Quality Control</title>
+<title>Celli</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Rubik:wght@400;600;800&family=Roboto+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 <!-- Twemoji for consistent emoji rendering -->
@@ -652,6 +652,8 @@ const Store = createStore((set,get)=>({
   // Track active 3D_ROTATE applications and suppressions for revert logic
   activeRotations: new Map(), // anchorKey -> {targetId, ids:number[], pivot:{arrId,x,y,z}, steps:{sx,sy,sz}}
   suppress3DRotateRevert: new Set(), // Set<anchorKey>
+  // Persisted reverts after refresh
+  // (3D translate persisted meta is read at revert time; no store change needed here)
   // Track active 3D_TRANSLATE applications and suppressions for revert logic
   activeTranslations: new Map(), // anchorKey -> {targetId, from:{x,y,z}, delta:{dx,dy,dz}}
   suppress3DTranslateRevert: new Set(), // Set<anchorKey>
@@ -1914,12 +1916,13 @@ function isAllowed(arr, fnName){
 // - dx,dy,dz: integer notch offsets (snap grid)
 // - originRef: optional ref used only for semantic symmetry; translation is uniform so origin isn't needed, but kept for API parity
 tag('3D_TRANSLATE',["SCENE"],(anchor,arr,ast)=>{
-  // Args: target (arrId | ref | "@[x,y,z,id]" | SELF()), dx, dy, dz
+  // Args: target (arrId | ref | "@[x,y,z,id]" | SELF()), dx, dy, dz[, continuous]
   const targetArg = ast.args[0];
-  const dx = (+Formula.valOf(ast.args[1])|0) || 0;
-  const dy = (+Formula.valOf(ast.args[2])|0) || 0;
-  const dz = (+Formula.valOf(ast.args[3])|0) || 0;
-  const cont = !!((+Formula.valOf(ast.args[4]||0))|0);
+  const toInt = (a)=>{ try{ const v = Formula.valOf(a); const s = String(v==null? a : v); const n = parseFloat(s.replace(/[^0-9\-+.]/g,'')); return Number.isFinite(n)? (n|0) : 0; }catch{ return 0; } };
+  const dx = toInt(ast.args[1]);
+  const dy = toInt(ast.args[2]);
+  const dz = toInt(ast.args[3]);
+  const cont = !!toInt(ast.args[4]||0);
 
   const S = Store.getState();
   let targetArr = null;
@@ -1950,23 +1953,113 @@ tag('3D_TRANSLATE',["SCENE"],(anchor,arr,ast)=>{
     }
   }
 
-  if(!targetArr){ Actions.setCell(arr.id, anchor, '!ERR:TARGET', ast.raw, true); return; }
-
-  // If PREVIEW is on (in-array or 3D), queue into plan instead of applying instantly
-  let timed = null;
-  try{ if(typeof Scene!=='undefined' && Scene.ensureTimedState) timed = Scene.ensureTimedState(targetArr); }catch{}
-  if(!timed){
+  // Micro-collapse followed by staged datafall for a single cell
+  function spawnCellDatafallAt(position, cell, parentArrId){
     try{
-      targetArr.params = targetArr.params || {};
-      targetArr.params.timed = targetArr.params.timed || { ticks:60, reverse:false, reverseTicks:null, repeat:false, t:0, dir:1, previewInArray:false, plan:[], baseOffset:null, baseQuat:null, overlay:null };
-      timed = targetArr.params.timed;
+      // Track active effect under the parent array id (not inferred from cell)
+      try{ const arrId = parentArrId|0; const rec=pendingDatafallDeletes.get(arrId)||{count:0,finished:false}; rec.count++; pendingDatafallDeletes.set(arrId, rec); }catch{}
+      const group = new THREE.Group(); group.userData.kind='microCollapse'; scene.add(group);
+      const micro = { size:4, scale:0.18, spacing:0.22 };
+      const offs = (micro.size-1)/2;
+      const geom = new THREE.BoxGeometry(micro.scale, micro.scale, micro.scale);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x4f46e5, transparent:true, opacity:0.9, depthTest:true, depthWrite:false });
+      const cubes=[];
+      for(let x=0;x<micro.size;x++) for(let y=0;y<micro.size;y++) for(let z=0;z<micro.size;z++){
+        const m = new THREE.Mesh(geom, mat.clone());
+        m.position.set((x-offs)*micro.spacing, (y-offs)*micro.spacing, (z-offs)*micro.spacing);
+        group.add(m); cubes.push(m);
+      }
+      group.position.copy(position);
+      const dur=420; let t0;
+      const step=(ts)=>{
+        if(t0==null) t0=ts; const u=Math.min(1,(ts-t0)/dur); const e=1-Math.pow(1-u,4);
+        cubes.forEach(m=>{ m.position.multiplyScalar(1-e); m.scale.setScalar(1-(0.7*e)); m.material.opacity=0.9*(1-e)+0.1; });
+        if(u<1){ requestAnimationFrame(step); }
+        else {
+          try{ scene.remove(group); group.traverse(o=>{ if(o.isMesh){ o.geometry?.dispose?.(); o.material?.dispose?.(); } }); }catch{}
+          const hasContent = !!(cell && ((cell.formula && String(cell.formula).length) || (cell.value!=='' && cell.value!==null && cell.value!==undefined)));
+          if(!hasContent){
+            try{ const arrId = parentArrId|0; const rec=pendingDatafallDeletes.get(arrId); if(rec){ rec.count--; pendingDatafallDeletes.set(arrId, rec); maybeFinalizeDeletion(arrId); } }catch{}
+            return;
+          }
+          const effGroup=new THREE.Group(); scene.add(effGroup);
+          const valueText = String(cell.formula ? cell.formula : cell.value);
+          const sp = makeCharSprite(valueText);
+          sp.position.copy(position);
+          effGroup.add(sp);
+          const vel = new THREE.Vector3(0,0.022,0);
+          deleteEffects.push({ phase:'datafall', group:effGroup, particles:[{ kind:'value', cell, text:valueText, sprite:sp, vel, age:0, life: 420, rot:0 }], onDone:()=>{ try{ const arrId = parentArrId|0; const rec=pendingDatafallDeletes.get(arrId); if(rec){ rec.count--; pendingDatafallDeletes.set(arrId, rec); maybeFinalizeDeletion(arrId); } }catch{} } });
+        }
+      };
+      requestAnimationFrame(step);
     }catch{}
   }
-  const G = (typeof Scene!=='undefined' && Scene.ensureTimed3D) ? Scene.ensureTimed3D() : ((Store.getState().scene||{}).timed3D);
-  if(timed.previewInArray || (G&&G.preview)){
-    if(!timed.baseOffset){ timed.baseOffset = { ...(targetArr.offset||{x:0,y:0,z:0}) }; }
-    try{ (typeof Scene!=='undefined' && Scene.queueTimedOp ? Scene.queueTimedOp : queueTimedOp)(targetArr, queueAnchor || anchor, { type:'translate', dx, dy, dz }); }catch{}
-    Actions.setCell(arr.id, anchor, `Queued:Move ${dx},${dy},${dz}`, ast.raw, true);
+
+  function startDatafallDelete(arr){
+    try{
+      // Disable legacy hover/explode effect for this run by not scheduling spawnDeleteExplosion
+      // Ensure array is fully rendered and chunk meshes exist for per-cell zero scaling
+      try{
+        if(!arr._frame) Scene.renderArray(arr);
+        Object.values(arr.chunks||{}).forEach(ch=>{ ch.ensureMesh?.(); ch.setLOD?.(1); rehydrateChunkInstances(arr, ch); });
+      }catch{}
+      const items=[];
+      try{
+        Object.values(arr.chunks||{}).forEach(ch=>{ (ch.cells||[]).forEach(c=>{ items.push({x:c.x,y:c.y,z:c.z}); }); });
+        items.sort((a,b)=> a.z-b.z || a.y-b.y || a.x-b.x);
+      }catch{}
+      let idx=0; const waveSize=8; const waveDelay=160;
+      // Mark deletion as in-progress
+      pendingDatafallDeletes.set(arr.id, {count:0, finished:false});
+      const spawnWave=()=>{
+        const S=Store.getState(); if(!S.arrays[arr.id]) return;
+        for(let k=0;k<waveSize && idx<items.length;k++,idx++){
+          const c=items[idx];
+          let cell=null; try{ cell = Formula.getCell({arrId:arr.id,x:c.x,y:c.y,z:c.z}); }catch{}
+          const pos = cellWorldPos(arr, c.x, c.y, c.z);
+          spawnCellDatafallAt(pos, cell? {...cell, arrId: arr.id } : null, arr.id);
+          // Hide this cell's voxel instance immediately to simulate shrinking
+          try{
+            const CH = chunkOf(c.x,c.y,c.z); const key = keyChunk(CH.x,CH.y,CH.z);
+            const ch = (arr.chunks||{})[key];
+            if(ch){
+              const mesh = ch.meshLOD1 || ch.meshLOD2 || null;
+              const list = ch.index2cell || [];
+              if(mesh && list && list.length){
+                const idx3 = list.findIndex(q=> q && q.x===c.x && q.y===c.y && q.z===c.z);
+                if(idx3>=0){
+                  const mat = new THREE.Matrix4(); mat.makeScale(0,0,0);
+                  mesh.setMatrixAt(idx3, mat);
+                  mesh.instanceMatrix.needsUpdate = true;
+                }
+              } else {
+                // Fallback to legacy layerMeshes path per Z slice
+                const rec = layerMeshes.get(`${arr.id}:${c.z}:filled`) || layerMeshes.get(`${arr.id}:${c.z}:formula`) || layerMeshes.get(`${arr.id}:${c.z}:empty`);
+                if(rec && rec.mesh && rec.index2cell){
+                  const idxL = rec.index2cell.findIndex(q=> q && q.x===c.x && q.y===c.y && q.z===c.z);
+                  if(idxL>=0){ const mat = new THREE.Matrix4(); mat.makeScale(0,0,0); rec.mesh.setMatrixAt(idxL, mat); rec.mesh.instanceMatrix.needsUpdate=true; }
+                }
+              }
+            }
+          }catch{}
+        }
+        if(idx<items.length) setTimeout(spawnWave, waveDelay);
+        else {
+          // After last wave, mark finished; do NOT hard-hide to keep remaining context visible; finalize when all effects done
+          setTimeout(()=>{ try{ const rec=pendingDatafallDeletes.get(arr.id)||{count:0}; rec.finished=true; pendingDatafallDeletes.set(arr.id, rec); maybeFinalizeDeletion(arr.id); }catch{} }, 200);
+        }
+      };
+      spawnWave();
+    }catch(e){ console.warn('startDatafallDelete failed', e); }
+  }
+  try{ Scene.startDatafallDelete = startDatafallDelete; }catch{}
+
+  if(!targetArr){ Actions.setCell(arr.id, anchor, '!ERR:TARGET', ast.raw, true); return; }
+
+  // If PREVIEW is on (in-array or 3D), do not apply now; animation system will read formulas
+  let timed = null; try{ if(typeof Scene!=='undefined' && Scene.ensureTimedState) timed = Scene.ensureTimedState(targetArr); }catch{}
+  const G0 = (Store.getState().scene||{}).timed3D;
+  if((timed && timed.previewInArray) || (G0 && G0.preview)){
     return;
   }
 
@@ -1977,10 +2070,19 @@ tag('3D_TRANSLATE',["SCENE"],(anchor,arr,ast)=>{
     if(existing && !cont){ Actions.setCell(arr.id, anchor, `3D_Translate:skip`, (ast.raw||`=3D_TRANSLATE(...)`)); return; }
   }catch{}
 
-  // Immediate translation (dock propagation handled by Scene.setArrayOffset)
-  const off = targetArr.offset||{x:0,y:0,z:0};
-  const next = { x: Math.round(off.x + dx), y: Math.round(off.y + dy), z: Math.round(off.z + dz) };
-  Scene.setArrayOffset(targetArr, next, {interactive:true});
+  // Immediate translation respecting docking/parentage (apply to group as a unit)
+  const group = [...(S.dockGroups||new Map()).values()].find(g=>g.members.includes(targetArr.id));
+  const ids = group
+    ? (group.mode==='parent'
+        ? [targetArr.id, ...group.members.filter(id=> id!==targetArr.id && group.members.indexOf(id) > group.members.indexOf(targetArr.id))]
+        : [...group.members])
+    : [targetArr.id];
+  const arrays = ids.map(id=>S.arrays[id]).filter(Boolean);
+  arrays.forEach(a=>{
+    const offA = a.offset||{x:0,y:0,z:0};
+    const nextA = { x: Math.round((offA.x||0) + dx), y: Math.round((offA.y||0) + dy), z: Math.round((offA.z||0) + dz) };
+    Scene.setArrayOffset(a, nextA, {interactive:true, _skipDock:true, _skipConnections:true});
+  });
   Actions.setCell(arr.id, anchor, `Moved:${dx},${dy},${dz}`, ast.raw, true);
   // Record for revert when this anchor's formula is cleared; suppress repeat execution
   try{
@@ -1989,6 +2091,11 @@ tag('3D_TRANSLATE',["SCENE"],(anchor,arr,ast)=>{
     const map=new Map(S.activeTranslations||new Map());
     map.set(ak, { targetId: targetArr.id, from:{...off}, delta:{dx,dy,dz} });
     Store.setState({activeTranslations:map});
+    // Persist revert info in meta so refresh can restore revert behavior
+    const txw = Write.start('mark.3d.translate','mark');
+    const cell = Formula.getCell(anchor) || {value:'',formula:null,meta:{}};
+    Write.set(txw, arr.id, {x:anchor.x,y:anchor.y,z:anchor.z}, { value: cell.value, formula: cell.formula, meta:{...(cell.meta||{}), appliedTranslate:{ targetId: targetArr.id, from: off, delta:{dx,dy,dz} } } });
+    Write.commit(txw);
   }catch{}
 });
 // 3D_ROTATE(targetOrPivot, stepsX[, stepsY[, stepsZ]])
@@ -3219,7 +3326,12 @@ const Formula = (()=>{
       try{
         const ak=aKey(anchor);
         const S=Store.getState();
-        const rec = (S.activeRotations||new Map()).get(ak);
+        let rec = (S.activeRotations||new Map()).get(ak);
+        // Fallback to meta if after refresh
+        if(!rec){
+          const cell = Formula.getCell(anchor);
+          if(cell && cell.meta && cell.meta.appliedRotate){ rec = cell.meta.appliedRotate; }
+        }
         const suppressed = (S.suppress3DRotateRevert||new Set()).has(ak);
         if(rec && (!text || text==='') && !suppressed){
           const targ=S.arrays[rec.targetId];
@@ -3241,16 +3353,24 @@ const Formula = (()=>{
       try{
         const ak=aKey(anchor);
         const S=Store.getState();
-        const recT = (S.activeTranslations||new Map()).get(ak);
+        let recT = (S.activeTranslations||new Map()).get(ak);
+        // Fallback to meta on refresh: read persisted appliedTranslate
+        if(!recT){
+          const cell = Formula.getCell(anchor);
+          if(cell && cell.meta && cell.meta.appliedTranslate){ recT = cell.meta.appliedTranslate; }
+        }
         const suppressedT = (S.suppress3DTranslateRevert||new Set()).has(ak);
         const clearing = (!text || text==='');
         if(recT && clearing && !suppressedT){
           const targ=S.arrays[recT.targetId];
           if(targ){
-            // Move back to original position
+            // Differential revert: subtract only this cell's delta to preserve stacking
             const off = targ.offset||{x:0,y:0,z:0};
-            const orig = recT.from || off;
-            setArrayOffset(targ, {x:orig.x,y:orig.y,z:orig.z}, {interactive:true});
+            const d = recT.delta || {dx:0,dy:0,dz:0};
+            const nx = Math.round((off.x||0) - (d.dx||0));
+            const ny = Math.round((off.y||0) - (d.dy||0));
+            const nz = Math.round((off.z||0) - (d.dz||0));
+            setArrayOffset(targ, {x:nx,y:ny,z:nz}, {interactive:true});
           }
           const map=new Map(S.activeTranslations); map.delete(ak); Store.setState({activeTranslations:map});
         }
@@ -4609,8 +4729,7 @@ tag('3D_ROTATE',["SCENE"],(anchor,arr,ast)=>{
   if(!timed0){ try{ arr.params = arr.params || {}; arr.params.timed = arr.params.timed || { ticks:60, reverse:false, reverseTicks:null, repeat:false, t:0, dir:1, previewInArray:false, plan:[], baseOffset:null, baseQuat:null, overlay:null }; timed0 = arr.params.timed; }catch{} }
   const G0=(Store.getState().scene||{}).timed3D;
   if((timed0 && timed0.previewInArray) || (G0&&G0.preview)){
-    try{ (typeof Scene!=='undefined' && Scene.queueTimedOp ? Scene.queueTimedOp : queueTimedOp)(arr, anchor, { type:'rotate', sx, sy, sz }); }catch{}
-    Actions.setCell(arr.id, anchor, `Queued:Rot ${sx},${sy},${sz}`,(ast.raw||`=3D_ROTATE(${sx},${sy},${sz})`));
+    // In preview, do not apply or stamp; animation system will parse formulas and animate
     return;
   }
   // Non-repeat executable: if this anchor already applied a rotation, skip
@@ -4660,6 +4779,17 @@ tag('3D_ROTATE',["SCENE"],(anchor,arr,ast)=>{
   const clampSteps=(n)=>(((n%4)+4)%4);
   const degX = clampSteps(sx)*90, degY = clampSteps(sy)*90, degZ = clampSteps(sz)*90;
   Actions.setCell(arr.id,anchor,`3D_Rotate:${sx},${sy},${sz}`,(ast.raw||`=3D_ROTATE(${sx},${sy},${sz})`));
+  // Persist for refresh-time revert
+  try{
+    const ak=aKey(anchor);
+    const S=Store.getState();
+    const rec={targetId:targetArr.id, ids:[...ids], pivot:{...anchor, arrId:arr.id}, steps:{sx,sy,sz}};
+    const map=new Map(S.activeRotations||new Map()); map.set(ak, rec); Store.setState({activeRotations:map});
+    const txw = Write.start('mark.3d.rotate','mark');
+    const cell = Formula.getCell(anchor) || {value:'',formula:null,meta:{}};
+    Write.set(txw, arr.id, {x:anchor.x,y:anchor.y,z:anchor.z}, { value: cell.value, formula: cell.formula, meta:{...(cell.meta||{}), appliedRotate: rec } });
+    Write.commit(txw);
+  }catch{}
 });
 // Backward-compatible alias: ROTATE_ARRAY delegates to 3D_ROTATE
 tag('ROTATE_ARRAY',["SCENE"],(anchor,arr,ast)=>{
@@ -5372,6 +5502,28 @@ tag('PREVIEW',["SCENE"],(anchor,arr,ast)=>{
     }
     const G = (typeof Scene!=='undefined' && Scene.ensureTimed3D) ? Scene.ensureTimed3D() : ((Store.getState().scene.timed3D=Store.getState().scene.timed3D||{configured:false,preview:false}), Store.getState().scene.timed3D);
     G.preview = enable3D;
+    // If global preview is being disabled, immediately restore arrays to their captured base transforms
+    if(!enable3D){
+      try{
+        const arrays = Object.values(Store.getState().arrays||{});
+        arrays.forEach(a=>{
+          try{
+            const T = (typeof Scene!=='undefined' && Scene.ensureTimedState) ? Scene.ensureTimedState(a) : (a.params&&a.params.timed);
+            if(T){
+              // Restore base transforms if captured during preview
+              if(T.baseOffset){ try{ Scene.setArrayOffset?.(a, {x:T.baseOffset.x,y:T.baseOffset.y,z:T.baseOffset.z}, {interactive:true}); }catch{} }
+              if(a._frame && T.baseQuat){ try{ a._frame.quaternion.copy(T.baseQuat); }catch{} }
+              T.t = 0; T.dir = 1;
+              // Remove overlays and unmask content
+              try{ if(T.overlay){ T.overlay.group.parent?.remove(T.overlay.group); T.overlay=null; } }catch{}
+            }
+            try{ if(typeof Scene!=='undefined' && Scene.maskArrayForPreview) Scene.maskArrayForPreview(a, false); }catch{}
+          }catch{}
+        });
+        // Reset wait counter so next enable starts fresh
+        try{ G._waitCounter = 0; }catch{}
+      }catch{}
+    }
     Actions.setCell(arr.id, anchor, `Preview:${enableIn?1:0}/${enable3D?1:0}`, ast.raw, true);
   }catch(e){ Actions.setCell(arr.id, anchor, `!ERR:${e.message}`, ast.raw, true); }
 });
@@ -5576,7 +5728,11 @@ tag('DELETE',["ACTION"], (anchor,arr,ast)=>{
 
     let ok = 0;
     targets.forEach(id=>{
-      try{ if(Actions.deleteArray(id)) ok++; }catch{}
+      try{
+        const A = Store.getState().arrays[id];
+        if(A){ try{ Scene.startDatafallDelete?.(A); }catch{} }
+        ok++;
+      }catch{}
     });
 
     Actions.setCell(arr.id, anchor, `Deleted:${ok}`, ast.raw, true);
@@ -8369,6 +8525,8 @@ const Scene = (()=>{
   function buildTimedPlanFromArray(arr){
     try{
       const T = ensureTimedState(arr);
+      // reset plan so sequencing/order changes are honored
+      try{ if(Array.isArray(T.plan)) T.plan.length = 0; }catch{}
       const reNum = (s)=>{ const n = parseFloat(String(Formula.valOf(s)||s).replace(/[^0-9\-+.]/g,'')); return Number.isFinite(n)? n : 0; };
       const parseDims=(f)=>{
         const mFill = /ARRAY\(\s*"fill"\s*,\s*([^,]+)\s*,\s*([^,\)]+)\s*(?:,\s*([^,\)]+)\s*)?/i.exec(f);
@@ -8412,8 +8570,32 @@ const Scene = (()=>{
             }catch{}
           }
           if(/(?:3D_)?ROTATE(?:_ARRAY)?\(/i.test(f)){
-            const m = /(?:3D_)?ROTATE(?:_ARRAY)?\(\s*([^,)]*)\s*(?:,\s*([^,)]*)\s*)?(?:,\s*([^,)]*)\s*)?\)/i.exec(f);
-            if(m){ queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'rotate', sx:reNum(m[1]||0), sy:reNum(m[2]||0), sz:reNum(m[3]||0)}); }
+            try{
+              const start = f.search(/(?:3D_)?ROTATE(?:_ARRAY)?\(/i);
+              if(start>=0){
+                let i=start; while(i<f.length && f[i]!== '(') i++;
+                if(i<f.length && f[i]==='('){
+                  i++; let depth=0, cur=''; const args=[];
+                  for(; i<f.length; i++){
+                    const ch=f[i];
+                    if(ch==='('){ depth++; cur+=ch; continue; }
+                    if(ch===')'){
+                      if(depth>0){ depth--; cur+=ch; continue; }
+                      args.push(cur.trim());
+                      break;
+                    }
+                    if(ch===',' && depth===0){ args.push(cur.trim()); cur=''; continue; }
+                    cur+=ch;
+                  }
+                  // take last up to three as sx,sy,sz (ignore optional target at front)
+                  const n=args.length;
+                  const sx = n>=1 ? reNum(args[n-3] ?? 0) : 0;
+                  const sy = n>=2 ? reNum(args[n-2] ?? 0) : 0;
+                  const sz = n>=3 ? reNum(args[n-1] ?? 0) : 0;
+                  queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'rotate', sx, sy, sz});
+                }
+              }
+            }catch{}
           }
           // SHIFT(input, dx[, dy[, dz]]) -> treat as translate for previews
           if(/SHIFT\(/i.test(f)){
@@ -8441,12 +8623,28 @@ const Scene = (()=>{
     t.baseOffset = { ...(arr.offset||{x:0,y:0,z:0}) };
     try{ t.baseQuat = (arr._frame?.quaternion?.clone?.()) || null; }catch{ t.baseQuat=null; }
   }
-  function stopTimed(arr){ const t=ensureTimedState(arr); t.previewInArray=false; if(t.overlay){ try{ t.overlay.group.parent?.remove(t.overlay.group); }catch{}; t.overlay=null; } }
+  function stopTimed(arr){
+    const t=ensureTimedState(arr);
+    t.previewInArray=false;
+    // Restore base transforms
+    try{ if(t.baseOffset){ setArrayOffset(arr, {x:t.baseOffset.x,y:t.baseOffset.y,z:t.baseOffset.z}, {interactive:true}); } }catch{}
+    try{ if(arr._frame && t.baseQuat){ arr._frame.quaternion.copy(t.baseQuat); } }catch{}
+    if(t.overlay){ try{ t.overlay.group.parent?.remove(t.overlay.group); }catch{}; t.overlay=null; }
+    // Unmask array content after preview ends
+    try{ maskArrayForPreview(arr, false); }catch{}
+  }
   // Global 3D timed config (overworld movement)
   function ensureTimed3D(){
     const S=Store.getState();
     const sceneState = S.scene || ({});
-    if(!sceneState.timed3D){ sceneState.timed3D = { configured:false, ticks:60, repeat:false, reverse:false, reverseTicks:null, t:0, dir:1, preview:false }; Store.setState(s=>({scene:{...s.scene, timed3D: sceneState.timed3D}})); }
+    if(!sceneState.timed3D){
+      sceneState.timed3D = { configured:false, ticks:60, repeat:false, reverse:false, reverseTicks:null, t:0, dir:1, preview:false, waitStart:0, waitEnd:0, _waitCounter:0 };
+      Store.setState(s=>({scene:{...s.scene, timed3D: sceneState.timed3D}}));
+    } else {
+      if(typeof sceneState.timed3D.waitStart!=='number') sceneState.timed3D.waitStart = 0;
+      if(typeof sceneState.timed3D.waitEnd!=='number') sceneState.timed3D.waitEnd = 0;
+      if(typeof sceneState.timed3D._waitCounter!=='number') sceneState.timed3D._waitCounter = 0;
+    }
     return sceneState.timed3D;
   }
   // Temporarily hide colored fills/formulas so expansion overlay is visible over white grid
@@ -8858,11 +9056,41 @@ const Scene = (()=>{
       let p3D = 0;
       if(G && G.preview){
         // Default configuration if none provided via 3D_TIMED_TRANSLATION
-        if(!G.ticks){ G.ticks=120; G.reverseTicks=G.reverseTicks||G.ticks; G.dir=1; G.t=0; }
+        if(!G.ticks){ G.ticks=240; G.reverseTicks=G.reverseTicks||G.ticks; G.dir=1; G.t=0; }
+        if(typeof G._waitCounter!=='number') G._waitCounter = 0;
         const dur3D = (G.dir>0? G.ticks : (G.reverseTicks||G.ticks));
-        G.t = (G.t + 1);
-        const r = Math.min(1, G.t/Math.max(1,dur3D)); p3D = (G.dir>0? r : (1-r));
-        if(r>=1){ if(G.reverse && G.dir>0){ G.dir=-1; G.t=0; } else if(G.repeat){ G.dir=1; G.t=0; } else { G.preview=false; } }
+        let r3D = 0;
+        // Wait-at-start: hold time; still render p3D=0 so arrays snap to base
+        if(G.dir>0 && G.t===0 && (G.waitStart|0) > 0 && G._waitCounter < (G.waitStart|0)){
+          G._waitCounter++;
+          p3D = 0;
+          r3D = 0;
+        } else {
+          G.t = (G.t + 1);
+          r3D = Math.min(1, G.t/Math.max(1,dur3D));
+          p3D = (G.dir>0? r3D : (1-r3D));
+        }
+        if(r3D>=1){
+          // Wait-at-end before reversing or looping
+          if((G.waitEnd|0) > 0 && G._waitCounter < (G.waitEnd|0)){
+            G._waitCounter++;
+            __rafId = requestAnimationFrame(animate); return;
+          }
+          G._waitCounter = 0;
+          if(G.reverse && G.dir>0){ G.dir=-1; G.t=0; }
+          else if(G.repeat){ G.dir=1; G.t=0; }
+          else {
+            // Stop preview: restore each array's base state
+            G.preview=false;
+            try{
+              Object.values(Store.getState().arrays||{}).forEach(a=>{
+                const T = a?.params?.timed; if(!T) return;
+                if(T.baseOffset){ setArrayOffset(a, {x:T.baseOffset.x,y:T.baseOffset.y,z:T.baseOffset.z}, {interactive:true}); }
+                if(a._frame && T.baseQuat){ a._frame.quaternion.copy(T.baseQuat); }
+              });
+            }catch{}
+          }
+        }
       }
       // Per-array timed: config exists; animate only if previewInArray is enabled
       for(const arr of arrays){
@@ -8889,7 +9117,7 @@ const Scene = (()=>{
             // Group plan by anchor so we emit overlays from each respective anchor
             const keyOf = (a)=> a? `${a.arrId}:${a.x},${a.y},${a.z}` : null;
             const groups = new Map();
-            for(const op of T.plan){
+              for(const op of T.plan){
               const k = keyOf(op.anchor);
               if(!k) continue;
               if(!groups.has(k)) groups.set(k, { anchor:{...op.anchor}, tx:0,ty:0,tz:0, rsx:0,rsy:0,rsz:0, hasTranspose:false, dims:{w:1,h:1,d:1} });
@@ -8923,7 +9151,13 @@ const Scene = (()=>{
               const angX = (g.rsx*90)*(Math.PI/180) * leg;
               const angY = (g.rsy*90)*(Math.PI/180) * leg;
               const angZ = (g.rsz*90)*(Math.PI/180) * leg;
-              const rot = new THREE.Euler(angX, angY, angZ, 'XYZ');
+              // Match actual rotation semantics: world-axis rotations premultiplied (like rotateOnWorldAxis)
+              const qxL = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), angX);
+              const qyL = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), angY);
+              const qzL = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1), angZ);
+              const qWorldL = qzL.clone().multiply(qyL).multiply(qxL); // Z * Y * X (world, premultiply order)
+              const baseQL = (arr._frame?.quaternion?.clone?.()) || new THREE.Quaternion();
+              const qLocal = baseQL.clone().invert().multiply(qWorldL).multiply(baseQL);
               const legShift = (T.dir>0? p : (1-p));
               const shiftL = XU.clone().multiplyScalar((g.tx||0)*legShift)
                 .add(YU.clone().multiplyScalar((g.ty||0)*legShift))
@@ -8948,7 +9182,7 @@ const Scene = (()=>{
                 const primaryDim  = primaryAxis==='x' ? w : primaryAxis==='y' ? h : d;
                 const k = (primaryAxis==='x'? xx : primaryAxis==='y'? yy : zz);
                 const pCell = Math.max(0, Math.min(1, p*primaryDim - k));
-                offL.applyEuler(rot);
+                offL.applyQuaternion(qLocal);
                 offL.add(shiftL);
                 offL.multiplyScalar(pCell);
                 const posL = anchorL.clone().add(offL);
@@ -8972,64 +9206,77 @@ const Scene = (()=>{
             if(T.reverse && T.dir>0){ T.dir=-1; }
             else if(T.repeat){ T.dir=1; }
             else {
-              // one-shot: clear overlay after brief hold
+              // one-shot: clear overlay after brief hold and unmask content
               setTimeout(()=>{ try{ while(T.overlay.group.children.length){ const ch=T.overlay.group.children.pop(); ch.geometry?.dispose?.(); ch.material?.dispose?.(); } }catch{} }, 120);
+              try{ T.overlay.group.parent?.remove(T.overlay.group); }catch{}
+              T.overlay=null;
+              try{ maskArrayForPreview(arr,false); }catch{}
             }
           }
         }
-          // If global 3D preview is enabled, apply full-array motion using the same plan and p3D
+        // If global 3D preview is enabled, apply full-array motion using the same plan and p3D
           if(G && G.preview && T){
           if(!T.plan.length){ buildTimedPlanFromArray(arr); }
           if(!T.plan.length){ continue; }
-          if(!T.baseOffset){ T.baseOffset={...(arr.offset||{x:0,y:0,z:0})}; }
-            let tx=0,ty=0,tz=0; let rsx=0,rsy=0,rsz=0; let hasTranspose=false; let smooth=false;
-            // Only consider transforms from a single controlling anchor; do not merge across anchors
-            let baseAnchor = null; let baseKey = null;
-            const keyOf = (a)=> a? `${a.arrId}:${a.x},${a.y},${a.z}` : null;
-            for(const op of T.plan){
-              const ok = keyOf(op.anchor);
-              if(baseKey==null && ok){ baseAnchor = {...op.anchor}; baseKey = ok; }
-              if(baseKey && ok && ok!==baseKey) continue;
-              if(op.type==='translate'){ tx+=(op.dx||0); ty+=(op.dy||0); tz+=(op.dz||0); }
-              else if(op.type==='rotate'){ rsx+=(op.sx||0); rsy+=(op.sy||0); rsz+=(op.sz||0); }
-              else if(op.type==='transpose'){ hasTranspose=true; }
-            }
+          if(!T.baseOffset){
+            // Reset base to current on first preview frame
+            T.baseOffset={...(arr.offset||{x:0,y:0,z:0})};
+            try{ if(arr._frame) T.baseQuat = arr._frame.quaternion.clone(); else T.baseQuat = new THREE.Quaternion(); }catch{ T.baseQuat=new THREE.Quaternion(); }
+          }
+            let tx=0,ty=0,tz=0; let hasTranspose=false; let smooth=false;
+            // Stack only translates/transpose from plan; rotation will use applied steps snapshot
+          for(const op of T.plan){
+            if(op.type==='translate'){ tx+=(op.dx||0); ty+=(op.dy||0); tz+=(op.dz||0); }
+            else if(op.type==='transpose'){ hasTranspose=true; }
+          }
             // Smooth vs stepped from global or local timed configuration
             smooth = !!((Store.getState().scene?.timed3D?.smooth) || T.smooth);
-          // Compute strictly from baseOffset to avoid drift/overshoot
-          if(smooth){
-            const nx = (T.baseOffset.x + tx*p3D);
-            const ny = (T.baseOffset.y + ty*p3D);
-            const nz = (T.baseOffset.z + tz*p3D);
-            setArrayOffset(arr, {x:nx,y:ny,z:nz}, {interactive:true});
-          } else {
-            // Stepped: zero deltas must not move
-            const nx = (tx!==0) ? Math.round(T.baseOffset.x + tx*p3D) : T.baseOffset.x;
-            const ny = (ty!==0) ? Math.round(T.baseOffset.y + ty*p3D) : T.baseOffset.y;
-            const nz = (tz!==0) ? Math.round(T.baseOffset.z + tz*p3D) : T.baseOffset.z;
-            setArrayOffset(arr, {x:nx,y:ny,z:nz}, {interactive:true});
-          }
-          // Apply rotation preview (about array origin) if present
-          if((rsx||rsy||rsz)){
+            // Compute unified translate+rotate around pivot: prefer applied rotation record's pivot
+            let pivotLocal = new THREE.Vector3(0,0,0);
             try{
-              if(!arr._frame) Scene.renderArray(arr);
-              if(!T.baseQuat){ T.baseQuat = arr._frame?.quaternion?.clone?.() || new THREE.Quaternion(); }
-                if(!!T.smooth){
-                  const baseQ = T.baseQuat.clone();
-                  const euler = new THREE.Euler((rsx*90)*(Math.PI/180)*p3D, (rsy*90)*(Math.PI/180)*p3D, (rsz*90)*(Math.PI/180)*p3D, 'XYZ');
-                  const dq = new THREE.Quaternion().setFromEuler(euler);
-                  const targetQ = baseQ.clone().multiply(dq);
-                  arr._frame.quaternion.copy(targetQ);
-                } else {
-                  // Stepped: snap to quarter-steps according to progress
-                  const step = Math.round(p3D*4)/4;
-                  const euler = new THREE.Euler((rsx*90)*(Math.PI/180)*step, (rsy*90)*(Math.PI/180)*step, (rsz*90)*(Math.PI/180)*step, 'XYZ');
-                  const dq = new THREE.Quaternion().setFromEuler(euler);
-                  const targetQ = T.baseQuat.clone().multiply(dq);
-                  arr._frame.quaternion.copy(targetQ);
-                }
+              const S = Store.getState();
+              let found=null;
+              (S.activeRotations||new Map()).forEach((rec)=>{
+                if(found) return;
+                if(rec && (rec.targetId===arr.id || (Array.isArray(rec.ids) && rec.ids.includes(arr.id)))) found = rec;
+              });
+              if(found && found.pivot){ pivotLocal = localPos(arr, found.pivot.x, found.pivot.y, found.pivot.z); }
+              else {
+                const rotOp = (T.plan||[]).find(op=>op.type==='rotate');
+                if(rotOp && rotOp.anchor) pivotLocal = localPos(arr, rotOp.anchor.x, rotOp.anchor.y, rotOp.anchor.z);
+              }
             }catch{}
-          }
+            if(!arr._frame) Scene.renderArray(arr);
+            if(!T.baseQuat){ T.baseQuat = arr._frame?.quaternion?.clone?.() || new THREE.Quaternion(); }
+            const baseRotPivot = pivotLocal.clone().applyQuaternion(T.baseQuat);
+            // Rotation progress and quaternion (snapshot of applied rotation steps; inverse toward pre-transform)
+            const steps = arr.rotationSteps || {x:0,y:0,z:0};
+            const rotProg = smooth ? (1 - p3D) : (1 - (Math.round(p3D*4)/4));
+            const ax = (steps.x|0) * (Math.PI/2) * rotProg;
+            const ay = (steps.y|0) * (Math.PI/2) * rotProg;
+            const az = (steps.z|0) * (Math.PI/2) * rotProg;
+            const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), -ax);
+            const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), -ay);
+            const qz = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1), -az);
+            const dq = qz.clone().multiply(qy).multiply(qx); // Z^- * Y^- * X^- pre-multiply (world order)
+            const newQuat = dq.clone().multiply(T.baseQuat);
+            const newRotPivot = pivotLocal.clone().applyQuaternion(newQuat);
+            // Translation progress (preview un-applies first, then returns to final)
+            let dxp=0,dyp=0,dzp=0;
+            if(smooth){
+              dxp = -tx * (1 - p3D); dyp = -ty * (1 - p3D); dzp = -tz * (1 - p3D);
+            } else {
+              dxp = tx!==0 ? (Math.round(T.baseOffset.x - tx*(1-p3D)) - T.baseOffset.x) : 0;
+              dyp = ty!==0 ? (Math.round(T.baseOffset.y - ty*(1-p3D)) - T.baseOffset.y) : 0;
+              dzp = tz!==0 ? (Math.round(T.baseOffset.z - tz*(1-p3D)) - T.baseOffset.z) : 0;
+            }
+            const disp = new THREE.Vector3(dxp,dyp,dzp);
+            const newOffset = new THREE.Vector3(T.baseOffset.x, T.baseOffset.y, T.baseOffset.z)
+              .add(disp)
+              .add(baseRotPivot)
+              .sub(newRotPivot);
+            setArrayOffset(arr, {x:newOffset.x, y:newOffset.y, z:newOffset.z}, {interactive:true});
+            try{ arr._frame.quaternion.copy(newQuat); }catch{}
           // Minimal transpose preview: slight XY swap tilt to indicate operation
           if(hasTranspose){
             try{
@@ -9039,6 +9286,9 @@ const Scene = (()=>{
               arr._frame.rotation.set(tilt, arr._frame.rotation.y, -tilt);
             }catch{}
           }
+        } else if(G && !G.preview && T){
+          // Non-preview: arrays should already be at their one-time end state from 3D_TRANSLATE/3D_ROTATE.
+          // Do not re-apply or enforce here to avoid double transforms.
         }
       }
     }catch{}
@@ -9816,6 +10066,16 @@ const Scene = (()=>{
 
   // Deletion explosion effect
   const deleteEffects = [];
+  const pendingDatafallDeletes = new Map(); // arrId -> {count:number, finished:boolean}
+  function maybeFinalizeDeletion(arrId){
+    try{
+      const rec = pendingDatafallDeletes.get(arrId);
+      if(rec && rec.finished && ((rec.count|0) <= 0)){
+        pendingDatafallDeletes.delete(arrId);
+        try{ Actions.deleteArray(arrId); }catch{}
+      }
+    }catch{}
+  }
 
   function makeCharSprite(ch, color = '#ffffff'){
     const canvas = document.createElement('canvas');
@@ -9873,6 +10133,59 @@ const Scene = (()=>{
     for(let i = deleteEffects.length - 1; i >= 0; i--){
       const eff = deleteEffects[i];
       eff.t += dtMs;
+
+      // Datafall phase: value -> formula/text chunks -> char codes -> binary bits
+      if(eff.phase === 'datafall'){
+        const next = [];
+        for(let k=0; k<eff.particles.length; k++){
+          const pr = eff.particles[k];
+          pr.age += dtMs;
+          pr.vel.y -= 0.003;
+          pr.sprite.position.add(pr.vel);
+          pr.sprite.material.opacity = Math.max(0, 1 - Math.pow(pr.age/pr.life, 2));
+          if(pr.sprite.rotation !== undefined){ pr.sprite.rotation += (pr.rot||0); }
+
+          if(pr.age > pr.life){
+            const pos = pr.sprite.position.clone();
+            pr.sprite.parent?.remove(pr.sprite); pr.sprite.material?.map?.dispose?.(); pr.sprite.material?.dispose?.();
+
+            let newTexts = [], nextKind = null;
+            try{
+              if(pr.kind === 'value'){
+                const raw = (pr.cell?.formula && String(pr.cell.formula)[0]==='=') ? String(pr.cell.formula) : String(pr.cell?.value ?? '');
+                if(raw.trim()===''){ continue; }
+                const regex=/(=[A-Z_0-9]+)|([(),])|(\"[^\"]*\")|([0-9.]+)|([A-Z][0-9]+)/gi; let m,last=0; const out=[];
+                while((m=regex.exec(raw))){ if(m.index>last) out.push(raw.slice(last,m.index)); out.push(m[0]); last=regex.lastIndex; }
+                if(last<raw.length) out.push(raw.slice(last));
+                newTexts = out.filter(s=> s && s.length).map(s=> ({text:s}));
+                nextKind = 'formula_chunk';
+              } else if(pr.kind === 'formula_chunk'){
+                const text = String(pr.text ?? '').trim();
+                const isNumeric = text !== '' && !isNaN(text);
+                if(isNumeric){ const bin=(parseInt(text,10)||0).toString(2); newTexts = Array.from(bin); nextKind='binary_bit'; }
+                else { const plain=text.replace(/^\"|\"$/g,''); newTexts = Array.from(plain).map(ch=> String(ch.codePointAt(0))); nextKind='char_code'; }
+              } else if(pr.kind === 'char_code'){
+                const n=parseInt(pr.code||pr.text||'0',10)||0; const bin=n.toString(2); newTexts = Array.from(bin); nextKind='binary_bit';
+              } else { continue; }
+            }catch{ continue; }
+
+            newTexts.forEach(txt=>{
+              const label = (typeof txt==='object') ? String(txt.text||'') : String(txt);
+              if(label==='') return;
+              const sp = makeCharSprite(label);
+              sp.position.copy(pos).add(new THREE.Vector3((Math.random()-0.5)*0.2, (Math.random())*0.2, (Math.random()-0.5)*0.2));
+              const vel = new THREE.Vector3((Math.random()-0.5)*0.015, (Math.random())*0.02, (Math.random()-0.5)*0.015);
+              eff.group.add(sp);
+              next.push({ kind: nextKind, text: label, code: parseInt(label,10), sprite: sp, vel, age:0, life: 900 + Math.random()*600, rot:(Math.random()-0.5)*0.05 });
+            });
+          } else {
+            next.push(pr);
+          }
+        }
+        eff.particles = next;
+        if(eff.particles.length===0){ try{ const cb=eff.onDone; eff.group.parent?.remove(eff.group); if(typeof cb==='function') cb(); }catch{} deleteEffects.splice(i,1); }
+        continue;
+      }
 
       if(eff.phase === 'hover'){
         // Subtle hover/vibrate for ~450ms
