@@ -426,7 +426,7 @@ document.addEventListener('click', function(e){
     <div class="stack" style="gap:6px;">
       <div class="title" style="font-size:14px;">Visual Extras</div>
       <label class="row" style="justify-content:space-between; align-items:center;">
-        <span>Frosted Backdrop</span>
+        <span>Frosted Glass</span>
         <input type="checkbox" id="gfxTransmission">
       </label>
       <label class="row" style="justify-content:space-between; align-items:center;">
@@ -6478,7 +6478,7 @@ const Scene = (()=>{
     settings: { ...FancyDefaults },
     composer: null,
     passes: {},
-    groups: { lights: null, mirror: null, waveGrid: null, backdrop: null },
+    groups: { lights: null, mirror: null, waveGrid: null },
     decor: null,
     hdriTexture: null,
     hdriPromise: null,
@@ -6561,24 +6561,6 @@ const Scene = (()=>{
     waveGrid.position.y = -0.48;
     FancyGraphics.decor.add(waveGrid);
     FancyGraphics.groups.waveGrid = waveGrid;
-
-    const backdrop = new THREE.Mesh(
-      new THREE.PlaneGeometry(160, 80),
-      new THREE.MeshPhysicalMaterial({
-        color: 0xffffff,
-        roughness: 0.4,
-        metalness: 0.05,
-        transmission: 0.9,
-        thickness: 2.0,
-        transparent: true,
-        opacity: 1,
-        envMapIntensity: 1.1
-      })
-    );
-    backdrop.position.set(0, 18, -90);
-    backdrop.scale.set(1, 1.1, 1);
-    FancyGraphics.decor.add(backdrop);
-    FancyGraphics.groups.backdrop = backdrop;
 
     const lights = new THREE.Group();
     const key = new THREE.DirectionalLight(0xffffff, 3.2); key.position.set(-8, 14, 10);
@@ -6695,8 +6677,6 @@ const Scene = (()=>{
     if(FancyGraphics.groups.lights){ FancyGraphics.groups.lights.visible = FancyGraphics.settings.lights; }
     if(FancyGraphics.groups.mirror){ FancyGraphics.groups.mirror.visible = FancyGraphics.settings.mirror; }
     if(FancyGraphics.groups.waveGrid){ FancyGraphics.groups.waveGrid.visible = FancyGraphics.settings.waveGrid; }
-    if(FancyGraphics.groups.backdrop){ FancyGraphics.groups.backdrop.visible = FancyGraphics.settings.transmission; }
-
     if(FancyGraphics.settings.hdri){
       ensureFancyHDRI().then((tex)=>{ if(FancyGraphics.enabled && FancyGraphics.settings.hdri){ scene.environment = tex; } }).catch(()=>{});
     } else {
@@ -6750,6 +6730,7 @@ const Scene = (()=>{
       scene.fog = FancyGraphics.base.fog || null;
       if(FancyGraphics.passes.outline) FancyGraphics.passes.outline.selectedObjects = [];
     }
+    refreshCellMaterials();
     return FancyGraphics.enabled;
   }
 
@@ -6763,10 +6744,17 @@ const Scene = (()=>{
   }
 
   function updateGraphicsSettings(patch){
-    Object.keys(patch||{}).forEach(key=>{
-      if(key in FancyGraphics.settings){ FancyGraphics.settings[key] = patch[key]; }
+    const incoming = patch || {};
+    Object.keys(incoming).forEach(key=>{
+      if(key in FancyGraphics.settings){ FancyGraphics.settings[key] = incoming[key]; }
     });
-    if(FancyGraphics.enabled) applyFancyRuntimeSettings();
+    const affectsMaterials = Object.prototype.hasOwnProperty.call(incoming, 'transmission');
+    if(FancyGraphics.enabled){
+      applyFancyRuntimeSettings();
+      if(affectsMaterials) refreshCellMaterials();
+    } else if(affectsMaterials){
+      refreshCellMaterials();
+    }
   }
 
   function isPresentEnabled(){ return FancyGraphics.enabled; }
@@ -7103,27 +7091,153 @@ const Scene = (()=>{
   }
   addWhiteVertexColors(GEO_VOXEL);
   addWhiteVertexColors(GEO_SHELL);
-  // Material factory: unified unlit pipeline
-  const createCellMaterial = (type='filled') => {
-    if (String(type||'').startsWith('ghost')) {
-      const m = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0.15,
-        blending: THREE.NormalBlending,
-        depthWrite: false,
-        depthTest: true,
-        vertexColors: true
-      });
-      m.toneMapped = false;
-      return m;
+  const cellMaterialCache = new Map();
+  function materialKeyFor(type){
+    const base = String(type||'').startsWith('ghost') ? 'ghost' : String(type||'filled');
+    const mode = FancyGraphics.enabled ? 'present' : 'simple';
+    const frosted = FancyGraphics.enabled && FancyGraphics.settings.transmission ? 'frosted' : 'solid';
+    return `${mode}:${frosted}:${base}`;
+  }
+  function createCellMaterial(type='filled'){
+    const baseType = String(type||'').startsWith('ghost') ? 'ghost' : String(type||'filled');
+    const key = materialKeyFor(baseType);
+    if(cellMaterialCache.has(key)) return cellMaterialCache.get(key);
+
+    let material;
+    if(baseType === 'ghost'){
+      if(FancyGraphics.enabled){
+        material = new THREE.MeshPhysicalMaterial({
+          color: new THREE.Color(0xffffff),
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.28,
+          depthWrite: false,
+          depthTest: true,
+          roughness: 0.85,
+          metalness: 0.05,
+          envMapIntensity: 0.35,
+          transmission: 0.0,
+          clearcoat: 0.0
+        });
+        material.blending = THREE.NormalBlending;
+        material.toneMapped = true;
+      }else{
+        material = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.35,
+          blending: THREE.NormalBlending,
+          depthWrite: false,
+          depthTest: true,
+          vertexColors: true
+        });
+        material.toneMapped = false;
+      }
+    }else{
+      if(FancyGraphics.enabled){
+        const frosted = !!FancyGraphics.settings.transmission;
+        const params = {
+          color: new THREE.Color(0xffffff),
+          vertexColors: true,
+          roughness: frosted ? 0.55 : 0.32,
+          metalness: frosted ? 0.08 : 0.22,
+          envMapIntensity: 1.2,
+          clearcoat: 0.25,
+          clearcoatRoughness: 0.2,
+          reflectivity: 0.45,
+          depthWrite: true,
+          depthTest: true
+        };
+        if(frosted){
+          Object.assign(params, {
+            transparent: true,
+            opacity: 1.0,
+            transmission: 0.68,
+            thickness: 1.0,
+            ior: 1.45,
+            attenuationColor: new THREE.Color(0xffffff),
+            attenuationDistance: 6.0
+          });
+        }else{
+          Object.assign(params, {
+            transparent: false,
+            transmission: 0.0
+          });
+        }
+        material = new THREE.MeshPhysicalMaterial(params);
+        material.toneMapped = true;
+      }else{
+        const isEmpty = (baseType === 'empty');
+        material = new THREE.MeshBasicMaterial({
+          color: isEmpty ? COLORS.empty : 0xffffff,
+          transparent: false,
+          depthWrite: true,
+          vertexColors: true
+        });
+        material.toneMapped = false;
+      }
     }
-    // filled/formula/empty use unlit with instanceColor * vertexColor(=white)
-    const isEmpty = (type==='empty');
-    const m = new THREE.MeshBasicMaterial({ color: isEmpty? COLORS.empty : 0xffffff, transparent:false, depthWrite:true, vertexColors: true });
-    m.toneMapped = false;
-    return m;
-  };
+
+    material.userData = { ...(material.userData||{}), pass: baseType === 'ghost' ? 'ghost' : 'solid' };
+    cellMaterialCache.set(key, material);
+    return material;
+  }
+
+  function rebuildCellMaterialRefs(){
+    try{
+      const arrays = Store.getState().arrays || {};
+      Object.values(arrays).forEach(arr=>{
+        const collected = new Set();
+        Object.values(arr.chunks||{}).forEach(ch=>{
+          if(ch?.meshLOD1?.material) collected.add(ch.meshLOD1.material);
+          if(ch?.meshGhost?.material) collected.add(ch.meshGhost.material);
+        });
+        arr._cellMaterials = Array.from(collected);
+      });
+    }catch{}
+  }
+
+  function refreshCellMaterials(){
+    try{
+      const visited = new Set();
+      const oldMaterials = new Set();
+      cellMaterialCache.clear();
+
+      const assign = (mesh, type)=>{
+        if(!mesh || visited.has(mesh.uuid)) return;
+        visited.add(mesh.uuid);
+        if(mesh.material) oldMaterials.add(mesh.material);
+        mesh.material = createCellMaterial(type);
+        mesh.material.needsUpdate = true;
+      };
+
+      try{
+        Object.values(Store.getState().arrays||{}).forEach(arr=>{
+          Object.values(arr.chunks||{}).forEach(ch=>{
+            assign(ch.meshLOD1, 'filled');
+            assign(ch.meshGhost, 'ghost');
+            if(ch.meshLOD2) assign(ch.meshLOD2, 'filled');
+          });
+        });
+      }catch{}
+
+      try{
+        layerMeshes.forEach(rec=>{
+          const mesh = rec?.mesh;
+          if(!mesh) return;
+          if(mesh.userData?.isGhost) return;
+          const base = mesh.userData?.type || 'filled';
+          const want = String(base).startsWith('ghost') ? 'ghost' : base;
+          assign(mesh, want);
+        });
+      }catch{}
+      try{ chunkMeshes.forEach(mesh=> assign(mesh, 'filled')); }catch{}
+
+      oldMaterials.forEach(mat=>{ try{ mat?.dispose?.(); }catch{} });
+      rebuildCellMaterialRefs();
+      needsRender = true;
+    }catch(e){ console.warn('refreshCellMaterials failed', e); }
+  }
   
   // Debounced collider rebuilds
   const colliderRebuildQueue = new Map(); // arrayId -> timeout
@@ -7368,21 +7482,9 @@ const Scene = (()=>{
     );
   }
   // GPU-first two-pass materials with local clipping planes
-  function makeCellMaterials(baseParams={}){
-    const solid = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, ...baseParams });
-    // Ensure solids are fully opaque and write depth so they are visible over ghosts
-    solid.transparent = false;
-    solid.opacity = 1.0;
-    solid.depthTest = true;
-    solid.depthWrite = true;
-    solid.toneMapped = false;
-    // Ghosts are translucent overlays that do not write depth
-    const ghost = solid.clone();
-    ghost.transparent = true;
-    ghost.opacity = 0.35;
-    ghost.depthWrite = false;
-    ghost.depthTest = true;
-    ghost.blending = THREE.NormalBlending;
+  function makeCellMaterials(){
+    const solid = createCellMaterial('filled');
+    const ghost = createCellMaterial('ghost');
     return { solid, ghost };
   }
 
