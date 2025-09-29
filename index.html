@@ -338,6 +338,11 @@ document.addEventListener('click', function(e){
     <button class="btn" id="toggleChunks">📦 Chunks</button>
     <button class="btn warn" id="reset">🔄 Reset</button>
   </div>
+
+  <div class="row" style="padding:0 12px 6px;">
+    <button class="btn" id="presentToggleBtn">🎨 Present: OFF</button>
+    <button class="btn" id="graphicsSettingsBtn">🎛️ Graphic Settings</button>
+  </div>
   
   <!-- Data Import/Export -->
   <div class="row" style="padding:0 12px 6px;">
@@ -355,6 +360,120 @@ document.addEventListener('click', function(e){
   <!-- Save Status -->
   <div style="padding:0 12px 12px; font-size:11px; color:var(--muted);">
     <span id="saveStatus">Auto-save: Ready</span>
+  </div>
+</div>
+
+<div class="panel stack" id="graphicsSettingsPanel" style="display:none; position:absolute; left:440px; top:16px; width:320px; max-height:80vh; overflow:auto;">
+  <div class="win-header" style="background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.12)">
+    <span>Graphic Settings</span>
+    <div id="graphicsSettingsClose" class="close" title="Hide"></div>
+  </div>
+  <div class="stack" style="padding:12px; gap:12px;">
+    <div class="sub" id="graphicsSettingsHint">Enable Present mode to tweak fancy rendering.</div>
+
+    <div class="stack" style="gap:6px;">
+      <div class="title" style="font-size:14px;">Environment</div>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Studio HDRI</span>
+        <input type="checkbox" id="gfxHdri">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>3-Point Lighting</span>
+        <input type="checkbox" id="gfxLights">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Dark Background</span>
+        <input type="checkbox" id="gfxDarkBg">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:6px;">
+      <div class="title" style="font-size:14px;">Cinematic</div>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Bloom</span>
+        <input type="checkbox" id="gfxBloom">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Bloom Strength <span id="gfxBloomStrengthValue"></span></span>
+        <input type="range" id="gfxBloomStrength" min="0" max="1" step="0.01">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Bloom Radius <span id="gfxBloomRadiusValue"></span></span>
+        <input type="range" id="gfxBloomRadius" min="0" max="1" step="0.05">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Exposure <span id="gfxExposureValue"></span></span>
+        <input type="range" id="gfxExposure" min="0.4" max="2" step="0.05">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:6px;">
+      <div class="title" style="font-size:14px;">Depth of Field</div>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Depth of Field</span>
+        <input type="checkbox" id="gfxDof">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Aperture <span id="gfxDofApertureValue"></span></span>
+        <input type="range" id="gfxDofAperture" min="0" max="0.02" step="0.0005">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Max Blur <span id="gfxDofMaxBlurValue"></span></span>
+        <input type="range" id="gfxDofMaxBlur" min="0" max="0.02" step="0.0005">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:6px;">
+      <div class="title" style="font-size:14px;">Visual Extras</div>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Frosted Backdrop</span>
+        <input type="checkbox" id="gfxTransmission">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Reflective Ground</span>
+        <input type="checkbox" id="gfxMirror">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Deforming Grid</span>
+        <input type="checkbox" id="gfxWaveGrid">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>FXAA</span>
+        <input type="checkbox" id="gfxFxaa">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Fog</span>
+        <input type="checkbox" id="gfxFog">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Fog Density <span id="gfxFogDensityValue"></span></span>
+        <input type="range" id="gfxFogDensity" min="0" max="0.05" step="0.001">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:6px;">
+      <div class="title" style="font-size:14px;">Stylization</div>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Selection Outline</span>
+        <input type="checkbox" id="gfxOutline">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Outline Strength <span id="gfxOutlineStrengthValue"></span></span>
+        <input type="range" id="gfxOutlineStrength" min="0" max="5" step="0.1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Outline Thickness <span id="gfxOutlineThicknessValue"></span></span>
+        <input type="range" id="gfxOutlineThickness" min="0" max="4" step="0.1">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Motion Blur</span>
+        <input type="checkbox" id="gfxMotion">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Blur Damping <span id="gfxMotionDampingValue"></span></span>
+        <input type="range" id="gfxMotionDamping" min="0.7" max="0.99" step="0.005">
+      </label>
+    </div>
   </div>
 </div>
 
@@ -504,21 +623,49 @@ window.__RO = window.__RO || { ghostFill:350, solidFill:360, solidShell:340, gho
 =========================== */
 // Try multiple import strategies to bypass caching issues
 let THREE, OrbitControls, RoundedBoxGeometry, BufferGeometryUtils;
+let EffectComposer, RenderPass, UnrealBloomPass, BokehPass, ShaderPass, FXAAShader, OutlinePass, AfterimagePass, OutputPass;
+let RGBELoader, Reflector;
 
 try {
   // Strategy 1: Use esm.sh which rewrites internal bare imports to absolute URLs
   const baseUrl = 'https://esm.sh/three@0.160.0';
-  const [threeModule, controlsModule, geometryModule, utilsModule] = await Promise.all([
+  const [threeModule, controlsModule, geometryModule, utilsModule,
+    effectComposerModule, renderPassModule, bloomPassModule, bokehPassModule,
+    shaderPassModule, fxaaModule, outlineModule, afterimageModule, outputModule,
+    rgbeModule, reflectorModule
+  ] = await Promise.all([
     import(`${baseUrl}`),
     import(`${baseUrl}/examples/jsm/controls/OrbitControls.js`),
     import(`${baseUrl}/examples/jsm/geometries/RoundedBoxGeometry.js`),
-    import(`${baseUrl}/examples/jsm/utils/BufferGeometryUtils.js`)
+    import(`${baseUrl}/examples/jsm/utils/BufferGeometryUtils.js`),
+    import(`${baseUrl}/examples/jsm/postprocessing/EffectComposer.js`),
+    import(`${baseUrl}/examples/jsm/postprocessing/RenderPass.js`),
+    import(`${baseUrl}/examples/jsm/postprocessing/UnrealBloomPass.js`),
+    import(`${baseUrl}/examples/jsm/postprocessing/BokehPass.js`),
+    import(`${baseUrl}/examples/jsm/postprocessing/ShaderPass.js`),
+    import(`${baseUrl}/examples/jsm/shaders/FXAAShader.js`),
+    import(`${baseUrl}/examples/jsm/postprocessing/OutlinePass.js`),
+    import(`${baseUrl}/examples/jsm/postprocessing/AfterimagePass.js`),
+    import(`${baseUrl}/examples/jsm/postprocessing/OutputPass.js`),
+    import(`${baseUrl}/examples/jsm/loaders/RGBELoader.js`),
+    import(`${baseUrl}/examples/jsm/objects/Reflector.js`)
   ]);
-  
+
   THREE = threeModule.default || threeModule;
   OrbitControls = controlsModule.OrbitControls || controlsModule.default;
   RoundedBoxGeometry = geometryModule.RoundedBoxGeometry || geometryModule.default;
   BufferGeometryUtils = utilsModule.default || utilsModule;
+  EffectComposer = effectComposerModule.EffectComposer || effectComposerModule.default;
+  RenderPass = renderPassModule.RenderPass || renderPassModule.default;
+  UnrealBloomPass = bloomPassModule.UnrealBloomPass || bloomPassModule.default;
+  BokehPass = bokehPassModule.BokehPass || bokehPassModule.default;
+  ShaderPass = shaderPassModule.ShaderPass || shaderPassModule.default;
+  FXAAShader = fxaaModule.FXAAShader || fxaaModule.default;
+  OutlinePass = outlineModule.OutlinePass || outlineModule.default;
+  AfterimagePass = afterimageModule.AfterimagePass || afterimageModule.default;
+  OutputPass = outputModule.OutputPass || outputModule.default;
+  RGBELoader = rgbeModule.RGBELoader || rgbeModule.default;
+  Reflector = reflectorModule.Reflector || reflectorModule.default;
   
   console.log('Three.js imports successful:', !!THREE.Scene, !!OrbitControls, !!RoundedBoxGeometry);
   document.getElementById('statusChip').textContent = 'Modules loaded successfully';
@@ -542,6 +689,16 @@ if(typeof twemoji !== 'undefined'){
     className: 'emoji'
   });
 }
+const playClickSound = (()=>{
+  try{
+    const audio = new Audio('https://threejs.org/examples/sounds/ping_pong.mp3');
+    audio.preload = 'auto';
+    audio.volume = 0.55;
+    return ()=>{ try{ audio.currentTime = 0; audio.play(); }catch{} };
+  }catch{
+    return ()=>{};
+  }
+})();
 // Early touch detection so initial sizing uses correct mode (coarse pointer or small screen with touch)
 try{
   const coarse = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
@@ -1856,6 +2013,8 @@ const Actions = {
   },
   toggleGrid: ()=>{ Store.setState(s=>({scene:{...s.scene, showGrid:!s.scene.showGrid}})); Scene.setGridVisible(Store.getState().scene.showGrid); },
   toggleAxes: ()=>{ Store.setState(s=>({scene:{...s.scene, showAxes:!s.scene.showAxes}})); Scene.setAxesVisible(Store.getState().scene.showAxes); },
+  togglePresentMode: ()=> Scene.togglePresentMode(),
+  updateGraphicsSettings: (patch)=> Scene.updateGraphicsSettings(patch || {}),
   // Render mode removed - always use simple mode
   // Undo/Redo system
   // Data history (undo/redo)
@@ -6289,6 +6448,328 @@ const Scene = (()=>{
   let depGroup=null, depVis=false; // dependency graph overlay
   let ziplineState = { active: false, line: null, direction: new THREE.Vector3(), progress: 0 };
   let cachedPlayerPos = new THREE.Vector3(); // Cache to avoid Rapier aliasing issues
+
+  const FancyDefaults = {
+    hdri: true,
+    lights: true,
+    darkBg: false,
+    bloomEnabled: true,
+    bloomStrength: 0.12,
+    bloomRadius: 0.25,
+    exposure: 1.05,
+    dofEnabled: true,
+    dofAperture: 0.004,
+    dofMaxBlur: 0.0025,
+    transmission: true,
+    mirror: true,
+    waveGrid: true,
+    fogEnabled: false,
+    fogDensity: 0.012,
+    outlineEnabled: true,
+    outlineStrength: 2.4,
+    outlineThickness: 0.9,
+    motionEnabled: false,
+    motionDamping: 0.94,
+    fxaa: true
+  };
+
+  const FancyGraphics = {
+    enabled: false,
+    settings: { ...FancyDefaults },
+    composer: null,
+    passes: {},
+    groups: { lights: null, mirror: null, waveGrid: null, backdrop: null },
+    decor: null,
+    hdriTexture: null,
+    hdriPromise: null,
+    base: {
+      gridVisible: true,
+      background: null,
+      environment: null,
+      fog: null,
+      toneMapping: null,
+      exposure: 1,
+      shadowMap: false,
+      physicallyCorrectLights: false,
+      clearColor: null,
+      clearAlpha: 1
+    },
+    clock: null,
+    mirrorUniforms: null
+  };
+
+  const PRESENT_LIGHT_BG = new THREE.Color(0xf6f7fb);
+  const PRESENT_DARK_BG = new THREE.Color(0x0f172a);
+
+  function cloneColorOrNull(color){
+    if(!color) return null;
+    try{ return color.clone ? color.clone() : color; }catch{ return color || null; }
+  }
+
+  function makeWaveGridMaterial(){
+    const uniforms = {
+      time:{value:0}, amp:{value:0.04}, freq:{value:1.2}, speed:{value:1.1},
+      cell:{value:3.2}, width:{value:0.04}, color:{value:new THREE.Color(0x9fbfe8)}, alpha:{value:0.3}
+    };
+    const vertexShader = `uniform float time,amp,freq,speed; varying vec2 vXZ; void main(){
+      vXZ = position.xz;
+      float a = sin(vXZ.x*freq + time*speed);
+      float b = sin((vXZ.y + vXZ.x*0.5)*freq*0.78 - time*0.83*speed);
+      float c = sin((vXZ.x - vXZ.y*0.6)*freq*0.62 + time*1.21*speed);
+      float h = (a*0.5 + b*0.3 + c*0.2)*amp;
+      vec3 p = position; p.y += h; gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.0);
+    }`;
+    const fragmentShader = `precision highp float; uniform float cell,width,alpha; uniform vec3 color; varying vec2 vXZ;
+      void main(){ vec2 g=abs(fract(vXZ/cell)-0.5)*cell; float d=min(g.x,g.y); float line=1.0 - smoothstep(width,width*1.6,d);
+      gl_FragColor=vec4(color,line*alpha); }`;
+    return new THREE.ShaderMaterial({ uniforms, vertexShader, fragmentShader, transparent:true, depthWrite:false });
+  }
+
+  function ensureFancyDecor(){
+    if(FancyGraphics.decor) return;
+    FancyGraphics.decor = new THREE.Group();
+    FancyGraphics.decor.visible = false;
+    scene.add(FancyGraphics.decor);
+
+    const mirror = new Reflector(new THREE.PlaneGeometry(400,400), {
+      textureWidth: Math.max(256, window.innerWidth),
+      textureHeight: Math.max(256, window.innerHeight),
+      clipBias: 0.002
+    });
+    mirror.rotation.x = -Math.PI/2;
+    mirror.position.y = -0.52;
+    mirror.material.onBeforeCompile = (shader)=>{
+      shader.uniforms.time = { value: 0 };
+      shader.uniforms.amp = { value: 0.02 };
+      shader.uniforms.freq = { value: 8.0 };
+      shader.uniforms.speed = { value: 1.2 };
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'vec4 base = texture2D( tDiffuse, vUv );',
+        `vec2 dv = vec2(
+            sin((vUv.x + time*speed) * freq),
+            sin((vUv.y - time*0.8*speed) * freq)
+          ) * amp;
+          vec4 base = texture2D( tDiffuse, vUv + dv );`
+      );
+      FancyGraphics.mirrorUniforms = shader.uniforms;
+    };
+    FancyGraphics.decor.add(mirror);
+    FancyGraphics.groups.mirror = mirror;
+
+    const waveGrid = new THREE.Mesh(new THREE.PlaneGeometry(400,400,180,180), makeWaveGridMaterial());
+    waveGrid.rotation.x = -Math.PI/2;
+    waveGrid.position.y = -0.48;
+    FancyGraphics.decor.add(waveGrid);
+    FancyGraphics.groups.waveGrid = waveGrid;
+
+    const backdrop = new THREE.Mesh(
+      new THREE.PlaneGeometry(160, 80),
+      new THREE.MeshPhysicalMaterial({
+        color: 0xffffff,
+        roughness: 0.4,
+        metalness: 0.05,
+        transmission: 0.9,
+        thickness: 2.0,
+        transparent: true,
+        opacity: 1,
+        envMapIntensity: 1.1
+      })
+    );
+    backdrop.position.set(0, 18, -90);
+    backdrop.scale.set(1, 1.1, 1);
+    FancyGraphics.decor.add(backdrop);
+    FancyGraphics.groups.backdrop = backdrop;
+
+    const lights = new THREE.Group();
+    const key = new THREE.DirectionalLight(0xffffff, 3.2); key.position.set(-8, 14, 10);
+    const fill = new THREE.DirectionalLight(0xffffff, 1.4); fill.position.set(10, 6, 12);
+    const rim = new THREE.DirectionalLight(0xffffff, 2.6); rim.position.set(0, 8, -14);
+    const hemi = new THREE.HemisphereLight(0xdbeafe, 0x0f172a, 0.6);
+    [key, fill, rim, hemi].forEach(light=>{ light.castShadow = false; lights.add(light); });
+    FancyGraphics.decor.add(lights);
+    FancyGraphics.groups.lights = lights;
+  }
+
+  function ensureFancyComposer(){
+    if(FancyGraphics.composer) return;
+    FancyGraphics.composer = new EffectComposer(renderer);
+    FancyGraphics.passes.render = new RenderPass(scene, camera);
+    FancyGraphics.composer.addPass(FancyGraphics.passes.render);
+
+    const bokeh = new BokehPass(scene, camera, {
+      focus: camera.position.distanceTo(controls?.target || new THREE.Vector3()),
+      aperture: FancyGraphics.settings.dofAperture,
+      maxblur: FancyGraphics.settings.dofMaxBlur,
+      width: window.innerWidth,
+      height: window.innerHeight
+    });
+    FancyGraphics.composer.addPass(bokeh);
+    FancyGraphics.passes.bokeh = bokeh;
+
+    const outline = new OutlinePass(new THREE.Vector2(window.innerWidth, window.innerHeight), scene, camera);
+    outline.edgeStrength = FancyGraphics.settings.outlineStrength;
+    outline.edgeThickness = FancyGraphics.settings.outlineThickness;
+    outline.visibleEdgeColor.set(0x3b82f6);
+    outline.hiddenEdgeColor.set(0x0f172a);
+    FancyGraphics.composer.addPass(outline);
+    FancyGraphics.passes.outline = outline;
+
+    const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), FancyGraphics.settings.bloomStrength, 0.4, 0.85);
+    bloom.radius = FancyGraphics.settings.bloomRadius;
+    FancyGraphics.composer.addPass(bloom);
+    FancyGraphics.passes.bloom = bloom;
+
+    const afterimage = new AfterimagePass();
+    FancyGraphics.composer.addPass(afterimage);
+    FancyGraphics.passes.afterimage = afterimage;
+
+    const fxaa = new ShaderPass(FXAAShader);
+    FancyGraphics.composer.addPass(fxaa);
+    FancyGraphics.passes.fxaa = fxaa;
+
+    const output = new OutputPass();
+    FancyGraphics.composer.addPass(output);
+    FancyGraphics.passes.output = output;
+
+    updateFancyComposerSize();
+  }
+
+  function ensureFancyHDRI(){
+    if(FancyGraphics.hdriTexture) return Promise.resolve(FancyGraphics.hdriTexture);
+    if(FancyGraphics.hdriPromise) return FancyGraphics.hdriPromise;
+    FancyGraphics.hdriPromise = new Promise((resolve, reject)=>{
+      try{
+        const loader = new RGBELoader();
+        loader.load('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_03_1k.hdr', (tex)=>{
+          tex.mapping = THREE.EquirectangularReflectionMapping;
+          FancyGraphics.hdriTexture = tex;
+          resolve(tex);
+        }, undefined, reject);
+      }catch(e){ reject(e); }
+    });
+    return FancyGraphics.hdriPromise.catch((e)=>{ console.warn('HDRI load failed', e); FancyGraphics.hdriPromise=null; throw e; });
+  }
+
+  function updateFancyComposerSize(){
+    if(!FancyGraphics.composer) return;
+    const dpr = Math.min(window.devicePixelRatio||1, 2);
+    FancyGraphics.composer.setPixelRatio(dpr);
+    FancyGraphics.composer.setSize(window.innerWidth, window.innerHeight);
+    if(FancyGraphics.passes.fxaa){
+      FancyGraphics.passes.fxaa.material.uniforms.resolution.value.set(1/(window.innerWidth*dpr), 1/(window.innerHeight*dpr));
+    }
+    if(FancyGraphics.passes.bloom){ FancyGraphics.passes.bloom.setSize(window.innerWidth, window.innerHeight); }
+    if(FancyGraphics.passes.outline){ FancyGraphics.passes.outline.setSize(window.innerWidth, window.innerHeight); }
+    if(FancyGraphics.passes.bokeh){
+      FancyGraphics.passes.bokeh.renderTargetDepth.setSize(window.innerWidth*dpr, window.innerHeight*dpr);
+      FancyGraphics.passes.bokeh.renderTargetColor.setSize(window.innerWidth*dpr, window.innerHeight*dpr);
+    }
+  }
+
+  function applyFancyRuntimeSettings(){
+    if(!FancyGraphics.enabled) return;
+    renderer.toneMappingExposure = FancyGraphics.settings.exposure;
+    renderer.setClearColor(FancyGraphics.settings.darkBg ? PRESENT_DARK_BG : PRESENT_LIGHT_BG, 1);
+    scene.background = (FancyGraphics.settings.darkBg ? PRESENT_DARK_BG : PRESENT_LIGHT_BG).clone();
+
+    if(FancyGraphics.passes.bloom){
+      FancyGraphics.passes.bloom.enabled = FancyGraphics.settings.bloomEnabled;
+      FancyGraphics.passes.bloom.strength = FancyGraphics.settings.bloomStrength;
+      FancyGraphics.passes.bloom.radius = FancyGraphics.settings.bloomRadius;
+    }
+    if(FancyGraphics.passes.bokeh){
+      FancyGraphics.passes.bokeh.enabled = FancyGraphics.settings.dofEnabled;
+      FancyGraphics.passes.bokeh.uniforms.aperture.value = FancyGraphics.settings.dofAperture;
+      FancyGraphics.passes.bokeh.uniforms.maxblur.value = FancyGraphics.settings.dofMaxBlur;
+    }
+    if(FancyGraphics.passes.fxaa){ FancyGraphics.passes.fxaa.enabled = FancyGraphics.settings.fxaa; }
+    if(FancyGraphics.passes.outline){
+      FancyGraphics.passes.outline.enabled = FancyGraphics.settings.outlineEnabled;
+      FancyGraphics.passes.outline.edgeStrength = FancyGraphics.settings.outlineStrength;
+      FancyGraphics.passes.outline.edgeThickness = FancyGraphics.settings.outlineThickness;
+    }
+    if(FancyGraphics.passes.afterimage){
+      FancyGraphics.passes.afterimage.enabled = FancyGraphics.settings.motionEnabled;
+      FancyGraphics.passes.afterimage.uniforms['damp'].value = FancyGraphics.settings.motionDamping;
+    }
+    if(FancyGraphics.groups.lights){ FancyGraphics.groups.lights.visible = FancyGraphics.settings.lights; }
+    if(FancyGraphics.groups.mirror){ FancyGraphics.groups.mirror.visible = FancyGraphics.settings.mirror; }
+    if(FancyGraphics.groups.waveGrid){ FancyGraphics.groups.waveGrid.visible = FancyGraphics.settings.waveGrid; }
+    if(FancyGraphics.groups.backdrop){ FancyGraphics.groups.backdrop.visible = FancyGraphics.settings.transmission; }
+
+    if(FancyGraphics.settings.hdri){
+      ensureFancyHDRI().then((tex)=>{ if(FancyGraphics.enabled && FancyGraphics.settings.hdri){ scene.environment = tex; } }).catch(()=>{});
+    } else {
+      scene.environment = null;
+    }
+
+    if(FancyGraphics.settings.fogEnabled){
+      scene.fog = new THREE.FogExp2((FancyGraphics.settings.darkBg ? PRESENT_DARK_BG : PRESENT_LIGHT_BG).clone(), FancyGraphics.settings.fogDensity);
+    } else {
+      scene.fog = null;
+    }
+  }
+
+  function setPresentMode(force){
+    const next = force == null ? !FancyGraphics.enabled : !!force;
+    if(next === FancyGraphics.enabled) return FancyGraphics.enabled;
+    if(next){
+      FancyGraphics.base.gridVisible = grid?.visible ?? true;
+      FancyGraphics.base.background = cloneColorOrNull(scene?.background || null);
+      FancyGraphics.base.environment = scene?.environment || null;
+      FancyGraphics.base.fog = scene?.fog || null;
+      FancyGraphics.base.toneMapping = renderer?.toneMapping ?? null;
+      FancyGraphics.base.exposure = renderer?.toneMappingExposure ?? 1;
+      FancyGraphics.base.shadowMap = renderer?.shadowMap?.enabled ?? false;
+      FancyGraphics.base.physicallyCorrectLights = renderer?.physicallyCorrectLights ?? false;
+      FancyGraphics.base.clearColor = cloneColorOrNull(renderer?.getClearColor ? renderer.getClearColor(new THREE.Color()) : new THREE.Color(0xf6f7fb));
+      FancyGraphics.base.clearAlpha = renderer?.getClearAlpha ? renderer.getClearAlpha() : 1;
+
+      ensureFancyDecor();
+      ensureFancyComposer();
+      FancyGraphics.decor.visible = true;
+      grid.visible = false;
+      renderer.physicallyCorrectLights = true;
+      renderer.shadowMap.enabled = true;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      FancyGraphics.clock = new THREE.Clock();
+      FancyGraphics.enabled = true;
+      applyFancyRuntimeSettings();
+    } else {
+      FancyGraphics.enabled = false;
+      if(FancyGraphics.decor) FancyGraphics.decor.visible = false;
+      grid.visible = !!FancyGraphics.base.gridVisible;
+      setupRenderer();
+      renderer.setClearColor(FancyGraphics.base.clearColor || new THREE.Color(0xf6f7fb), FancyGraphics.base.clearAlpha ?? 1);
+      renderer.shadowMap.enabled = FancyGraphics.base.shadowMap ?? false;
+      renderer.physicallyCorrectLights = FancyGraphics.base.physicallyCorrectLights ?? false;
+      renderer.toneMapping = FancyGraphics.base.toneMapping ?? THREE.NoToneMapping;
+      renderer.toneMappingExposure = FancyGraphics.base.exposure ?? 1;
+      scene.environment = FancyGraphics.base.environment || null;
+      scene.background = FancyGraphics.base.background ? cloneColorOrNull(FancyGraphics.base.background) : PRESENT_LIGHT_BG.clone();
+      scene.fog = FancyGraphics.base.fog || null;
+      if(FancyGraphics.passes.outline) FancyGraphics.passes.outline.selectedObjects = [];
+    }
+    return FancyGraphics.enabled;
+  }
+
+  function togglePresentMode(force){
+    const state = setPresentMode(force);
+    return state;
+  }
+
+  function getGraphicsSettings(){
+    return { ...FancyGraphics.settings };
+  }
+
+  function updateGraphicsSettings(patch){
+    Object.keys(patch||{}).forEach(key=>{
+      if(key in FancyGraphics.settings){ FancyGraphics.settings[key] = patch[key]; }
+    });
+    if(FancyGraphics.enabled) applyFancyRuntimeSettings();
+  }
+
+  function isPresentEnabled(){ return FancyGraphics.enabled; }
     // Hover highlight state (2D/3D sync)
     let hoverKey = null; // `${arrId}:${x},${y},${z}`
     const HIGHLIGHT_FILL_HEX = 0xe0f2ff; // light blue fill
@@ -6777,7 +7258,12 @@ const Scene = (()=>{
     depGroup = new THREE.Group(); depGroup.visible=false; depGroup.userData.kind='depGroup'; scene.add(depGroup);
     initAvatars();
 
-    window.addEventListener('resize',()=>{camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth,window.innerHeight);});
+    window.addEventListener('resize',()=>{
+      camera.aspect=window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth,window.innerHeight);
+      updateFancyComposerSize();
+    });
     renderer.domElement.addEventListener('pointerdown', onPick);
     // 3D hover sync: highlight cell under cursor
     renderer.domElement.addEventListener('pointermove', (e)=>{
@@ -9320,7 +9806,32 @@ const Scene = (()=>{
     controls.update();
     // Optional dynamic chunk LOD
     try{ ChunkManager.update(); }catch{}
-    renderer.render(scene,camera); // Always use simple rendering
+
+    if(FancyGraphics.enabled){
+      const dtFancy = FancyGraphics.clock ? FancyGraphics.clock.getDelta() : 0;
+      if(FancyGraphics.groups.waveGrid?.material?.uniforms?.time){
+        FancyGraphics.groups.waveGrid.material.uniforms.time.value += dtFancy;
+      }
+      if(FancyGraphics.mirrorUniforms?.time){
+        FancyGraphics.mirrorUniforms.time.value += dtFancy;
+      }
+      if(FancyGraphics.passes.bokeh?.uniforms?.focus){
+        FancyGraphics.passes.bokeh.uniforms.focus.value = camera.position.distanceTo(controls.target);
+      }
+      if(FancyGraphics.passes.outline){
+        if(FancyGraphics.settings.outlineEnabled && focusMarker.visible){
+          FancyGraphics.passes.outline.selectedObjects = [focusMarker];
+        } else {
+          FancyGraphics.passes.outline.selectedObjects = [];
+        }
+      }
+    }
+
+    if(FancyGraphics.enabled && FancyGraphics.composer){
+      FancyGraphics.composer.render();
+    } else {
+      renderer.render(scene,camera); // Simple rendering in build mode
+    }
     try{ if(!window.__RENDER_READY){ window.__RENDER_READY = true; } }catch{}
     } finally {
       // Always schedule the next frame, even on early returns inside try blocks
@@ -9670,7 +10181,10 @@ const Scene = (()=>{
   }
   function getArrayOffset(arr){ const o=arr?.offset||{x:0,y:0,z:0}; return {x:o.x,y:o.y,z:o.z}; }
 
-  function setGridVisible(v){ grid.visible=v; }
+  function setGridVisible(v){
+    FancyGraphics.base.gridVisible = v;
+    grid.visible = FancyGraphics.enabled ? false : v;
+  }
   function setAxesVisible(v){ axesHelper.visible=v; Object.values(Store.getState().arrays).forEach(a=>{ a.labels?.forEach(s=>s.visible=v); }); }
 
   // keyboard for physics locomotion
@@ -10574,7 +11088,7 @@ const Scene = (()=>{
     // keep it facing camera without touching renderOrder
     label.lookAt(camera.position);
   }
-  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, spawnDeleteExplosion, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord)};
+  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, spawnDeleteExplosion, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings};
 })();
 
 try{
@@ -10597,6 +11111,7 @@ const UI = (()=>{
     focusChip:document.getElementById('focusChip'), inspect:document.getElementById('inspect'),
     centerHome:document.getElementById('centerHome'), viewMainframe:document.getElementById('viewMainframe'),
     toggleGrid:document.getElementById('toggleGrid'), toggleAxes:document.getElementById('toggleAxes'),
+    presentToggle:document.getElementById('presentToggleBtn'), graphicsSettingsBtn:document.getElementById('graphicsSettingsBtn'),
     physicsBtn:document.getElementById('physicsBtn'), reset:document.getElementById('reset'),
     status:document.getElementById('statusChip'),
     sheetTitle:document.getElementById('sheetTitle'),
@@ -10610,6 +11125,121 @@ const UI = (()=>{
   const colWidths = {};
   const getColWidth=(i)=> (colWidths[i]||100);
   const setColWidth=(i,w)=>{ colWidths[i]=Math.max(60, Math.min(480, Math.round(w))); };
+
+  const graphicsPanel = document.getElementById('graphicsSettingsPanel');
+  const graphicsClose = document.getElementById('graphicsSettingsClose');
+  const graphicsPanelHint = document.getElementById('graphicsSettingsHint');
+  const graphicsControls = {
+    hdri: document.getElementById('gfxHdri'),
+    lights: document.getElementById('gfxLights'),
+    darkBg: document.getElementById('gfxDarkBg'),
+    bloom: document.getElementById('gfxBloom'),
+    bloomStrength: document.getElementById('gfxBloomStrength'),
+    bloomRadius: document.getElementById('gfxBloomRadius'),
+    exposure: document.getElementById('gfxExposure'),
+    dof: document.getElementById('gfxDof'),
+    dofAperture: document.getElementById('gfxDofAperture'),
+    dofMaxBlur: document.getElementById('gfxDofMaxBlur'),
+    transmission: document.getElementById('gfxTransmission'),
+    mirror: document.getElementById('gfxMirror'),
+    waveGrid: document.getElementById('gfxWaveGrid'),
+    fxaa: document.getElementById('gfxFxaa'),
+    fog: document.getElementById('gfxFog'),
+    fogDensity: document.getElementById('gfxFogDensity'),
+    outline: document.getElementById('gfxOutline'),
+    outlineStrength: document.getElementById('gfxOutlineStrength'),
+    outlineThickness: document.getElementById('gfxOutlineThickness'),
+    motion: document.getElementById('gfxMotion'),
+    motionDamping: document.getElementById('gfxMotionDamping')
+  };
+  const graphicsSliderDisplays = {
+    bloomStrength: document.getElementById('gfxBloomStrengthValue'),
+    bloomRadius: document.getElementById('gfxBloomRadiusValue'),
+    exposure: document.getElementById('gfxExposureValue'),
+    dofAperture: document.getElementById('gfxDofApertureValue'),
+    dofMaxBlur: document.getElementById('gfxDofMaxBlurValue'),
+    fogDensity: document.getElementById('gfxFogDensityValue'),
+    outlineStrength: document.getElementById('gfxOutlineStrengthValue'),
+    outlineThickness: document.getElementById('gfxOutlineThicknessValue'),
+    motionDamping: document.getElementById('gfxMotionDampingValue')
+  };
+  let graphicsPanelVisible = false;
+
+  const sliderFormatters = {
+    bloomStrength: (v)=>v.toFixed(2),
+    bloomRadius: (v)=>v.toFixed(2),
+    exposure: (v)=>v.toFixed(2),
+    dofAperture: (v)=>v.toFixed(4),
+    dofMaxBlur: (v)=>v.toFixed(4),
+    fogDensity: (v)=>v.toFixed(3),
+    outlineStrength: (v)=>v.toFixed(1),
+    outlineThickness: (v)=>v.toFixed(2),
+    motionDamping: (v)=>v.toFixed(3)
+  };
+
+  function updateSliderDisplay(key, value){
+    const span = graphicsSliderDisplays[key];
+    if(!span) return;
+    const formatter = sliderFormatters[key] || ((v)=>v.toFixed(2));
+    span.textContent = formatter(Number(value));
+  }
+
+  function syncGraphicsSettings(){
+    if(!Scene.getGraphicsSettings) return;
+    const settings = Scene.getGraphicsSettings();
+    if(!settings) return;
+    if(graphicsControls.hdri) graphicsControls.hdri.checked = !!settings.hdri;
+    if(graphicsControls.lights) graphicsControls.lights.checked = !!settings.lights;
+    if(graphicsControls.darkBg) graphicsControls.darkBg.checked = !!settings.darkBg;
+    if(graphicsControls.bloom) graphicsControls.bloom.checked = !!settings.bloomEnabled;
+    if(graphicsControls.bloomStrength){ graphicsControls.bloomStrength.value = settings.bloomStrength; updateSliderDisplay('bloomStrength', settings.bloomStrength); }
+    if(graphicsControls.bloomRadius){ graphicsControls.bloomRadius.value = settings.bloomRadius; updateSliderDisplay('bloomRadius', settings.bloomRadius); }
+    if(graphicsControls.exposure){ graphicsControls.exposure.value = settings.exposure; updateSliderDisplay('exposure', settings.exposure); }
+    if(graphicsControls.dof) graphicsControls.dof.checked = !!settings.dofEnabled;
+    if(graphicsControls.dofAperture){ graphicsControls.dofAperture.value = settings.dofAperture; updateSliderDisplay('dofAperture', settings.dofAperture); }
+    if(graphicsControls.dofMaxBlur){ graphicsControls.dofMaxBlur.value = settings.dofMaxBlur; updateSliderDisplay('dofMaxBlur', settings.dofMaxBlur); }
+    if(graphicsControls.transmission) graphicsControls.transmission.checked = !!settings.transmission;
+    if(graphicsControls.mirror) graphicsControls.mirror.checked = !!settings.mirror;
+    if(graphicsControls.waveGrid) graphicsControls.waveGrid.checked = !!settings.waveGrid;
+    if(graphicsControls.fxaa) graphicsControls.fxaa.checked = !!settings.fxaa;
+    if(graphicsControls.fog) graphicsControls.fog.checked = !!settings.fogEnabled;
+    if(graphicsControls.fogDensity){ graphicsControls.fogDensity.value = settings.fogDensity; updateSliderDisplay('fogDensity', settings.fogDensity); }
+    if(graphicsControls.outline) graphicsControls.outline.checked = !!settings.outlineEnabled;
+    if(graphicsControls.outlineStrength){ graphicsControls.outlineStrength.value = settings.outlineStrength; updateSliderDisplay('outlineStrength', settings.outlineStrength); }
+    if(graphicsControls.outlineThickness){ graphicsControls.outlineThickness.value = settings.outlineThickness; updateSliderDisplay('outlineThickness', settings.outlineThickness); }
+    if(graphicsControls.motion) graphicsControls.motion.checked = !!settings.motionEnabled;
+    if(graphicsControls.motionDamping){ graphicsControls.motionDamping.value = settings.motionDamping; updateSliderDisplay('motionDamping', settings.motionDamping); }
+  }
+
+  function setGraphicsControlsEnabled(enabled){
+    Object.values(graphicsControls).forEach(ctrl=>{ if(ctrl) ctrl.disabled = !enabled; });
+    if(graphicsPanelHint) graphicsPanelHint.style.display = enabled ? 'none' : 'block';
+  }
+
+  function updatePresentButton(state){
+    if(!els.presentToggle) return;
+    els.presentToggle.textContent = state ? '🎨 Present: ON' : '🎨 Present: OFF';
+    if(state){ els.presentToggle.classList.add('good'); }
+    else { els.presentToggle.classList.remove('good'); }
+  }
+
+  function showGraphicsPanel(){
+    if(!graphicsPanel) return;
+    graphicsPanelVisible = true;
+    graphicsPanel.style.display = 'block';
+    syncGraphicsSettings();
+    setGraphicsControlsEnabled(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
+  }
+
+  function hideGraphicsPanel(){
+    if(!graphicsPanel) return;
+    graphicsPanelVisible = false;
+    graphicsPanel.style.display = 'none';
+  }
+
+  function toggleGraphicsPanel(){
+    if(graphicsPanelVisible) hideGraphicsPanel(); else showGraphicsPanel();
+  }
 
   function init(){
     console.log('UI.init: starting, checking elements...');
@@ -10701,9 +11331,9 @@ const UI = (()=>{
     window.addEventListener('mouseup',()=>{ if(!resizing) return; resizing=false; sheetEl.style.transition=resizePrevTrans||''; });
 
     if(els.centerHome) els.centerHome.onclick=()=>{ const home=Store.getState().arrays[1]; if(home){ Scene.centerOnArray(home); Actions.setSelection(1,{x:0,y:2,z:0}); }};
-    if(els.viewMainframe) els.viewMainframe.onclick=()=>{ 
-      const mf=Store.getState().arrays[-1]; 
-      if(mf){ 
+    if(els.viewMainframe) els.viewMainframe.onclick=()=>{
+      const mf=Store.getState().arrays[-1];
+      if(mf){
         // Diegetic toggle: write formula to a control cell and execute
         const anchor={arrId:-1,x:0,y:mf.size.y-1,z:0};
         const currentlyHidden=!!mf.hidden;
@@ -10717,8 +11347,26 @@ const UI = (()=>{
         UI.renderSheet(); // refresh 2D view
       }
     };
-    if(els.toggleGrid) els.toggleGrid.onclick=Actions.toggleGrid; 
+    if(els.toggleGrid) els.toggleGrid.onclick=Actions.toggleGrid;
     if(els.toggleAxes) els.toggleAxes.onclick=Actions.toggleAxes;
+    if(els.presentToggle){
+      updatePresentButton(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
+      els.presentToggle.onclick=()=>{
+        playClickSound();
+        const state = Actions.togglePresentMode();
+        updatePresentButton(state);
+        setGraphicsControlsEnabled(state);
+        syncGraphicsSettings();
+      };
+      setGraphicsControlsEnabled(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
+    }
+    if(els.graphicsSettingsBtn){
+      els.graphicsSettingsBtn.onclick=()=>{ playClickSound(); toggleGraphicsPanel(); };
+    }
+    if(graphicsClose && !graphicsClose._wired){
+      graphicsClose._wired = true;
+      graphicsClose.addEventListener('click',(e)=>{ e.preventDefault(); playClickSound(); hideGraphicsPanel(); });
+    }
     if(els.physicsBtn) els.physicsBtn.onclick=Actions.togglePhysics;
     // Render mode button removed - always simple mode
     if(els.reset) els.reset.onclick=()=>location.reload();
@@ -10730,6 +11378,44 @@ const UI = (()=>{
       chunksBtn.disabled = true;
       chunksBtn.title = 'Chunk mode is always ON';
     }
+
+    const checkboxBindings = {
+      hdri:'hdri', lights:'lights', darkBg:'darkBg', bloom:'bloomEnabled',
+      dof:'dofEnabled', transmission:'transmission', mirror:'mirror', waveGrid:'waveGrid',
+      fxaa:'fxaa', fog:'fogEnabled', outline:'outlineEnabled', motion:'motionEnabled'
+    };
+    Object.entries(checkboxBindings).forEach(([key, setting])=>{
+      const ctrl = graphicsControls[key];
+      if(!ctrl) return;
+      ctrl.addEventListener('change',(e)=>{
+        Actions.updateGraphicsSettings({ [setting]: !!e.target.checked });
+        syncGraphicsSettings();
+        playClickSound();
+      });
+    });
+
+    const rangeBindings = {
+      bloomStrength:'bloomStrength',
+      bloomRadius:'bloomRadius',
+      exposure:'exposure',
+      dofAperture:'dofAperture',
+      dofMaxBlur:'dofMaxBlur',
+      fogDensity:'fogDensity',
+      outlineStrength:'outlineStrength',
+      outlineThickness:'outlineThickness',
+      motionDamping:'motionDamping'
+    };
+    Object.entries(rangeBindings).forEach(([key, setting])=>{
+      const ctrl = graphicsControls[key];
+      if(!ctrl) return;
+      ctrl.addEventListener('input',(e)=>{
+        const value = parseFloat(e.target.value);
+        Actions.updateGraphicsSettings({ [setting]: value });
+        updateSliderDisplay(key, value);
+      });
+    });
+
+    syncGraphicsSettings();
 
     // Save/Load buttons
     try{
