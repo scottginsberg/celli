@@ -2188,12 +2188,15 @@ tag('3D_TRANSLATE',["SCENE"],(anchor,arr,ast)=>{
             return;
           }
           const effGroup=new THREE.Group(); scene.add(effGroup);
-          const valueText = String(cell.formula ? cell.formula : cell.value);
-          const sp = makeCharSprite(valueText);
+          const hasFormula = !!(cell && typeof cell.formula === 'string' && cell.formula.trim().length);
+          const displayText = hasFormula ? String(cell.formula) : String(cell?.value ?? '');
+          const baseToken = hasFormula ? { tokenKind:'formula', color: DATAFALL_COLORS.syntax } : classifyRawValue(displayText);
+          const baseColor = baseToken.color || DATAFALL_COLORS.syntax;
+          const sp = makeCharSprite(displayText, baseColor);
           sp.position.copy(position);
           effGroup.add(sp);
           const vel = new THREE.Vector3(0,0.022,0);
-          deleteEffects.push({ phase:'datafall', group:effGroup, particles:[{ kind:'value', cell, text:valueText, sprite:sp, vel, age:0, life: 420, rot:0 }], onDone:()=>{ try{ const arrId = parentArrId|0; const rec=pendingDatafallDeletes.get(arrId); if(rec){ rec.count--; pendingDatafallDeletes.set(arrId, rec); maybeFinalizeDeletion(arrId); } }catch{} } });
+          deleteEffects.push({ phase:'datafall', group:effGroup, particles:[{ kind:'value', cell, text:displayText, sprite:sp, vel, age:0, life: 420, rot:0, color: baseColor, tokenKind: baseToken.tokenKind }], onDone:()=>{ try{ const arrId = parentArrId|0; const rec=pendingDatafallDeletes.get(arrId); if(rec){ rec.count--; pendingDatafallDeletes.set(arrId, rec); maybeFinalizeDeletion(arrId); } }catch{} } });
         }
       };
       requestAnimationFrame(step);
@@ -10926,6 +10929,58 @@ const Scene = (()=>{
   // Deletion explosion effect
   const deleteEffects = [];
   const pendingDatafallDeletes = new Map(); // arrId -> {count:number, finished:boolean}
+  const DATAFALL_COLORS = {
+    syntax: '#111827',
+    function: '#111827',
+    punctuation: '#111827',
+    string: '#16a34a',
+    range: '#f59e0b',
+    address: '#f59e0b',
+    number: '#1d4ed8',
+    binary: '#2563eb'
+  };
+  function cssColor(color){
+    if(typeof color === 'number'){ return `#${color.toString(16).padStart(6,'0')}`; }
+    return color || '#ffffff';
+  }
+  function tokenizeFormulaForDatafall(raw){
+    const out = [];
+    if(!raw){ return out; }
+    const formula = String(raw);
+    const regex = /(=[A-Z_0-9]+)|(@\[[^\]]+\])|("[^"\\]*(?:\\.[^"\\]*)*")|(\()|(\))|(,)|([A-Z]+\d+)|(-?\d+(?:\.\d+)?)/gi;
+    let lastIndex = 0;
+    let match;
+    while((match = regex.exec(formula))){
+      if(match.index > lastIndex){
+        const text = formula.slice(lastIndex, match.index);
+        if(text){ out.push({ text, tokenKind: 'syntax', color: DATAFALL_COLORS.syntax }); }
+      }
+      const text = match[0];
+      let tokenKind = 'syntax';
+      if(match[1]) tokenKind = 'function';
+      else if(match[2]) tokenKind = 'range';
+      else if(match[3]) tokenKind = 'string';
+      else if(match[4] || match[5] || match[6]) tokenKind = 'punctuation';
+      else if(match[7]) tokenKind = 'address';
+      else if(match[8]) tokenKind = 'number';
+      out.push({ text, tokenKind, color: DATAFALL_COLORS[tokenKind] || DATAFALL_COLORS.syntax });
+      lastIndex = regex.lastIndex;
+    }
+    if(lastIndex < formula.length){
+      const tail = formula.slice(lastIndex);
+      if(tail){ out.push({ text: tail, tokenKind: 'syntax', color: DATAFALL_COLORS.syntax }); }
+    }
+    return out;
+  }
+  function classifyRawValue(raw){
+    const text = String(raw ?? '');
+    const trimmed = text.trim();
+    if(trimmed === '') return { text, tokenKind: 'syntax', color: DATAFALL_COLORS.syntax };
+    const numeric = !Number.isNaN(Number(trimmed));
+    if(numeric){ return { text: trimmed, tokenKind: 'number', color: DATAFALL_COLORS.number }; }
+    if(/^".*"$/.test(trimmed)) return { text: trimmed, tokenKind: 'string', color: DATAFALL_COLORS.string };
+    return { text, tokenKind: 'syntax', color: DATAFALL_COLORS.syntax };
+  }
   function maybeFinalizeDeletion(arrId){
     try{
       const rec = pendingDatafallDeletes.get(arrId);
@@ -10945,11 +11000,12 @@ const Scene = (()=>{
     const h = fs + pad*2;
     canvas.width = w; canvas.height = h;
     ctx.clearRect(0,0,w,h);
-    ctx.fillStyle = color;
+    ctx.fillStyle = cssColor(color);
     ctx.font = `600 ${fs}px 'Roboto Mono', monospace`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(ch, w/2, h/2);
     const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
     const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, opacity: 1 });
     const spr = new THREE.Sprite(mat);
     spr.scale.set(0.25, 0.18, 1);
@@ -11009,34 +11065,75 @@ const Scene = (()=>{
             try{ unmarkBillboard(pr.sprite); }catch{}
             pr.sprite.parent?.remove(pr.sprite); pr.sprite.material?.map?.dispose?.(); pr.sprite.material?.dispose?.();
 
-            let newTexts = [], nextKind = null;
+            let newTokens = [], nextKind = null;
             try{
               if(pr.kind === 'value'){
-                const raw = (pr.cell?.formula && String(pr.cell.formula)[0]==='=') ? String(pr.cell.formula) : String(pr.cell?.value ?? '');
-                if(raw.trim()===''){ continue; }
-                const regex=/(=[A-Z_0-9]+)|([(),])|(\"[^\"]*\")|([0-9.]+)|([A-Z][0-9]+)/gi; let m,last=0; const out=[];
-                while((m=regex.exec(raw))){ if(m.index>last) out.push(raw.slice(last,m.index)); out.push(m[0]); last=regex.lastIndex; }
-                if(last<raw.length) out.push(raw.slice(last));
-                newTexts = out.filter(s=> s && s.length).map(s=> ({text:s}));
-                nextKind = 'formula_chunk';
+                const rawFormula = (pr.cell?.formula && String(pr.cell.formula).trim().startsWith('=')) ? String(pr.cell.formula) : '';
+                const rawValue = !rawFormula ? String(pr.cell?.value ?? '') : '';
+                if(rawFormula){
+                  newTokens = tokenizeFormulaForDatafall(rawFormula);
+                } else {
+                  const classified = classifyRawValue(rawValue);
+                  if(classified.text){ newTokens = [classified]; }
+                }
+                nextKind = newTokens.length ? 'formula_chunk' : null;
               } else if(pr.kind === 'formula_chunk'){
-                const text = String(pr.text ?? '').trim();
-                const isNumeric = text !== '' && !isNaN(text);
-                if(isNumeric){ const bin=(parseInt(text,10)||0).toString(2); newTexts = Array.from(bin); nextKind='binary_bit'; }
-                else { const plain=text.replace(/^\"|\"$/g,''); newTexts = Array.from(plain).map(ch=> String(ch.codePointAt(0))); nextKind='char_code'; }
+                const text = String(pr.text ?? '');
+                const tokenKind = pr.tokenKind || 'syntax';
+                const trimmed = text.trim();
+                if(trimmed===''){ nextKind = null; }
+                else if(tokenKind === 'number' || (!Number.isNaN(Number(trimmed)) && trimmed!=='')){
+                  const n = parseInt(trimmed, 10) || 0;
+                  const bin = Math.abs(n).toString(2);
+                  const bits = bin.length ? Array.from(bin) : ['0'];
+                  newTokens = bits.map(bit=> ({ text: bit, tokenKind: 'binary_bit', color: DATAFALL_COLORS.number }));
+                  nextKind = 'binary_bit';
+                } else {
+                  const plain = tokenKind === 'string' ? text.replace(/^\"|\"$/g,'') : text;
+                  const chars = Array.from(plain);
+                  newTokens = chars.map(ch=>{
+                    const code = ch.codePointAt(0);
+                    return { text: code != null ? String(code) : '', tokenKind: 'char_code', color: pr.color || DATAFALL_COLORS.syntax, code, sourceChar: ch };
+                  }).filter(tok=> tok.text !== '');
+                  nextKind = 'char_code';
+                }
               } else if(pr.kind === 'char_code'){
-                const n=parseInt(pr.code||pr.text||'0',10)||0; const bin=n.toString(2); newTexts = Array.from(bin); nextKind='binary_bit';
+                const baseColor = pr.color || DATAFALL_COLORS.binary;
+                const n = (typeof pr.code === 'number' && Number.isFinite(pr.code)) ? pr.code : parseInt(pr.text ?? '0', 10);
+                if(!Number.isFinite(n)) { continue; }
+                const bin = Math.abs(n).toString(2) || '0';
+                newTokens = Array.from(bin).map(bit=> ({ text: bit, tokenKind: 'binary_bit', color: baseColor }));
+                nextKind = 'binary_bit';
               } else { continue; }
             }catch{ continue; }
 
-            newTexts.forEach(txt=>{
-              const label = (typeof txt==='object') ? String(txt.text||'') : String(txt);
+            if(!nextKind || !newTokens.length){ continue; }
+            newTokens.forEach(token=>{
+              const label = String(token.text ?? '');
               if(label==='') return;
-              const sp = makeCharSprite(label);
+              const color = token.color || pr.color || DATAFALL_COLORS.syntax;
+              const sp = makeCharSprite(label, color);
               sp.position.copy(pos).add(new THREE.Vector3((Math.random()-0.5)*0.2, (Math.random())*0.2, (Math.random()-0.5)*0.2));
               const vel = new THREE.Vector3((Math.random()-0.5)*0.015, (Math.random())*0.02, (Math.random()-0.5)*0.015);
               eff.group.add(sp);
-              next.push({ kind: nextKind, text: label, code: parseInt(label,10), sprite: sp, vel, age:0, life: 900 + Math.random()*600, rot:(Math.random()-0.5)*0.05 });
+              const baseLife = nextKind === 'binary_bit'
+                ? 1000 + Math.random()*500
+                : nextKind === 'char_code'
+                  ? 1100 + Math.random()*500
+                  : 900 + Math.random()*600;
+              next.push({
+                kind: nextKind,
+                text: label,
+                code: token.code !== undefined ? token.code : parseInt(label,10),
+                sprite: sp,
+                vel,
+                age: 0,
+                life: baseLife,
+                rot:(Math.random()-0.5)*0.05,
+                color,
+                tokenKind: token.tokenKind || pr.tokenKind,
+                sourceChar: token.sourceChar || pr.sourceChar
+              });
             });
           } else {
             next.push(pr);
