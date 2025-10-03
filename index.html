@@ -731,6 +731,15 @@ function playCellClick(){
   playClickSound();
 }
 
+function formulaHasChime(formula){
+  if(!formula) return false;
+  try{
+    return /\bCHIME\s*\(/i.test(String(formula));
+  }catch{
+    return false;
+  }
+}
+
 const ChimeSystem = (()=>{
   const NOTE_BASE = { C:-9, D:-7, E:-5, F:-4, G:-2, A:0, B:2 };
   let ctx = null;
@@ -4331,41 +4340,106 @@ tag('DISPLAY_AS',['ACTION'],(anchor,arr,ast)=>{
 });
 // ONCLICK([targetRefOrRange], actionFormulaOrBlock) — bind click to execute nested action(s)
 tag('ONCLICK',['ACTION'],(anchor,arr,ast)=>{
-  const target = ast.args[0] && ast.args[0].kind ? ast.args[0] : anchor;
-  const actionRaw = (ast.args[0] && ast.args[0].kind) ? ast.args[1] : ast.args[0];
-  const actionFormula = String(valOf(actionRaw || '')) || '';
+  const parseRawArgs=(raw)=>{
+    if(!raw || typeof raw!=='string') return [];
+    const open=raw.indexOf('(');
+    const close=raw.lastIndexOf(')');
+    if(open<0||close<=open) return [];
+    const inner=raw.slice(open+1, close);
+    const args=[];
+    let current='';
+    let depth=0;
+    let quote=null;
+    let escape=false;
+    for(let i=0;i<inner.length;i++){
+      const ch=inner[i];
+      if(escape){ current+=ch; escape=false; continue; }
+      if(quote){
+        current+=ch;
+        if(ch==='\\'){ escape=true; continue; }
+        if(ch===quote){ quote=null; }
+        continue;
+      }
+      if(ch==='"' || ch==="'"){ quote=ch; current+=ch; continue; }
+      if(ch==='('){ depth++; current+=ch; continue; }
+      if(ch===')'){
+        if(depth>0){ depth--; current+=ch; continue; }
+      }
+      if(ch===',' && depth===0){ args.push(current.trim()); current=''; continue; }
+      current+=ch;
+    }
+    if(current.trim().length || inner.trim().length===0){ args.push(current.trim()); }
+    return args;
+  };
+  const normalizeActionString=(raw)=>{
+    if(!raw) return '';
+    let trimmed=String(raw).trim();
+    if(!trimmed) return '';
+    if((trimmed.startsWith('"') && trimmed.endsWith('"'))){
+      try{ trimmed = JSON.parse(trimmed); }
+      catch{}
+    }
+    trimmed = String(trimmed||'').trim();
+    if(!trimmed) return '';
+    if(trimmed.startsWith('=') || /^B64:/i.test(trimmed) || /^\d+:/.test(trimmed)) return trimmed;
+    return `=${trimmed}`;
+  };
+  const resolveTargetArg=(arg)=>{
+    if(!arg) return null;
+    if(arg.kind==='range' || arg.kind==='ref') return arg;
+    try{
+      const raw = Formula.valOf(arg);
+      if(raw==null) return null;
+      const text = String(raw).trim();
+      if(!text) return null;
+      if(text.toLowerCase()==='self') return anchor;
+      const parsed = parseAlt(text, anchor) || parseA1g(text, arr.id);
+      if(parsed) return parsed;
+    }catch{}
+    return null;
+  };
+
+  const rawArgs = parseRawArgs(ast?.raw||'');
+  const actionRawStr = rawArgs.length>=2 ? rawArgs[1] : (rawArgs[0]||'');
+  const actionFormula = normalizeActionString(actionRawStr);
+  if(!actionFormula){ return; }
+
+  const targetArg = ast.args.length>=2 ? ast.args[0] : null;
+  const resolvedTarget = resolveTargetArg(targetArg) || anchor;
 
   const register = (t)=>{
-    const targetArr = Store.getState().arrays[t.arrId || arr.id];
+    const arrId = t.arrId ?? arr.id;
+    const targetArr = Store.getState().arrays[arrId];
     if(!targetArr) return;
-    const ch=targetArr.chunks[keyChunk(...Object.values(chunkOf(t.x,t.y,t.z)))];
-    const idx=ch?.cells.findIndex(c=>c.x===t.x&&c.y===t.y&&c.z===t.z) ?? -1;
+    const coord = {x:t.x, y:t.y, z:t.z};
+    const chKey = keyChunk(...Object.values(chunkOf(coord.x,coord.y,coord.z)));
+    const ch=targetArr.chunks[chKey];
+    const idx=ch?.cells.findIndex(c=>c.x===coord.x&&c.y===coord.y&&c.z===coord.z) ?? -1;
     if(idx<0||!ch) return;
     const prev=ch.cells[idx];
     ch.cells[idx] = {...prev, meta:{...(prev.meta||{}), onClick:actionFormula, onClickBusy:false}};
-    // Update 2D immediately and refresh 3D so LOD1 promotion (clickable) applies now
-    UI.renderSheetCell(targetArr, t.x, t.y, t.z);
+    UI.renderSheetCell(targetArr, coord.x, coord.y, coord.z);
     try{ ch.markDirty?.(); Scene.renderArray(targetArr); }catch{}
   };
 
-  if(target && target.kind==='range'){
-    // Only store on top-left and mark clickable for all
-    const xs=target.cells.map(c=>c.x), ys=target.cells.map(c=>c.y);
-    const minX=Math.min(...xs), maxY=Math.max(...ys);
-    target.cells.forEach(c=>{
-      const td=document.querySelector(`td.cell[data-x="${c.x}"][data-y="${c.y}"][data-z="${c.z}"]`);
-      if(td) td.classList.add('clickable');
-    });
-    register({x:minX,y:maxY,z:target.cells[0].z});
-  } else if(target && target.kind==='ref'){
-    const td=document.querySelector(`td.cell[data-x="${target.x}"][data-y="${target.y}"][data-z="${target.z}"]`);
+  const markClickable=(coord)=>{
+    const td=document.querySelector(`td.cell[data-x="${coord.x}"][data-y="${coord.y}"][data-z="${coord.z}"]`);
     if(td) td.classList.add('clickable');
-    register(target);
+  };
+
+  if(resolvedTarget && resolvedTarget.kind==='range'){
+    const xs=resolvedTarget.cells.map(c=>c.x), ys=resolvedTarget.cells.map(c=>c.y);
+    const minX=Math.min(...xs), maxY=Math.max(...ys);
+    resolvedTarget.cells.forEach(c=> markClickable(c));
+    register({x:minX,y:maxY,z:resolvedTarget.cells[0].z, arrId: resolvedTarget.cells[0].arrId});
+  } else if(resolvedTarget && resolvedTarget.kind==='ref'){
+    markClickable(resolvedTarget);
+    register(resolvedTarget);
   } else {
-    register(anchor);
+    if(resolvedTarget && resolvedTarget!==anchor){ markClickable(resolvedTarget); }
+    register({...resolvedTarget, arrId: resolvedTarget.arrId ?? arr.id});
   }
-  // Silent: show minimal hint
-  // Silent: do not stamp anchor
+  // Silent registration
 });
 // TOAST(message[, duration]) — show toast notification (diegetic, 2D-only)
 tag('TOAST',['ACTION'],(anchor,arr,ast)=>{
@@ -7518,6 +7592,7 @@ const Scene = (()=>{
   const cellLights = window.cellLights;
   window.cellLightTargets = window.cellLightTargets || new Map();
   const cellLightTargets = window.cellLightTargets;
+  const LIGHT_GLOW_GEOMETRY = new THREE.SphereGeometry(0.42, 20, 20);
   let lastCamSig = '';
   const SPRITE_FACE_OFFSET = 0.58; // push label fully outside cell face (avoid z-fight/inside look)
   function axisCharToNum(ch){ return ch==='X'?0 : ch==='Y'?1 : 2; }
@@ -7599,6 +7674,13 @@ const Scene = (()=>{
         record.target = null;
       }
     }
+    if(!record.glow){
+      const glowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent:true, opacity:0, depthWrite:false, depthTest:false, blending:THREE.AdditiveBlending });
+      const glow = new THREE.Mesh(LIGHT_GLOW_GEOMETRY, glowMat);
+      glow.renderOrder = 1998;
+      record.group.add(glow);
+      record.glow = glow;
+    }
   }
   function attachLightToArray(record){
     if(!record) return;
@@ -7653,6 +7735,14 @@ const Scene = (()=>{
     record.light.intensity = intensity;
     record.light.distance = distance;
     record.light.decay = 2;
+    if(record.glow && record.glow.material){
+      try{ record.glow.material.color.set(color); }catch{}
+      const scale = Math.max(0.22, 0.34 + Math.sqrt(Math.max(lumens,0)) * 0.045);
+      record.glow.scale.setScalar(scale);
+      record.glow.material.opacity = lumens <= 0 ? 0 : Math.min(1, 0.28 + Math.sqrt(lumens) * 0.018);
+      record.glow.visible = lumens > 0;
+      record.glow.material.needsUpdate = true;
+    }
     if(record.light.isSpotLight){
       record.light.angle = record.config?.angle ?? (Math.PI/5);
       record.light.penumbra = record.config?.penumbra ?? 0.4;
@@ -7665,6 +7755,7 @@ const Scene = (()=>{
     const record = cellLights.get(key);
     if(!record) return;
     if(record.config?.targetRef) untrackLightTarget(key, record.config.targetRef);
+    try{ record.glow?.material?.dispose?.(); }catch{}
     try{ record.group?.parent?.remove(record.group); }catch{}
     cellLights.delete(key);
     needsRender = true;
@@ -10464,17 +10555,31 @@ const Scene = (()=>{
     
     // If the picked cell has an ONCLICK action, execute it immediately (3D)
     if(!cell) return;
-    playCellClick();
+    let decodedAction = '';
+    let hasAction = false;
     try{
       const c2d = UI.getCell(arr.id, {x:cell.x,y:cell.y,z:cell.z});
-      const actionRaw = String(c2d?.meta?.onClick||'').trim();
+      let actionRaw = String(c2d?.meta?.onClick||'').trim();
       if(actionRaw){
-        let formula = actionRaw;
-        if(formula.startsWith('B64:')){ try{ formula = atob(formula.slice(4)); }catch{} }
-        else { const colon=formula.indexOf(':'); if(colon>0 && /^\d+$/.test(formula.slice(0,colon))){ const enc=formula.slice(colon+1); try{ formula = atob(enc); }catch{} } }
-        if(!formula.startsWith('=')) formula = '=' + formula;
+        hasAction = true;
+        if(actionRaw.startsWith('B64:')){
+          try{ actionRaw = atob(actionRaw.slice(4)); }catch{}
+        } else {
+          const colon=actionRaw.indexOf(':');
+          if(colon>0 && /^\d+$/.test(actionRaw.slice(0,colon))){
+            const enc=actionRaw.slice(colon+1);
+            try{ actionRaw = atob(enc); }catch{}
+          }
+        }
+        decodedAction = actionRaw.startsWith('=') ? actionRaw : `=${actionRaw}`;
+      }
+    }catch{}
+
+    if(!(hasAction && formulaHasChime(decodedAction))){ playCellClick(); }
+    try{
+      if(hasAction && decodedAction){
         const tx = Write.start('onclick.3d','Click action (3D)');
-        Formula.runOnceAt({arrId:arr.id,x:cell.x,y:cell.y,z:cell.z}, formula, tx);
+        Formula.runOnceAt({arrId:arr.id,x:cell.x,y:cell.y,z:cell.z}, decodedAction, tx);
         Write.commit(tx);
         // Visual feedback pulse
         try{ pulseCell(arr, cell, z); }catch{}
@@ -11155,6 +11260,7 @@ const Scene = (()=>{
     if(id === null) return '__null__';
     return String(id);
   };
+  const nowMs = ()=> (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   let deleteInteractionLock = false;
   let deletionControlState = null;
   const DATAFALL_COLORS = {
@@ -11338,8 +11444,11 @@ const Scene = (()=>{
     const arrKey = normalizeArrayId(parentArrId);
     try{
       try{
-        const rec = pendingDatafallDeletes.get(arrKey) || {count:0, finished:false};
-        rec.count++;
+        const rec = pendingDatafallDeletes.get(arrKey) || {count:0, finished:false, finalizing:false};
+        rec.count = (rec.count||0) + 1;
+        rec.arrId = rec.arrId ?? parentArrId;
+        rec.startedAt = rec.startedAt ?? nowMs();
+        rec.lastActive = nowMs();
         pendingDatafallDeletes.set(arrKey, rec);
       }catch{}
       const group = new THREE.Group();
@@ -11380,7 +11489,9 @@ const Scene = (()=>{
             try{
               const rec = pendingDatafallDeletes.get(arrKey);
               if(rec){
-                rec.count--;
+                rec.count = Math.max(0, (rec.count||0) - 1);
+                rec.arrId = rec.arrId ?? parentArrId;
+                rec.lastActive = nowMs();
                 pendingDatafallDeletes.set(arrKey, rec);
                 maybeFinalizeDeletion(parentArrId);
               }
@@ -11416,7 +11527,9 @@ const Scene = (()=>{
               try{
                 const rec = pendingDatafallDeletes.get(arrKey);
                 if(rec){
-                  rec.count--;
+                  rec.count = Math.max(0, (rec.count||0) - 1);
+                  rec.arrId = rec.arrId ?? parentArrId;
+                  rec.lastActive = nowMs();
                   pendingDatafallDeletes.set(arrKey, rec);
                   maybeFinalizeDeletion(parentArrId);
                 }
@@ -11455,11 +11568,11 @@ const Scene = (()=>{
       const waveSize=8;
       const waveDelay=160;
       const arrKey = normalizeArrayId(arr.id);
-      pendingDatafallDeletes.set(arrKey, {count:0, finished:false, finalizing:false});
+      pendingDatafallDeletes.set(arrKey, {count:0, finished:false, finalizing:false, arrId: arr.id, startedAt: nowMs(), lastActive: nowMs()});
       if(items.length===0){
         try{
           const rec=pendingDatafallDeletes.get(arrKey);
-          if(rec){ rec.finished=true; pendingDatafallDeletes.set(arrKey, rec); }
+          if(rec){ rec.finished=true; rec.finishedAt = nowMs(); rec.lastActive = nowMs(); pendingDatafallDeletes.set(arrKey, rec); }
         }catch{}
         maybeFinalizeDeletion(arr.id);
         return;
@@ -11524,6 +11637,9 @@ const Scene = (()=>{
             try{
               const rec=pendingDatafallDeletes.get(arrKey)||{count:0};
               rec.finished=true;
+              rec.finishedAt = nowMs();
+              rec.arrId = rec.arrId ?? arr.id;
+              rec.lastActive = nowMs();
               pendingDatafallDeletes.set(arrKey, rec);
               maybeFinalizeDeletion(arr.id);
             }catch{}
@@ -11826,9 +11942,46 @@ const Scene = (()=>{
           }catch{}
           deleteEffects.splice(i, 1);
         }
-      }
     }
   }
+
+    if(deleteInteractionLock){
+      const now = nowMs();
+      const finalizeIds = [];
+      pendingDatafallDeletes.forEach((rec, key)=>{
+        if(!rec) return;
+        if(rec.finalizing) return;
+        const arrId = rec.arrId ?? Number(key);
+        if(rec.finished && ((rec.count|0) <= 0)){
+          if(Number.isFinite(arrId)){ finalizeIds.push(arrId); }
+          else {
+            try{ releaseDeletionInteractions(); }catch{}
+            pendingDatafallDeletes.delete(key);
+          }
+          return;
+        }
+        if(rec.finished){
+          const idleSince = rec.finishedAt ?? rec.lastActive ?? rec.startedAt ?? now;
+          if(now - idleSince > 2400){
+            rec.count = 0;
+            rec.lastActive = now;
+            pendingDatafallDeletes.set(key, rec);
+            if(Number.isFinite(arrId)){ finalizeIds.push(arrId); }
+            else {
+              try{ releaseDeletionInteractions(); }catch{}
+              pendingDatafallDeletes.delete(key);
+            }
+          }
+        }
+      });
+      finalizeIds.forEach(id=>{
+        try{ maybeFinalizeDeletion(id); }catch{}
+      });
+      if(!pendingDatafallDeletes.size && !deleteEffects.length){
+        try{ releaseDeletionInteractions(); }catch{}
+      }
+    }
+}
 
   function removeArrayGraphics(arr){
     try{
