@@ -9816,10 +9816,14 @@ const Scene = (()=>{
           Object.values(arr.chunks||{}).forEach(ch=>{
             // Hide LOD1 solids
             if(ch.meshLOD1 && ch.meshLOD1.visible){ arr._previewMask.chunkLODs.push(ch); ch.meshLOD1.visible=false; }
-            // Keep shells for context; hide ghosts
+            // Keep shells for context; hide ghosts and alternate LODs
             if(ch.meshGhost && ch.meshGhost.visible){ arr._previewMask.chunkGhosts.push(ch); ch.meshGhost.visible=false; }
             if(ch.meshLOD2 && ch.meshLOD2.visible){ arr._previewMask.chunkLOD2.push(ch); ch.meshLOD2.visible=false; }
-            if(ch.meshShell && ch.meshShell.visible){ arr._previewMask.chunkShells.push(ch); ch.meshShell.visible=false; }
+            if(ch.meshShell){
+              const wasVisible = !!ch.meshShell.visible;
+              arr._previewMask.chunkShells.push({ chunk: ch, wasVisible });
+              ch.meshShell.visible = true;
+            }
           });
         } else {
         for(let z=0; z<arr.size.z; z++){
@@ -9837,7 +9841,12 @@ const Scene = (()=>{
         (arr._previewMask.chunkLODs||[]).forEach(ch=>{ if(ch.meshLOD1) ch.meshLOD1.visible=true; });
         (arr._previewMask.chunkLOD2||[]).forEach(ch=>{ if(ch.meshLOD2) ch.meshLOD2.visible=true; });
         (arr._previewMask.chunkGhosts||[]).forEach(ch=>{ if(ch.meshGhost) ch.meshGhost.visible=true; });
-        (arr._previewMask.chunkShells||[]).forEach(ch=>{ if(ch.meshShell) ch.meshShell.visible=true; });
+        (arr._previewMask.chunkShells||[]).forEach(rec=>{
+          const ch = rec?.chunk || rec;
+          if(ch?.meshShell){
+            ch.meshShell.visible = (rec && rec.hasOwnProperty('wasVisible')) ? rec.wasVisible : true;
+          }
+        });
         arr._previewMask = { layerKeys:[], chunkLODs:[], chunkLOD2:[], chunkGhosts:[], chunkShells:[] };
       }
     }catch{}
@@ -9868,8 +9877,17 @@ const Scene = (()=>{
     group.userData.kind = 'procAnim';
     scene.add(group);
 
-    const GREEN_MAT = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.5, depthTest: true, depthWrite: false });
-    const makeCell = (sx=0.9,sy=0.9,sz=0.9)=>{ const m=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz), GREEN_MAT.clone()); m.renderOrder=2100; return m; };
+    const GREEN_MAT = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.5, depthTest: false, depthWrite: false });
+    GREEN_MAT.toneMapped = false;
+    const BASE_CELL_SIZE = 0.9;
+    const makeCell = (sx=BASE_CELL_SIZE,sy=BASE_CELL_SIZE,sz=BASE_CELL_SIZE)=>{
+      const geom = GEO_VOXEL.clone();
+      const mat = GREEN_MAT.clone();
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.renderOrder = 2100;
+      mesh.scale.set(sx/BASE_CELL_SIZE, sy/BASE_CELL_SIZE, sz/BASE_CELL_SIZE);
+      return mesh;
+    };
     const safeAnchor = {
       x: Number.isFinite(anchor?.x) ? anchor.x : 0,
       y: Number.isFinite(anchor?.y) ? anchor.y : 0,
@@ -9953,7 +9971,7 @@ const Scene = (()=>{
     } else if(animType==='array'){
       const {w,h,d}=params; const cells=[];
       for(let zz=0; zz<d; zz++) for(let yy=0; yy<h; yy++) for(let xx=0; xx<w; xx++){
-        const c=makeCell(0.84,0.84,0.84);
+        const c=makeCell();
         const wp = worldPos(anchorArr, safeAnchor.x+xx, safeAnchor.y+yy, safeAnchor.z+zz);
         c.position.copy(wp); c.visible=false; group.add(c); cells.push({mesh:c, xx, yy, zz});
       }
@@ -9980,7 +9998,8 @@ const Scene = (()=>{
           });
           if(geos.length){
             const merged = (typeof BufferGeometryUtils!=='undefined' && BufferGeometryUtils.mergeGeometries) ? BufferGeometryUtils.mergeGeometries(geos, false) : null;
-            const finalMat = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.5, depthTest: true, depthWrite: false });
+            const finalMat = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.5, depthTest: false, depthWrite: false });
+            finalMat.toneMapped = false;
             const finalMesh = new THREE.Mesh(merged || geos[0], finalMat);
             finalMesh.renderOrder = 2100;
             // Clear children and replace with merged mesh to persist briefly
@@ -9993,7 +10012,7 @@ const Scene = (()=>{
       };
     } else if(animType==='transpose'){
       // Minimal visualization: swap X/Y progressively for a 2D 1x1 marker moving toward its transposed target
-      const marker = makeCell(0.7,0.7,0.7);
+      const marker = makeCell();
       marker.position.copy(startPos);
       group.add(marker);
       record.update = (p)=>{
@@ -10328,8 +10347,9 @@ const Scene = (()=>{
           if(T.overlay){
             // Clear previous overlay contents
             while(T.overlay.group.children.length){ const ch=T.overlay.group.children.pop(); ch.geometry?.dispose?.(); ch.material?.dispose?.(); }
-            const mat = new THREE.MeshBasicMaterial({ color:0x22c55e, transparent:true, opacity:0.72, depthTest:true, depthWrite:false });
-            const overlayGeo = new RoundedBoxGeometry(0.94,0.94,0.94, 2, 0.12);
+            const mat = new THREE.MeshBasicMaterial({ color:0x22c55e, transparent:true, opacity:0.72, depthTest:false, depthWrite:false });
+            mat.toneMapped = false;
+            const overlayGeo = GEO_VOXEL.clone();
             const parentIsFrame = (T.overlay.group.parent === arr._frame);
 
             // Group plan by anchor so we emit overlays from each respective anchor
@@ -10437,15 +10457,25 @@ const Scene = (()=>{
           if(r>=1){
             // Reset time BEFORE flipping dir so the next frame starts at p=0/1 cleanly
             T.t = 0;
-            if(T.reverse && T.dir>0){ T.dir=-1; }
-            else if(T.repeat){ T.dir=1; }
-            else {
-              // one-shot: clear overlay after brief hold and unmask content
-              setTimeout(()=>{ try{ while(T.overlay.group.children.length){ const ch=T.overlay.group.children.pop(); ch.geometry?.dispose?.(); ch.material?.dispose?.(); } }catch{} }, 120);
-              try{ T.overlay.group.parent?.remove(T.overlay.group); }catch{}
-              T.overlay=null;
-              try{ maskArrayForPreview(arr,false); }catch{}
+            let continueCycle = false;
+            if(T.reverse){
+              if(T.dir>0){
+                T.dir = -1;
+                continueCycle = true;
+              } else {
+                T.dir = 1;
+                continueCycle = !!T.repeat;
+              }
+            } else if(T.repeat){
+              T.dir = 1;
+              continueCycle = true;
             }
+            if(continueCycle){ continue; }
+            // one-shot: clear overlay after brief hold and unmask content
+            setTimeout(()=>{ try{ while(T.overlay.group.children.length){ const ch=T.overlay.group.children.pop(); ch.geometry?.dispose?.(); ch.material?.dispose?.(); } }catch{} }, 120);
+            try{ T.overlay.group.parent?.remove(T.overlay.group); }catch{}
+            T.overlay=null;
+            try{ maskArrayForPreview(arr,false); }catch{}
           }
         }
         // If global 3D preview is enabled, apply full-array motion using the same plan and p3D
@@ -11712,8 +11742,14 @@ const Scene = (()=>{
     const pos=worldPos(arr,sel.focus.x,sel.focus.y,sel.focus.z);
     celli.position.copy(pos).add(new THREE.Vector3(0,.7,0)); celli.visible=true; celli.rotation.y+=0.02;
 
-    const cell=UI.getCell(sel.arrayId,sel.focus);
-    const hasArray=(cell.formula||'').toUpperCase().includes('ARRAY');
+    let cell = null;
+    try{ cell = UI.getCell(sel.arrayId,sel.focus); }catch{}
+    if(!cell){
+      try{ cell = Formula.getCell({arrId:sel.arrayId,x:sel.focus.x,y:sel.focus.y,z:sel.focus.z}); }catch{}
+    }
+    const formulaText = (cell?.formula||'');
+    const valueText = (cell?.value||'');
+    const hasArray = /ARRAY\(/i.test(formulaText) || /ARRAY\(/i.test(valueText);
     ensureArrayaAvatar();
     if(arrayaAvatar){
       arrayaAvatar.setVisible(hasArray);
