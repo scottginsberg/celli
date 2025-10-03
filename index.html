@@ -11150,6 +11150,11 @@ const Scene = (()=>{
   // Deletion explosion effect
   const deleteEffects = [];
   const pendingDatafallDeletes = new Map(); // arrId -> {count:number, finished:boolean}
+  const normalizeArrayId = (id)=>{
+    if(id === undefined) return '__undefined__';
+    if(id === null) return '__null__';
+    return String(id);
+  };
   let deleteInteractionLock = false;
   let deletionControlState = null;
   const DATAFALL_COLORS = {
@@ -11285,18 +11290,20 @@ const Scene = (()=>{
     }catch{ if(typeof onDone==='function') onDone(); }
   }
   function maybeFinalizeDeletion(arrId){
+    const key = normalizeArrayId(arrId);
     try{
-      const rec = pendingDatafallDeletes.get(arrId);
+      const rec = pendingDatafallDeletes.get(key);
       if(rec && rec.finished && ((rec.count|0) <= 0)){
         if(rec.finalizing) return;
         rec.finalizing = true;
-        pendingDatafallDeletes.set(arrId, rec);
+        pendingDatafallDeletes.set(key, rec);
         const finalizeNow = ()=>{
-          pendingDatafallDeletes.delete(arrId);
+          pendingDatafallDeletes.delete(key);
           try{ Actions.deleteArray(arrId); }catch{}
           releaseDeletionInteractions();
         };
-        const arr = Store.getState().arrays[arrId];
+        const store = Store.getState();
+        const arr = store.arrays?.[arrId] ?? store.arrays?.[key];
         if(arr){
           startAxisFall(arr, finalizeNow);
         } else {
@@ -11328,12 +11335,12 @@ const Scene = (()=>{
     return spr;
   }
   function spawnCellDatafallAt(position, cell, parentArrId){
+    const arrKey = normalizeArrayId(parentArrId);
     try{
       try{
-        const arrId = parentArrId|0;
-        const rec = pendingDatafallDeletes.get(arrId) || {count:0, finished:false};
+        const rec = pendingDatafallDeletes.get(arrKey) || {count:0, finished:false};
         rec.count++;
-        pendingDatafallDeletes.set(arrId, rec);
+        pendingDatafallDeletes.set(arrKey, rec);
       }catch{}
       const group = new THREE.Group();
       group.userData.kind='microCollapse';
@@ -11371,12 +11378,11 @@ const Scene = (()=>{
           const hasContent = !!(cell && ((cell.formula && String(cell.formula).length) || (cell.value!=='' && cell.value!==null && cell.value!==undefined)));
           if(!hasContent){
             try{
-              const arrId = parentArrId|0;
-              const rec = pendingDatafallDeletes.get(arrId);
+              const rec = pendingDatafallDeletes.get(arrKey);
               if(rec){
                 rec.count--;
-                pendingDatafallDeletes.set(arrId, rec);
-                maybeFinalizeDeletion(arrId);
+                pendingDatafallDeletes.set(arrKey, rec);
+                maybeFinalizeDeletion(parentArrId);
               }
             }catch{}
             return;
@@ -11408,12 +11414,11 @@ const Scene = (()=>{
             }],
             onDone:()=>{
               try{
-                const arrId = parentArrId|0;
-                const rec = pendingDatafallDeletes.get(arrId);
+                const rec = pendingDatafallDeletes.get(arrKey);
                 if(rec){
                   rec.count--;
-                  pendingDatafallDeletes.set(arrId, rec);
-                  maybeFinalizeDeletion(arrId);
+                  pendingDatafallDeletes.set(arrKey, rec);
+                  maybeFinalizeDeletion(parentArrId);
                 }
               }catch{}
             }
@@ -11449,11 +11454,12 @@ const Scene = (()=>{
       let idx=0;
       const waveSize=8;
       const waveDelay=160;
-      pendingDatafallDeletes.set(arr.id, {count:0, finished:false, finalizing:false});
+      const arrKey = normalizeArrayId(arr.id);
+      pendingDatafallDeletes.set(arrKey, {count:0, finished:false, finalizing:false});
       if(items.length===0){
         try{
-          const rec=pendingDatafallDeletes.get(arr.id);
-          if(rec){ rec.finished=true; pendingDatafallDeletes.set(arr.id, rec); }
+          const rec=pendingDatafallDeletes.get(arrKey);
+          if(rec){ rec.finished=true; pendingDatafallDeletes.set(arrKey, rec); }
         }catch{}
         maybeFinalizeDeletion(arr.id);
         return;
@@ -11516,9 +11522,9 @@ const Scene = (()=>{
         } else {
           setTimeout(()=>{
             try{
-              const rec=pendingDatafallDeletes.get(arr.id)||{count:0};
+              const rec=pendingDatafallDeletes.get(arrKey)||{count:0};
               rec.finished=true;
-              pendingDatafallDeletes.set(arr.id, rec);
+              pendingDatafallDeletes.set(arrKey, rec);
               maybeFinalizeDeletion(arr.id);
             }catch{}
           }, 200);
