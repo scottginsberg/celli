@@ -9425,7 +9425,8 @@ const Scene = (()=>{
 
     const GREEN_MAT = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.5, depthTest: true, depthWrite: false });
     const makeCell = (sx=0.9,sy=0.9,sz=0.9)=>{ const m=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz), GREEN_MAT.clone()); m.renderOrder=2100; return m; };
-    const startPos = worldPos(arr, anchor.x, anchor.y, anchor.z);
+    const anchorArr = (anchor && anchor.arrId!=null && Store.getState().arrays && Store.getState().arrays[anchor.arrId]) || arr;
+    const startPos = worldPos(anchorArr, anchor.x, anchor.y, anchor.z);
 
     // Parse op
     const text = String(op||'').trim();
@@ -9860,19 +9861,20 @@ const Scene = (()=>{
             const ZU = new THREE.Vector3(0,0,-1);
             for(const g of groups.values()){
               const baseAnchor = g.anchor || {x:0,y:0,z:0,arrId:arr.id};
+              const anchorArr = (baseAnchor.arrId!=null && Store.getState().arrays && Store.getState().arrays[baseAnchor.arrId]) || arr;
               let {w,h,d} = g.dims;
               if(w===1 && h===1 && d===1){
                 try{
-                  const nonEmpty=(x,y,z)=>{ const c=Formula.getCell({arrId:arr.id,x,y,z}); return !!(c && (c.formula || (c.value!=='' && c.value!==null && c.value!==undefined))); };
+                  const nonEmpty=(x,y,z)=>{ const c=Formula.getCell({arrId:anchorArr.id,x,y,z}); return !!(c && (c.formula || (c.value!=='' && c.value!==null && c.value!==undefined))); };
                   let ww=1,hh=1,dd=1;
-                  for(let x=baseAnchor.x+1; x<arr.size.x; x++){ if(!nonEmpty(x,baseAnchor.y,baseAnchor.z)) break; ww++; }
-                  for(let y=baseAnchor.y+1; y<arr.size.y; y++){ if(!nonEmpty(baseAnchor.x,y,baseAnchor.z)) break; hh++; }
-                  for(let z=baseAnchor.z+1; z<arr.size.z; z++){ if(!nonEmpty(baseAnchor.x,baseAnchor.y,z)) break; dd++; }
+                  for(let x=baseAnchor.x+1; x<anchorArr.size.x; x++){ if(!nonEmpty(x,baseAnchor.y,baseAnchor.z)) break; ww++; }
+                  for(let y=baseAnchor.y+1; y<anchorArr.size.y; y++){ if(!nonEmpty(baseAnchor.x,y,baseAnchor.z)) break; hh++; }
+                  for(let z=baseAnchor.z+1; z<anchorArr.size.z; z++){ if(!nonEmpty(baseAnchor.x,baseAnchor.y,z)) break; dd++; }
                   w=ww; h=hh; d=dd;
                 }catch{}
               }
 
-              const anchorL = localPos(arr, baseAnchor.x, baseAnchor.y, baseAnchor.z);
+              const anchorL = localPos(anchorArr, baseAnchor.x, baseAnchor.y, baseAnchor.z);
               const leg = (T.dir>0? p : (1-p));
               const angX = (g.rsx*90)*(Math.PI/180) * leg;
               const angY = (g.rsy*90)*(Math.PI/180) * leg;
@@ -9892,7 +9894,7 @@ const Scene = (()=>{
               const hasTranspose = !!g.hasTranspose;
               const hasDataAt=(ix,iy,iz)=>{
                 try{
-                  const c=Formula.getCell({arrId:arr.id, x:baseAnchor.x+ix, y:baseAnchor.y+iy, z:baseAnchor.z+iz});
+                  const c=Formula.getCell({arrId:anchorArr.id, x:baseAnchor.x+ix, y:baseAnchor.y+iy, z:baseAnchor.z+iz});
                   return !!(c && (c.formula || (c.value!=='' && c.value!==null && c.value!==undefined)));
                 }catch{ return false; }
               };
@@ -9913,7 +9915,22 @@ const Scene = (()=>{
                 offL.multiplyScalar(pCell);
                 const posL = anchorL.clone().add(offL);
                 let out = posL.clone();
-                if(!parentIsFrame){ if(arr._frame){ out = posL.clone(); arr._frame.localToWorld(out); } else { const off = arr.offset||{x:0,y:0,z:0}; out.add(new THREE.Vector3(off.x,off.y,off.z)); } }
+                if(arr !== anchorArr){
+                  try{
+                    let worldPos = posL.clone();
+                    if(anchorArr._frame){ worldPos = posL.clone(); anchorArr._frame.localToWorld(worldPos); }
+                    else { const offA = anchorArr.offset||{x:0,y:0,z:0}; worldPos.add(new THREE.Vector3(offA.x,offA.y,offA.z)); }
+                    if(parentIsFrame){
+                      if(arr._frame){ out = worldPos.clone(); arr._frame.worldToLocal(out); }
+                      else { const offB = arr.offset||{x:0,y:0,z:0}; out = worldPos.clone().sub(new THREE.Vector3(offB.x,offB.y,offB.z)); }
+                    } else {
+                      out = worldPos.clone();
+                    }
+                  }catch{}
+                } else if(!parentIsFrame){
+                  if(arr._frame){ out = posL.clone(); arr._frame.localToWorld(out); }
+                  else { const off = arr.offset||{x:0,y:0,z:0}; out.add(new THREE.Vector3(off.x,off.y,off.z)); }
+                }
                 const mesh = new THREE.Mesh(overlayGeo, mat.clone()); mesh.renderOrder=9999; mesh.position.copy(out); T.overlay.group.add(mesh);
               }
             }
@@ -10077,6 +10094,7 @@ const Scene = (()=>{
   }
   let dragState=null;
   function onPick(e){
+    if(deleteInteractionLock) return;
     const rect=renderer.domElement.getBoundingClientRect();
     const mouse=new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1, -((e.clientY-rect.top)/rect.height)*2+1);
     const ray=new THREE.Raycaster(); ray.setFromCamera(mouse,camera);
@@ -10822,6 +10840,8 @@ const Scene = (()=>{
   // Deletion explosion effect
   const deleteEffects = [];
   const pendingDatafallDeletes = new Map(); // arrId -> {count:number, finished:boolean}
+  let deleteInteractionLock = false;
+  let deletionControlState = null;
   const DATAFALL_COLORS = {
     syntax: '#111827',
     function: '#111827',
@@ -10874,14 +10894,106 @@ const Scene = (()=>{
     if(/^".*"$/.test(trimmed)) return { text: trimmed, tokenKind: 'string', color: DATAFALL_COLORS.string };
     return { text, tokenKind: 'syntax', color: DATAFALL_COLORS.syntax };
   }
+  function colorForCellVisual(arrId, cell){
+    try{
+      if(!cell) return baseHexForTypeKey('empty');
+      if(cell.meta && cell.meta.color) return cell.meta.color;
+      const key = `${arrId}:${cell.x},${cell.y},${cell.z}`;
+      const emitted = !!(Store.getState().sourceByCell && Store.getState().sourceByCell.get && Store.getState().sourceByCell.get(key));
+      const hasValue = (cell.value!=='' && cell.value!==null && cell.value!==undefined);
+      if(cell.formula) return baseHexForTypeKey('formula');
+      if(emitted) return baseHexForTypeKey('emitted');
+      return hasValue ? baseHexForTypeKey('value') : baseHexForTypeKey('empty');
+    }catch{ return baseHexForTypeKey('empty'); }
+  }
+  function lockDeletionInteractions(){
+    deleteInteractionLock = true;
+    try{
+      if(controls){
+        deletionControlState = {
+          rotate: controls.enableRotate,
+          pan: controls.enablePan,
+          zoom: controls.enableZoom
+        };
+        controls.enableRotate = false;
+        controls.enablePan = false;
+        controls.enableZoom = false;
+      }
+    }catch{}
+  }
+  function releaseDeletionInteractions(){
+    try{
+      if(controls && deletionControlState){
+        controls.enableRotate = deletionControlState.rotate;
+        controls.enablePan = deletionControlState.pan;
+        controls.enableZoom = deletionControlState.zoom;
+      }
+    }catch{}
+    deletionControlState = null;
+    deleteInteractionLock = false;
+  }
+  function startAxisFall(arr, onDone){
+    try{
+      const labels = (arr?.labels||[]).filter(Boolean);
+      if(!labels.length){ if(typeof onDone==='function') onDone(); return; }
+      const actors = [];
+      labels.forEach(label=>{
+        try{ if(label.userData?.billboard) unmarkBillboard(label); }catch{}
+        try{
+          const worldPos = label.getWorldPosition(new THREE.Vector3());
+          const worldQuat = label.getWorldQuaternion(new THREE.Quaternion());
+          const worldScale = label.scale ? label.scale.clone() : new THREE.Vector3(1,1,1);
+          label.parent?.remove(label);
+          label.position.copy(worldPos);
+          label.quaternion.copy(worldQuat);
+          if(worldScale) label.scale.copy(worldScale);
+          scene.add(label);
+          actors.push({
+            mesh: label,
+            vel: new THREE.Vector3((Math.random()-0.5)*0.02, Math.random()*0.04 + 0.02, (Math.random()-0.5)*0.02),
+            rot: new THREE.Vector3((Math.random()-0.5)*0.06, (Math.random()-0.5)*0.06, (Math.random()-0.5)*0.06),
+            age: 0,
+            life: 1100 + Math.random()*500
+          });
+        }catch{}
+        });
+        arr.labels = [];
+        try{ if(arr._frame?.userData) arr._frame.userData.grab = null; }catch{}
+        if(!actors.length){ if(typeof onDone==='function') onDone(); return; }
+      deleteEffects.push({
+        phase:'axisFall',
+        labels: actors,
+        onDone:()=>{
+          actors.forEach(actor=>{
+            try{ if(actor.mesh.userData?.billboard) unmarkBillboard(actor.mesh); }catch{}
+            try{ actor.mesh.parent?.remove(actor.mesh); }catch{}
+            try{ actor.mesh.material?.map?.dispose?.(); actor.mesh.material?.dispose?.(); }catch{}
+          });
+          if(typeof onDone==='function') onDone();
+        }
+      });
+    }catch{ if(typeof onDone==='function') onDone(); }
+  }
   function maybeFinalizeDeletion(arrId){
     try{
       const rec = pendingDatafallDeletes.get(arrId);
       if(rec && rec.finished && ((rec.count|0) <= 0)){
-        pendingDatafallDeletes.delete(arrId);
-        try{ Actions.deleteArray(arrId); }catch{}
+        if(rec.finalizing) return;
+        rec.finalizing = true;
+        pendingDatafallDeletes.set(arrId, rec);
+        const finalizeNow = ()=>{
+          pendingDatafallDeletes.delete(arrId);
+          try{ Actions.deleteArray(arrId); }catch{}
+          releaseDeletionInteractions();
+        };
+        const arr = Store.getState().arrays[arrId];
+        if(arr){
+          startAxisFall(arr, finalizeNow);
+        } else {
+          finalizeNow();
+        }
       }
-    }catch{}
+    }catch{ releaseDeletionInteractions(); }
   }
 
   function makeCharSprite(ch, color = '#ffffff'){
@@ -10916,39 +11028,35 @@ const Scene = (()=>{
       const group = new THREE.Group();
       group.userData.kind='microCollapse';
       scene.add(group);
-      const micro = { size:4, scale:0.18, spacing:0.22 };
-      const offs = (micro.size-1)/2;
-      const geom = new THREE.BoxGeometry(micro.scale, micro.scale, micro.scale);
-      const mat = new THREE.MeshBasicMaterial({ color: 0x4f46e5, transparent:true, opacity:0.9, depthTest:true, depthWrite:false });
-      const cubes=[];
-      for(let x=0;x<micro.size;x++) for(let y=0;y<micro.size;y++) for(let z=0;z<micro.size;z++){
-        const m = new THREE.Mesh(geom, mat.clone());
-        m.position.set((x-offs)*micro.spacing, (y-offs)*micro.spacing, (z-offs)*micro.spacing);
-        group.add(m);
-        cubes.push(m);
-      }
+      const colorHex = cssColor(colorForCellVisual(parentArrId, cell));
+      const coreColor = new THREE.Color(colorHex);
+      const shellColor = coreColor.clone().lerp(new THREE.Color(0xffffff), 0.45);
+      const coreMat = new THREE.MeshBasicMaterial({ color: coreColor, transparent:true, opacity:0.95, depthTest:true, depthWrite:true });
+      const shellMat = new THREE.MeshBasicMaterial({ color: shellColor, transparent:true, opacity:0.38, depthTest:true, depthWrite:false });
+      const core = new THREE.Mesh(GEO_VOXEL, coreMat);
+      const shell = new THREE.Mesh(GEO_SHELL, shellMat);
+      core.renderOrder = 2100;
+      shell.renderOrder = 2101;
+      group.add(core);
+      group.add(shell);
       group.position.copy(position);
       const dur=420; let t0;
       const step=(ts)=>{
         if(t0==null) t0=ts;
         const u=Math.min(1,(ts-t0)/dur);
         const e=1-Math.pow(1-u,4);
-        cubes.forEach(m=>{
-          m.position.multiplyScalar(1-e);
-          m.scale.setScalar(1-(0.7*e));
-          m.material.opacity=0.9*(1-e)+0.1;
-        });
+        const scale = 1 - (0.55*e);
+        core.scale.setScalar(Math.max(0.0001, scale));
+        shell.scale.setScalar(Math.max(0.0001, scale * 1.04));
+        core.material.opacity = 0.95*(1-e)+0.08;
+        shell.material.opacity = 0.38*(1-e)+0.05;
         if(u<1){
           requestAnimationFrame(step);
         } else {
           try{
             scene.remove(group);
-            group.traverse(o=>{
-              if(o.isMesh){
-                o.geometry?.dispose?.();
-                o.material?.dispose?.();
-              }
-            });
+            core.material?.dispose?.();
+            shell.material?.dispose?.();
           }catch{}
           const hasContent = !!(cell && ((cell.formula && String(cell.formula).length) || (cell.value!=='' && cell.value!==null && cell.value!==undefined)));
           if(!hasContent){
@@ -11015,17 +11123,31 @@ const Scene = (()=>{
           rehydrateChunkInstances(arr, ch);
         });
       }catch{}
+      if(!deleteInteractionLock) lockDeletionInteractions();
       const items=[];
       try{
         Object.values(arr.chunks||{}).forEach(ch=>{
           (ch.cells||[]).forEach(c=>{ items.push({x:c.x,y:c.y,z:c.z}); });
         });
-        items.sort((a,b)=> a.z-b.z || a.y-b.y || a.x-b.x);
+        for(let i=items.length-1; i>0; i--){
+          const j = Math.floor(Math.random()*(i+1));
+          const tmp = items[i];
+          items[i] = items[j];
+          items[j] = tmp;
+        }
       }catch{}
       let idx=0;
       const waveSize=8;
       const waveDelay=160;
-      pendingDatafallDeletes.set(arr.id, {count:0, finished:false});
+      pendingDatafallDeletes.set(arr.id, {count:0, finished:false, finalizing:false});
+      if(items.length===0){
+        try{
+          const rec=pendingDatafallDeletes.get(arr.id);
+          if(rec){ rec.finished=true; pendingDatafallDeletes.set(arr.id, rec); }
+        }catch{}
+        maybeFinalizeDeletion(arr.id);
+        return;
+      }
       const spawnWave=()=>{
         const S=Store.getState();
         if(!S.arrays[arr.id]) return;
@@ -11036,7 +11158,7 @@ const Scene = (()=>{
             cell = Formula.getCell({arrId:arr.id,x:c.x,y:c.y,z:c.z});
           }catch{}
           const pos = cellWorldPos(arr, c.x, c.y, c.z);
-          spawnCellDatafallAt(pos, cell? {...cell, arrId: arr.id } : null, arr.id);
+          spawnCellDatafallAt(pos, cell? {...cell, arrId: arr.id, x:c.x, y:c.y, z:c.z } : null, arr.id);
           try{
             const CH = chunkOf(c.x,c.y,c.z);
             const key = keyChunk(CH.x,CH.y,CH.z);
@@ -11051,6 +11173,8 @@ const Scene = (()=>{
                   mat.makeScale(0,0,0);
                   mesh.setMatrixAt(idx3, mat);
                   mesh.instanceMatrix.needsUpdate = true;
+                  if(ch.meshShell){ try{ ch.meshShell.setMatrixAt(idx3, mat); ch.meshShell.instanceMatrix.needsUpdate = true; }catch{} }
+                  if(ch.meshGhost){ try{ ch.meshGhost.setMatrixAt(idx3, mat); ch.meshGhost.instanceMatrix.needsUpdate = true; }catch{} }
                 }
               } else {
                 const rec = layerMeshes.get(`${arr.id}:${c.z}:filled`) || layerMeshes.get(`${arr.id}:${c.z}:formula`) || layerMeshes.get(`${arr.id}:${c.z}:empty`);
@@ -11061,6 +11185,16 @@ const Scene = (()=>{
                     mat.makeScale(0,0,0);
                     rec.mesh.setMatrixAt(idxL, mat);
                     rec.mesh.instanceMatrix.needsUpdate=true;
+                  }
+                }
+                const recShell = layerMeshes.get(`${arr.id}:${c.z}:edges`);
+                if(recShell && recShell.mesh && recShell.index2cell){
+                  const idxS = recShell.index2cell.findIndex(q=> q && q.x===c.x && q.y===c.y && q.z===c.z);
+                  if(idxS>=0){
+                    const mat = new THREE.Matrix4();
+                    mat.makeScale(0,0,0);
+                    recShell.mesh.setMatrixAt(idxS, mat);
+                    recShell.mesh.instanceMatrix.needsUpdate = true;
                   }
                 }
               }
@@ -11083,6 +11217,7 @@ const Scene = (()=>{
       spawnWave();
     }catch(e){
       console.warn('startDatafallDelete failed', e);
+      releaseDeletionInteractions();
     }
   }
   function spawnDeleteExplosion(arr){
@@ -11214,6 +11349,35 @@ const Scene = (()=>{
         }
         eff.particles = next;
         if(eff.particles.length===0){ try{ const cb=eff.onDone; eff.group.parent?.remove(eff.group); if(typeof cb==='function') cb(); }catch{} deleteEffects.splice(i,1); }
+        continue;
+      }
+
+      if(eff.phase === 'axisFall'){
+        const nextLabels = [];
+        for(let k=0; k<eff.labels.length; k++){
+          const lbl = eff.labels[k];
+          lbl.age += dtMs;
+          lbl.vel.y -= 0.0025;
+          lbl.mesh.position.add(lbl.vel);
+          if(lbl.mesh.rotation){
+            lbl.mesh.rotation.x += lbl.rot.x;
+            lbl.mesh.rotation.y += lbl.rot.y;
+            lbl.mesh.rotation.z += lbl.rot.z;
+          }
+          if(lbl.mesh.material && typeof lbl.mesh.material.opacity==='number'){
+            lbl.mesh.material.opacity = Math.max(0, lbl.mesh.material.opacity - 0.01);
+          }
+          if(lbl.age < lbl.life){
+            nextLabels.push(lbl);
+          } else {
+            try{ lbl.mesh.parent?.remove(lbl.mesh); }catch{}
+          }
+        }
+        eff.labels = nextLabels;
+        if(nextLabels.length===0){
+          try{ eff.onDone?.(); }catch{}
+          deleteEffects.splice(i,1);
+        }
         continue;
       }
 
