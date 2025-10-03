@@ -11676,16 +11676,30 @@ const Scene = (()=>{
     return { create };
   })();
 
+  if(typeof ensureArrayaAvatar === 'function'){
+    try{ ensureArrayaAvatar(); }catch(err){ console.warn('Arraya avatar deferred init failed:', err); }
+  }
+
   // Celli and Arraya avatars
   let celli, arraya, arrayaAvatar;
+  function ensureArrayaAvatar(){
+    if(arrayaAvatar || typeof ArrayaAvatarFactory === 'undefined') return;
+    try{
+      const created = ArrayaAvatarFactory.create(THREE);
+      if(!created) return;
+      arrayaAvatar = created;
+      arraya = arrayaAvatar.group;
+      if(scene && arraya) scene.add(arraya);
+      arrayaAvatar.setVisible(false);
+    }catch(err){
+      console.error('Failed to initialize Arraya avatar:', err);
+    }
+  }
   function initAvatars(){
     celli = AvatarFactory.createCelli(THREE);
     scene.add(celli); celli.visible=false;
 
-    arrayaAvatar = ArrayaAvatarFactory.create(THREE);
-    arraya = arrayaAvatar.group;
-    scene.add(arraya);
-    arrayaAvatar.setVisible(false);
+    ensureArrayaAvatar();
   }
 
   function updateAvatars(sel){
@@ -11700,6 +11714,7 @@ const Scene = (()=>{
 
     const cell=UI.getCell(sel.arrayId,sel.focus);
     const hasArray=(cell.formula||'').toUpperCase().includes('ARRAY');
+    ensureArrayaAvatar();
     if(arrayaAvatar){
       arrayaAvatar.setVisible(hasArray);
       if(hasArray){
