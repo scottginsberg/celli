@@ -1,10 +1,17 @@
-<!DOCTYPE html>
+1<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-
 <meta name="viewport" content="width=device-width,initial-scale=1.0" />
 <title>Celli</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/": "https://cdn.jsdelivr.net/npm/three@0.160.0/"
+  }
+}
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Rubik:wght@400;600;800&family=Roboto+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 <!-- Twemoji for consistent emoji rendering -->
@@ -516,10 +523,10 @@ document.addEventListener('click', function(e){
 <div id="dpad" aria-label="D-Pad">
   <div class="dp grab" title="Drag">⠿</div>
   <div class="dp up" data-dx="0" data-dy="-1" data-dz="0">↑</div>
-  <div class="dp depthUp" data-dx="0" data-dy="0" data-dz="-1">↥</div>
+  <div class="dp depthUp" data-dx="0" data-dy="0" data-dz="1">↥</div>
   <div class="dp left" data-dx="-1" data-dy="0" data-dz="0">←</div>
   <div class="dp center" title="Arrow mapping"><span style="display:inline-block;width:16px;height:12px;border:2px solid #fff;border-radius:3px"></span>&nbsp;<span id="depthMode">H</span></div>
-  <div class="dp depthDown" data-dx="0" data-dy="0" data-dz="1">↧</div>
+  <div class="dp depthDown" data-dx="0" data-dy="0" data-dz="-1">↧</div>
   <div class="dp down" data-dx="0" data-dy="1" data-dz="0">↓</div>
   <div class="dp right" data-dx="1" data-dy="0" data-dz="0">→</div>
 </div>
@@ -651,28 +658,29 @@ let EffectComposer, RenderPass, UnrealBloomPass, BokehPass, ShaderPass, FXAAShad
 let RGBELoader, Reflector;
 
 try {
-  // Strategy 1: Use esm.sh which rewrites internal bare imports to absolute URLs
-  const baseUrl = 'https://esm.sh/three@0.160.0';
+  // Strategy 1: Use CDN with proper module paths
+  const baseUrl = 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+  const examplesBase = 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm';
   const [threeModule, controlsModule, geometryModule, utilsModule,
     effectComposerModule, renderPassModule, bloomPassModule, bokehPassModule,
     shaderPassModule, fxaaModule, outlineModule, afterimageModule, outputModule,
     rgbeModule, reflectorModule
   ] = await Promise.all([
-    import(`${baseUrl}`),
-    import(`${baseUrl}/examples/jsm/controls/OrbitControls.js`),
-    import(`${baseUrl}/examples/jsm/geometries/RoundedBoxGeometry.js`),
-    import(`${baseUrl}/examples/jsm/utils/BufferGeometryUtils.js`),
-    import(`${baseUrl}/examples/jsm/postprocessing/EffectComposer.js`),
-    import(`${baseUrl}/examples/jsm/postprocessing/RenderPass.js`),
-    import(`${baseUrl}/examples/jsm/postprocessing/UnrealBloomPass.js`),
-    import(`${baseUrl}/examples/jsm/postprocessing/BokehPass.js`),
-    import(`${baseUrl}/examples/jsm/postprocessing/ShaderPass.js`),
-    import(`${baseUrl}/examples/jsm/shaders/FXAAShader.js`),
-    import(`${baseUrl}/examples/jsm/postprocessing/OutlinePass.js`),
-    import(`${baseUrl}/examples/jsm/postprocessing/AfterimagePass.js`),
-    import(`${baseUrl}/examples/jsm/postprocessing/OutputPass.js`),
-    import(`${baseUrl}/examples/jsm/loaders/RGBELoader.js`),
-    import(`${baseUrl}/examples/jsm/objects/Reflector.js`)
+    import(baseUrl),
+    import(`${examplesBase}/controls/OrbitControls.js`),
+    import(`${examplesBase}/geometries/RoundedBoxGeometry.js`),
+    import(`${examplesBase}/utils/BufferGeometryUtils.js`),
+    import(`${examplesBase}/postprocessing/EffectComposer.js`),
+    import(`${examplesBase}/postprocessing/RenderPass.js`),
+    import(`${examplesBase}/postprocessing/UnrealBloomPass.js`),
+    import(`${examplesBase}/postprocessing/BokehPass.js`),
+    import(`${examplesBase}/postprocessing/ShaderPass.js`),
+    import(`${examplesBase}/shaders/FXAAShader.js`),
+    import(`${examplesBase}/postprocessing/OutlinePass.js`),
+    import(`${examplesBase}/postprocessing/AfterimagePass.js`),
+    import(`${examplesBase}/postprocessing/OutputPass.js`),
+    import(`${examplesBase}/loaders/RGBELoader.js`),
+    import(`${examplesBase}/objects/Reflector.js`)
   ]);
 
   THREE = threeModule.default || threeModule;
@@ -824,7 +832,8 @@ try{
 async function loadRapier(){
   // Prefer ESM builds to avoid CommonJS globals like `exports`
   const candidates = [
-    'https://esm.sh/@dimforge/rapier3d-compat@0.12.0',
+    'https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.12.0/+esm',
+    'https://unpkg.com/@dimforge/rapier3d-compat@0.12.0/rapier.js',
     'https://cdn.skypack.dev/@dimforge/rapier3d-compat'
   ];
   for(const url of candidates){
@@ -888,58 +897,60 @@ const createStore = (init)=>{
   state = init(setState,getState);
   return {getState,setState,subscribe};
 };
-const Store = createStore((set,get)=>({
-  arrays: {}, nextArrayId:1, lastCreatedArrayId:null,
-  selection:{arrayId:null, focus:null, anchor:null, range:null},
-  scene:{physics:false, showGrid:true, showAxes:true},
-  ui:{zLayer:0, fxOpen:false, addressMode:'local', lastInteraction:'3d', viewMode:'standard', crystal2D:false},
-  gridPhase:{x:null,y:null,z:null},
-  namedBlocks:new Map(), // name -> {x,y,z, data: [layers[z][y][x]] }
-  hidden:new Set(), // aKey(cell) -> hidden (per-cell visual mask)
-  namedMacros:new Map(), // name -> formula
-  // Deferred/meta binding queue for robust late resolution
-  pendingMeta: [], // {kind:'onClick'|'note', target:{arrId,x,y,z}, meta:{...}}
-  // Global state and event system
-  globalState: new Map(), // key -> value
-  eventListeners: new Map(), // eventName -> [listenerObjects]
-  anchorsByGlobalKey: new Map(), // globalKey -> Set<anchorKey>
-  globalKeysByAnchor: new Map(), // anchorKey -> Set<globalKey>
-  // Emission tracking for generated values (e.g., ARRAY)
-  emittedByAnchor: new Map(), // anchorKey -> Set<cellKey>
-  sourceByCell: new Map(), // cellKey -> anchorKey
-  // Projectile and collision system
-  activeProjectiles: [], // Each item: {id, pos, vel, sourceArrId, payload}
-  collisionHandlers: new Map(), // cellKey -> formulaString
-  nextProjectileId: 0,
-  // Interactions
-  interactions:{ gobblingEnabled:false },
-  // Game state system
-  gameState: { goals: new Map(), winCallbacks: [], hasWon: false },
-  // Embedding system
-  embeddedMeshes: new Map(), // anchorKey -> { mesh, sourceArrId }
-  worldState: { mode: 'normal', parentArr: null, childArr: null },
-  // Docking system
-  dockGroups: new Map(), // groupId -> {mode:'parent'|'all', members:number[], parentId:number}
-  dockGroupsByAnchor: new Map(), // anchorKey -> groupId
-  // Track active 3D_ROTATE applications and suppressions for revert logic
-  activeRotations: new Map(), // anchorKey -> {targetId, ids:number[], pivot:{arrId,x,y,z}, steps:{sx,sy,sz}}
-  suppress3DRotateRevert: new Set(), // Set<anchorKey>
-  // Persisted reverts after refresh
-  // (3D translate persisted meta is read at revert time; no store change needed here)
-  // Track active 3D_TRANSLATE applications and suppressions for revert logic
-  activeTranslations: new Map(), // anchorKey -> {targetId, from:{x,y,z}, delta:{dx,dy,dz}}
-  suppress3DTranslateRevert: new Set(), // Set<anchorKey>
-  // Signal system
-  bufferedWrites: [], // { tick, anchor, value, formula }
-  currentTick: 0,
-  // dependency graph
-  depsByAnchor:new Map(), anchorsByDep:new Map(),
-  // helpers
-  utils:{
-    A1, greek,
-    key:(arrId,x,y,z)=>`${arrId}:${x},${y},${z}`,
-  },
-  actions:{
+const Store = createStore((set,get)=>{
+  console.log('[STORE INIT] Creating store with physics:false by default');
+  return {
+    arrays: {}, nextArrayId:1, lastCreatedArrayId:null,
+    selection:{arrayId:null, focus:null, anchor:null, range:null},
+    scene:{physics:false, showGrid:true, showAxes:true},
+    ui:{zLayer:0, fxOpen:false, addressMode:'local', lastInteraction:'3d', viewMode:'standard', crystal2D:false},
+    gridPhase:{x:null,y:null,z:null},
+    namedBlocks:new Map(), // name -> {x,y,z, data: [layers[z][y][x]] }
+    hidden:new Set(), // aKey(cell) -> hidden (per-cell visual mask)
+    namedMacros:new Map(), // name -> formula
+    // Deferred/meta binding queue for robust late resolution
+    pendingMeta: [], // {kind:'onClick'|'note', target:{arrId,x,y,z}, meta:{...}}
+    // Global state and event system
+    globalState: new Map(), // key -> value
+    eventListeners: new Map(), // eventName -> [listenerObjects]
+    anchorsByGlobalKey: new Map(), // globalKey -> Set<anchorKey>
+    globalKeysByAnchor: new Map(), // anchorKey -> Set<globalKey>
+    // Emission tracking for generated values (e.g., ARRAY)
+    emittedByAnchor: new Map(), // anchorKey -> Set<cellKey>
+    sourceByCell: new Map(), // cellKey -> anchorKey
+    // Projectile and collision system
+    activeProjectiles: [], // Each item: {id, pos, vel, sourceArrId, payload}
+    collisionHandlers: new Map(), // cellKey -> formulaString
+    nextProjectileId: 0,
+    // Interactions
+    interactions:{ gobblingEnabled:false },
+    // Game state system
+    gameState: { goals: new Map(), winCallbacks: [], hasWon: false },
+    // Embedding system
+    embeddedMeshes: new Map(), // anchorKey -> { mesh, sourceArrId }
+    worldState: { mode: 'normal', parentArr: null, childArr: null },
+    // Docking system
+    dockGroups: new Map(), // groupId -> {mode:'parent'|'all', members:number[], parentId:number}
+    dockGroupsByAnchor: new Map(), // anchorKey -> groupId
+    // Track active 3D_ROTATE applications and suppressions for revert logic
+    activeRotations: new Map(), // anchorKey -> {targetId, ids:number[], pivot:{arrId,x,y,z}, steps:{sx,sy,sz}}
+    suppress3DRotateRevert: new Set(), // Set<anchorKey>
+    // Persisted reverts after refresh
+    // (3D translate persisted meta is read at revert time; no store change needed here)
+    // Track active 3D_TRANSLATE applications and suppressions for revert logic
+    activeTranslations: new Map(), // anchorKey -> {targetId, from:{x,y,z}, delta:{dx,dy,dz}}
+    suppress3DTranslateRevert: new Set(), // Set<anchorKey>
+    // Signal system
+    bufferedWrites: [], // { tick, anchor, value, formula }
+    currentTick: 0,
+    // dependency graph
+    depsByAnchor:new Map(), anchorsByDep:new Map(),
+    // helpers
+    utils:{
+      A1, greek,
+      key:(arrId,x,y,z)=>`${arrId}:${x},${y},${z}`,
+    },
+    actions:{
     saveState: ()=>{
       try{
         const s = get();
@@ -1008,7 +1019,7 @@ const Store = createStore((set,get)=>({
           selection: s.selection,
           ui: s.ui,
           scene: {
-            physics: s.scene.physics,
+            physics: false, // Never save physics as enabled
             showGrid: s.scene.showGrid,
             showAxes: s.scene.showAxes,
             arrowMapDepth: s.scene.arrowMapDepth
@@ -1202,13 +1213,16 @@ const Store = createStore((set,get)=>({
         // Restore full state (including rebuilt emission maps)
         const restoredUi = {...get().ui, ...(data.ui||{})};
         if(restoredUi.crystal2D !== true){ restoredUi.crystal2D = false; }
+        // ALWAYS restore physics as FALSE to prevent auto-enable
+        const restoredScene = {...get().scene, ...(data.scene||{}), physics: false};
+        console.log('[LOAD STATE] Forcing physics to false, ignoring saved state');
         set({
           arrays,
           nextArrayId: data.nextArrayId||get().nextArrayId,
           globalState: new Map(Object.entries(data.globalState||{})),
           selection: data.selection||get().selection,
           ui: restoredUi,
-          scene: {...get().scene, ...(data.scene||{})},
+          scene: restoredScene,
           interactions: {...get().interactions, ...(data.interactions||{})},
           namedBlocks: new Map(Object.entries(data.namedBlocks||{})),
           namedMacros: new Map(Object.entries(data.namedMacros||{})),
@@ -1231,7 +1245,21 @@ const Store = createStore((set,get)=>({
             Actions.setSelection(targetSel.arrayId, targetSel.focus);
             try{
               const arrF = Store.getState().arrays[targetSel.arrayId];
-              if(arrF){ Scene.renderArray(arrF); Scene.centerOnArray(arrF); }
+              if(arrF){ 
+                Scene.renderArray(arrF); 
+                // Position camera properly after loading
+                if(Scene.getCamera && Scene.getControls){
+                  const cam = Scene.getCamera();
+                  const ctrl = Scene.getControls();
+                  if(cam && ctrl){
+                    const off = arrF.offset || {x:0, y:0, z:0};
+                    const centerY = off.y + arrF.size.y / 2;
+                    ctrl.target.set(off.x, centerY, off.z);
+                    cam.position.set(8, 10, 14);
+                    ctrl.update();
+                  }
+                }
+              }
             }catch{}
           }
         }catch{}
@@ -1255,8 +1283,8 @@ const Store = createStore((set,get)=>({
             }
           });
         }catch{}
-        // Restore camera last
-        try{ if(cameraSnapshot && Scene.restoreCamera) Scene.restoreCamera(cameraSnapshot); }catch{}
+        // Don't restore camera - use proper positioning instead
+        // try{ if(cameraSnapshot && Scene.restoreCamera) Scene.restoreCamera(cameraSnapshot); }catch{}
         // Force render all arrays to show loaded cells and shells
         try{
           const Sx = Store.getState();
@@ -1278,6 +1306,17 @@ const Store = createStore((set,get)=>({
                 Scene.updateFocus(selD);
                 const arrD = Store.getState().arrays[selD.arrayId];
                 if(arrD) Scene.renderArray(arrD);
+              }
+              // Ensure camera is positioned well after everything loads
+              if(Scene.getCamera && Scene.getControls){
+                const cam = Scene.getCamera();
+                const ctrl = Scene.getControls();
+                if(cam && ctrl){
+                  cam.position.set(8, 10, 14);
+                  ctrl.target.set(0, 3, 0);
+                  ctrl.update();
+                  console.log('[LOAD STATE FINAL] Camera forced to good position');
+                }
               }
             }catch{}
           });
@@ -1355,8 +1394,22 @@ const Store = createStore((set,get)=>({
       try {
         // Focus home array and render it immediately for interaction
         Actions.setSelection(1, {x:0,y:0,z:0});
-        Scene.centerOnArray(home);
         Scene.renderArray(home);
+        // Position camera to show the array nicely from front-above
+        // Home array has offset {x:0, y:1, z:0} and size 8x4x8
+        if(Scene.getCamera && Scene.getControls){
+          const cam = Scene.getCamera();
+          const ctrl = Scene.getControls();
+          if(cam && ctrl){
+            // Array center is at offset (0, 1, 0), look at middle of array
+            const arrayCenter = {x: 0, y: 3, z: 0}; // y: 1 (offset) + 2 (half of height 4)
+            ctrl.target.set(arrayCenter.x, arrayCenter.y, arrayCenter.z);
+            // Camera positioned high and in front to see array well
+            cam.position.set(8, 10, 14);
+            ctrl.update();
+            console.log('[INIT] Camera positioned at', cam.position, 'looking at', ctrl.target);
+          }
+        }
       } catch(e) {
         console.error('Home focus failed:', e);
       }
@@ -1385,6 +1438,17 @@ const Store = createStore((set,get)=>({
         
         // Skip full reconcile during intro to avoid duplicate viewports
         
+        // Final camera positioning to ensure good view
+        if(Scene.getCamera && Scene.getControls){
+          const cam = Scene.getCamera();
+          const ctrl = Scene.getControls();
+          if(cam && ctrl){
+            cam.position.set(8, 10, 14);
+            ctrl.target.set(0, 3, 0);
+            ctrl.update();
+            console.log('[INIT FINAL] Camera set to', cam.position, 'target', ctrl.target);
+          }
+        }
 
         window.__APP_READY = true;
       } catch(e) {
@@ -1392,7 +1456,8 @@ const Store = createStore((set,get)=>({
       }
     },
   }
-}));
+  }; // Close return object
+});
 window.Store = Store;
 
 /* ===========================
@@ -1789,8 +1854,6 @@ const Actions = {
     const arr = S.arrays[arrId];
     if(!arr) return false;
 
-    try{ Scene.spawnDeleteExplosion?.(arr); }catch{}
-
     // Hide immediately in both 3D and 2D
     arr.hidden = true;
     Scene.syncVisibility(arr);
@@ -2123,10 +2186,7 @@ const Actions = {
   },
 
   togglePhysics: ()=>{ 
-    const next = !Store.getState().scene.physics; 
-    Store.setState(s=>({scene:{...s.scene, physics:next}})); 
-    // On first enable, build colliders for all arrays to ensure movement/collision works immediately
-    if(next){ Object.values(Store.getState().arrays).forEach(a=>Scene.debounceColliderRebuild(a)); }
+    Scene.togglePhysicsMode?.();
   },
   toggleGrid: ()=>{ Store.setState(s=>({scene:{...s.scene, showGrid:!s.scene.showGrid}})); Scene.setGridVisible(Store.getState().scene.showGrid); },
   toggleAxes: ()=>{ Store.setState(s=>({scene:{...s.scene, showAxes:!s.scene.showAxes}})); Scene.setAxesVisible(Store.getState().scene.showAxes); },
@@ -6596,7 +6656,7 @@ const Scene = (()=>{
   const connections = new Map(); // aKey(anchor) -> { line, start, end, ... }
   let depGroup=null, depVis=false; // dependency graph overlay
   let ziplineState = { active: false, line: null, direction: new THREE.Vector3(), progress: 0 };
-  let cachedPlayerPos = new THREE.Vector3(); // Cache to avoid Rapier aliasing issues
+  let cachedPlayerPos = new THREE.Vector3(0, 0, 0); // Cache to avoid Rapier aliasing issues - initialize with valid coords
 
   const FancyDefaults = {
     hdri: true,
@@ -6755,7 +6815,7 @@ const Scene = (()=>{
     const mirror = new Reflector(new THREE.PlaneGeometry(400,400), {
       textureWidth: Math.max(256, window.innerWidth),
       textureHeight: Math.max(256, window.innerHeight),
-      clipBias: 0.002
+      clipBias: 0.003
     });
     mirror.rotation.x = -Math.PI/2;
     mirror.position.y = -0.52;
@@ -6846,11 +6906,13 @@ const Scene = (()=>{
 
   function ensureFancyComposer(){
     if(FancyGraphics.composer) return;
-    const fancyTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
-      depthBuffer: true,
-      stencilBuffer: true
-    });
-    FancyGraphics.composer = new EffectComposer(renderer, fancyTarget);
+    if(!renderer || !scene || !camera) return; // Wait for init
+    try{
+      const fancyTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+        depthBuffer: true,
+        stencilBuffer: true
+      });
+      FancyGraphics.composer = new EffectComposer(renderer, fancyTarget);
     if(FancyGraphics.composer.renderTarget1) FancyGraphics.composer.renderTarget1.stencilBuffer = true;
     if(FancyGraphics.composer.renderTarget2) FancyGraphics.composer.renderTarget2.stencilBuffer = true;
     FancyGraphics.passes.render = new RenderPass(scene, camera);
@@ -6892,6 +6954,10 @@ const Scene = (()=>{
     FancyGraphics.passes.output = output;
 
     updateFancyComposerSize();
+    }catch(e){
+      console.warn('Failed to create fancy composer:', e);
+      FancyGraphics.composer = null;
+    }
   }
 
   function ensureFancyHDRI(){
@@ -6912,17 +6978,21 @@ const Scene = (()=>{
 
   function updateFancyComposerSize(){
     if(!FancyGraphics.composer) return;
-    const dpr = Math.min(window.devicePixelRatio||1, 2);
-    FancyGraphics.composer.setPixelRatio(dpr);
-    FancyGraphics.composer.setSize(window.innerWidth, window.innerHeight);
-    if(FancyGraphics.passes.fxaa){
-      FancyGraphics.passes.fxaa.material.uniforms.resolution.value.set(1/(window.innerWidth*dpr), 1/(window.innerHeight*dpr));
-    }
-    if(FancyGraphics.passes.bloom){ FancyGraphics.passes.bloom.setSize(window.innerWidth, window.innerHeight); }
-    if(FancyGraphics.passes.outline){ FancyGraphics.passes.outline.setSize(window.innerWidth, window.innerHeight); }
-    if(FancyGraphics.passes.bokeh){
-      FancyGraphics.passes.bokeh.renderTargetDepth.setSize(window.innerWidth*dpr, window.innerHeight*dpr);
-      FancyGraphics.passes.bokeh.renderTargetColor.setSize(window.innerWidth*dpr, window.innerHeight*dpr);
+    try{
+      const dpr = Math.min(window.devicePixelRatio||1, 2);
+      if(FancyGraphics.composer.setPixelRatio) FancyGraphics.composer.setPixelRatio(dpr);
+      if(FancyGraphics.composer.setSize) FancyGraphics.composer.setSize(window.innerWidth, window.innerHeight);
+      if(FancyGraphics.passes.fxaa){
+        FancyGraphics.passes.fxaa.material.uniforms.resolution.value.set(1/(window.innerWidth*dpr), 1/(window.innerHeight*dpr));
+      }
+      if(FancyGraphics.passes.bloom){ FancyGraphics.passes.bloom.setSize(window.innerWidth, window.innerHeight); }
+      if(FancyGraphics.passes.outline){ FancyGraphics.passes.outline.setSize(window.innerWidth, window.innerHeight); }
+      if(FancyGraphics.passes.bokeh && FancyGraphics.passes.bokeh.renderTargetDepth && FancyGraphics.passes.bokeh.renderTargetColor){
+        FancyGraphics.passes.bokeh.renderTargetDepth.setSize(window.innerWidth*dpr, window.innerHeight*dpr);
+        FancyGraphics.passes.bokeh.renderTargetColor.setSize(window.innerWidth*dpr, window.innerHeight*dpr);
+      }
+    }catch(e){
+      console.warn('Failed to update composer size:', e);
     }
   }
 
@@ -7459,17 +7529,16 @@ const Scene = (()=>{
         material.blending = THREE.NormalBlending;
         material.toneMapped = true;
       }else{
-        material = new THREE.MeshLambertMaterial({
+        // Standard mode: use unlit BasicMaterial for ghost
+        material = new THREE.MeshBasicMaterial({
           color: 0xffffff,
           transparent: true,
           opacity: 0.35,
+          blending: THREE.NormalBlending,
           depthWrite: false,
           depthTest: true,
           vertexColors: true
         });
-        material.blending = THREE.NormalBlending;
-        material.emissive = new THREE.Color(0x000000);
-        material.emissiveIntensity = 0.0;
         material.toneMapped = false;
       }
     }else{
@@ -7506,15 +7575,14 @@ const Scene = (()=>{
         material = new THREE.MeshPhysicalMaterial(params);
         material.toneMapped = true;
       }else{
+        // Standard mode: use unlit BasicMaterial for flat appearance
         const isEmpty = (baseType === 'empty');
-        material = new THREE.MeshLambertMaterial({
+        material = new THREE.MeshBasicMaterial({
           color: isEmpty ? COLORS.empty : 0xffffff,
           transparent: false,
           depthWrite: true,
           vertexColors: true
         });
-        material.emissive = new THREE.Color(0x000000);
-        material.emissiveIntensity = 0.0;
         material.toneMapped = false;
       }
     }
@@ -7664,7 +7732,7 @@ const Scene = (()=>{
       if(record.light){ record.group.remove(record.light); }
       if(record.target){ record.group.remove(record.target); record.target = null; }
       if(wantSpot){
-        const spot = new THREE.SpotLight(0xffffff, 1, 24, Math.PI/4, 0.35, 2.0);
+        const spot = new THREE.SpotLight(0xffffff, 1, 30, Math.PI/4, 0.35, 2.0);
         spot.castShadow = false;
         const target = new THREE.Object3D();
         record.group.add(spot);
@@ -7673,7 +7741,7 @@ const Scene = (()=>{
         record.light = spot;
         record.target = target;
       } else {
-        const point = new THREE.PointLight(0xffffff, 1, 18, 2);
+        const point = new THREE.PointLight(0xffffff, 1, 30, 2);
         point.castShadow = false;
         record.group.add(point);
         record.light = point;
@@ -7734,8 +7802,10 @@ const Scene = (()=>{
   function updateLightProperties(record){
     if(!record?.light) return;
     const lumens = Math.max(0, Number(record.config?.lumens ?? 0));
-    const intensity = lumens <= 0 ? 0 : Math.max(0.1, lumens / 800);
-    const distance = record.config?.distance ?? (lumens <= 0 ? 0 : Math.min(60, 8 + Math.sqrt(lumens||0) * 0.18));
+    // Match present-mode lighting intensity (key light is 3.2, we scale from that)
+    // Default 800 lumens should be ~2.0 intensity (similar to fill+rim combined)
+    const intensity = lumens <= 0 ? 0 : Math.max(0.8, (lumens / 800) * 2.5);
+    const distance = record.config?.distance ?? (lumens <= 0 ? 0 : Math.min(100, 15 + Math.sqrt(lumens||0) * 0.3));
     const color = record.config?.color || '#ffffff';
     try{ record.light.color.set(color); }catch{ record.light.color.set(0xffffff); }
     record.light.intensity = intensity;
@@ -7743,9 +7813,10 @@ const Scene = (()=>{
     record.light.decay = 2;
     if(record.glow && record.glow.material){
       try{ record.glow.material.color.set(color); }catch{}
-      const scale = Math.max(0.22, 0.34 + Math.sqrt(Math.max(lumens,0)) * 0.045);
+      // Prominent glow sphere that scales with intensity
+      const scale = Math.max(0.4, 0.5 + Math.sqrt(Math.max(lumens,0)) * 0.06);
       record.glow.scale.setScalar(scale);
-      record.glow.material.opacity = lumens <= 0 ? 0 : Math.min(1, 0.28 + Math.sqrt(lumens) * 0.018);
+      record.glow.material.opacity = lumens <= 0 ? 0 : Math.min(0.9, 0.55 + Math.sqrt(lumens) * 0.03);
       record.glow.visible = lumens > 0;
       record.glow.material.needsUpdate = true;
     }
@@ -7835,9 +7906,14 @@ const Scene = (()=>{
 
     scene=new THREE.Scene();
     camera=new THREE.PerspectiveCamera(60,window.innerWidth/window.innerHeight,.1,2000);
-    camera.position.set(10,8,13);
+    camera.position.set(8, 10, 14); // Higher and further for better view
     controls=new OrbitControls(camera,renderer.domElement);
+    controls.target.set(0, 3, 0); // Look at array center (considering offset y:1 and height 4)
     controls.enableDamping=true;
+    controls.enabled=true;
+    controls.enableRotate=true;
+    controls.enablePan=true;
+    console.log('[INIT] Camera and controls initialized - controls.enabled:', controls.enabled);
     try{ controls.addEventListener('change', ()=>{
       try{
         const S=Store.getState(); const sel=S.selection;
@@ -7914,20 +7990,10 @@ const Scene = (()=>{
     try{
       await loadRapier();
       if(RAP_READY){
-      await RAPIER.init();
-      rapierWorld=new RAPIER.World({x:0,y:-9.81,z:0});
-        const rb=RAPIER.RigidBodyDesc.kinematicPositionBased();
-        rb.setTranslation(0,2,0);
-      playerBody=rapierWorld.createRigidBody(rb);
-        playerCollider=rapierWorld.createCollider(RAPIER.ColliderDesc.capsule(.5,.35), playerBody);
-        // Remove character controller - use simple kinematic movement
-        controller = null;
-        // Initialize cached player position
-        cachedPlayerPos.set(0, 2, 0);
-        document.getElementById('physChip').textContent='Physics: ON (Simple)';
-        // Center camera on player start
-        controls.target.set(cachedPlayerPos.x, cachedPlayerPos.y, cachedPlayerPos.z);
-        camera.position.set(cachedPlayerPos.x+6, cachedPlayerPos.y+4, cachedPlayerPos.z+8);
+        await RAPIER.init();
+        rapierWorld=new RAPIER.World({x:0,y:-20,z:0}); // Stronger gravity for faster falling
+        console.log('[PHYSICS] Rapier world initialized (physics disabled by default)');
+        document.getElementById('physChip').textContent='Physics: OFF';
       } else {
         document.getElementById('physChip').textContent='Physics: OFF (unavailable)';
       }
@@ -8140,6 +8206,8 @@ const Scene = (()=>{
 
   function computeOcclusion(arr, selection){
     if(!arr || !selection) return;
+    // Don't compute occlusion for deleting arrays
+    if(arr._deleting) return;
     // Determine dominant axis from camera direction relative to array frame
     try{
       const inv = new THREE.Matrix4().copy(arr._frame.matrixWorld).invert();
@@ -8275,6 +8343,9 @@ const Scene = (()=>{
   function rehydrateChunkInstances(arr, ch){
     try{
       if(!ch) return;
+      // CRITICAL: Never rehydrate during deletion - would reset hidden cells
+      if(arr?._deleting) return;
+      
       ch.ensureMesh?.();
       const meshSolid = ch.meshLOD1; const meshGhost = ch.meshGhost; const meshShell = ch.meshShell;
       if(!meshSolid) return;
@@ -8331,6 +8402,8 @@ const Scene = (()=>{
     try{
       if(!(Scene.ChunkManager && Scene.ChunkManager.enabled)) return;
       if(!arr || !arr.chunks) return;
+      // Don't apply occlusion to deleting arrays
+      if(arr._deleting) return;
       const occ = arr._occlusionData || {};
       const blocked = occ.blockedLayers || new Set();
       const axis = occ.axis || occ.facing || 'Z';
@@ -8402,7 +8475,8 @@ const Scene = (()=>{
             const isFormula = !!fresh.formula;
             const hasVal = (fresh.value!=='' && fresh.value!==null && fresh.value!==undefined);
             const emitted = !!(Store.getState().sourceByCell && Store.getState().sourceByCell.get && Store.getState().sourceByCell.get(`${arr.id}:${c.x},${c.y},${c.z}`));
-            const show = isFormula || hasVal || emitted;
+            const hasColor = !!(fresh.meta && fresh.meta.color);
+            const show = isFormula || hasVal || emitted || hasColor;
             const p = localPos(arr,c.x,c.y,c.z);
             temp.position.copy(p); temp.rotation.set(0,0,0); temp.scale.set(1,1,1); temp.updateMatrix();
             const M = temp.matrix.clone();
@@ -8423,7 +8497,7 @@ const Scene = (()=>{
   // Apply global 3D view mode across all arrays: 'standard' | 'solid' | 'hideEmpty'
   function applyViewMode(mode){
     try{
-      const arrays = Object.values(Store.getState().arrays||{});
+      const arrays = Object.values(Store.getState().arrays||{}).filter(arr => !arr._deleting);
       if(mode==='solid'){
         arrays.forEach(arr=>{
           Object.values(arr.chunks||{}).forEach(ch=>{ try{ ch.ensureMesh?.(); ch.setLOD?.(1); rehydrateChunkInstances(arr, ch); }catch{} });
@@ -8441,7 +8515,9 @@ const Scene = (()=>{
         const s = Store.getState().selection;
         if(s?.arrayId && s.focus){
           const arr = Store.getState().arrays[s.arrayId];
-          try{ computeOcclusion(arr, s.focus); if(Scene.ChunkManager && Scene.ChunkManager.enabled){ applyGhostMaskToChunks(arr); } }catch{}
+          if(!arr?._deleting){
+            try{ computeOcclusion(arr, s.focus); if(Scene.ChunkManager && Scene.ChunkManager.enabled){ applyGhostMaskToChunks(arr); } }catch{}
+          }
         }
       }
       needsRender = true;
@@ -8776,6 +8852,9 @@ const Scene = (()=>{
     update(){ /* selection-window LOD handled in renderArray/updateFocus */ }
   };
   function renderArray(arr){
+    // Skip rendering if array is being deleted
+    if(arr._deleting) return;
+    
     // Prune any stale chunk meshes first
     pruneStaleChunkMeshes(arr.id);
     
@@ -8973,6 +9052,9 @@ const Scene = (()=>{
 
   function renderChunk(arrayId, chunk, size){
     const arr = Store.getState().arrays[arrayId];
+    // Skip rendering if array is being deleted
+    if(arr?._deleting) return;
+    
     const mKey = `${arrayId}:${keyChunk(chunk.coord.x,chunk.coord.y,chunk.coord.z)}`;
 
     // Get or create once (no shadowing)
@@ -9478,6 +9560,9 @@ const Scene = (()=>{
   function updateFocus(sel){
     if(!sel.arrayId||!sel.focus){ focusMarker.visible=false; updateAvatars(sel); return; }
     const arr=Store.getState().arrays[sel.arrayId];
+    // Skip if array is being deleted
+    if(arr?._deleting) return;
+    
     // One-time occlusion clear when focus array changes; do not repeatedly clear
     if(lastFocusedArrayId && lastFocusedArrayId !== sel.arrayId){
       const prev = Store.getState().arrays[lastFocusedArrayId];
@@ -9518,7 +9603,15 @@ const Scene = (()=>{
       console.warn('Inspect failed:', e);
     }
   }
-  function centerOnArray(arr){ if(!arr) return; const off=arr.offset||{x:0,y:0,z:0}; controls.target.set(off.x,off.y,off.z); camera.position.set(off.x+arr.size.x*1.2, off.y+arr.size.y*1.2, off.z+arr.size.z*1.8); }
+  function centerOnArray(arr){ 
+    if(!arr) return; 
+    const off=arr.offset||{x:0,y:0,z:0}; 
+    // Look at center of array, not just the offset
+    const centerY = off.y + arr.size.y / 2;
+    controls.target.set(off.x, centerY, off.z); 
+    // Position camera above and in front for good viewing angle
+    camera.position.set(off.x + arr.size.x*1.2, centerY + arr.size.y*1.5, off.z + arr.size.z*1.8); 
+  }
 
   function centerOnPlayer(){
     const px = Number.isFinite(cachedPlayerPos.x) ? cachedPlayerPos.x : 0;
@@ -9548,12 +9641,25 @@ const Scene = (()=>{
   }
   function rebuildCollidersForArray(arr){
     if(!rapierWorld) return;
+    // Only build colliders if physics is actually enabled
+    if(!Store.getState().scene.physics) return;
+    
     clearColliders(arr);
 
-    const occ = new Map(); // key -> 1 if filled
+    const occ = new Map(); // key -> 1 if filled (has value/formula OR has defined color)
+    let solidCount = 0;
     Object.values(arr.chunks).forEach(ch=>{
-      ch.cells.forEach(c=>{ if(c.value!=='' && c.value!==null && c.value!==undefined){ occ.set(`${c.x},${c.y},${c.z}`,1);} });
+      ch.cells.forEach(c=>{ 
+        const hasValue = (c.value!=='' && c.value!==null && c.value!==undefined);
+        const hasFormula = !!(c.formula);
+        const hasColor = !!(c.meta && c.meta.color);
+        if(hasValue || hasFormula || hasColor){ 
+          occ.set(`${c.x},${c.y},${c.z}`,1);
+          solidCount++;
+        }
+      });
     });
+    console.log(`[PHYSICS] Building colliders for array #${arr.id}: ${solidCount} solid cells (value/formula/color)`);
 
     const visited=new Set();
     const inBounds=(x,y,z)=> x>=0&&y>=0&&z>=0&&x<arr.size.x&&y<arr.size.y&&z<arr.size.z;
@@ -9586,7 +9692,11 @@ const Scene = (()=>{
           const hx=(x2-x+1)/2, hy=(y2-y+1)/2, hz=(z2-z+1)/2;
           const center=worldPos(arr, x+hx-.5, y+hy-.5, z+hz-.5);
           const col=RAPIER.ColliderDesc.cuboid(hx*0.9, hy*0.9, hz*0.9).setTranslation(center.x,center.y,center.z);
-          const handle=rapierWorld.createCollider(col); arr._colliders.push(handle);
+          col.setRestitution(0.0); // No bounce for stable platforming
+          col.setFriction(0.7); // Good friction for player grip
+          const handle=rapierWorld.createCollider(col); 
+          arr._colliders.push(handle);
+          console.log(`[PHYSICS] Created collider for array #${arr.id} at (${center.x.toFixed(1)},${center.y.toFixed(1)},${center.z.toFixed(1)}) size (${hx.toFixed(1)},${hy.toFixed(1)},${hz.toFixed(1)})`);
         }
   }
   // Procedural animation system for timed translations/preview
@@ -10037,28 +10147,38 @@ const Scene = (()=>{
     if(time - lastFrame < 16){ __rafId = requestAnimationFrame(animate); return; }
     lastFrame = time;
     try {
-      updateDeleteEffects?.(16);
+      Scene.updateDeleteEffects?.(16);
       if(arrayaAvatar) arrayaAvatar.update(time * 0.001);
+      
+      // Update avatars every frame for continuous camera tracking
+      const sel = Store.getState().selection;
+      if(sel) updateAvatars(sel);
 
-      if(rapierWorld && Store.getState().scene.physics && !physicsStepping){
+      // Ensure controls remain enabled when physics is off
+      const physicsEnabled = Store.getState().scene.physics;
+      if(!physicsEnabled){
+        // Force controls to stay enabled when physics is disabled
+        if(controls){
+          controls.enabled = true;
+          controls.enableRotate = true;
+          controls.enablePan = true;
+        }
+      }
+
+      if(rapierWorld && playerBody && physicsEnabled && !physicsStepping){
       physicsStepping = true;
       try {
         // Skip stepping while colliders are rebuilding to avoid Rapier panics
         const anyBuilding = Object.values(Store.getState().arrays).some(a=>a?._collidersBuilding);
         if(anyBuilding){ physicsStepping=false; return; }
         // Update cached player position safely before any operations
-        if(playerBody) {
-          try {
-            const translation = playerBody.translation();
-            cachedPlayerPos.set(translation.x, translation.y, translation.z);
-          } catch(e) {
-            // If we can't get position, skip this frame
-            physicsStepping = false;
-            return;
-          }
-        } else {
+        try {
+          const translation = playerBody.translation();
+          cachedPlayerPos.set(translation.x, translation.y, translation.z);
+        } catch(e) {
+          // If we can't get position, skip this frame
           physicsStepping = false;
-          return; // No player body
+          return;
         }
         
         // --- START: ZIPLINE LOGIC ---        
@@ -10148,44 +10268,130 @@ const Scene = (()=>{
           Store.setState({ activeProjectiles: newProjectiles });
         }
 
-        // Simple direct movement without complex character controller
+        // Apply jump if requested
+        if(!ziplineState.active && input.j){ handleJump(); }
+        
+        // Apply movement forces for dynamic body
         if(!ziplineState.active && (input.f||input.b||input.l||input.r)){
+          console.log(`[PHYSICS] Movement input: f=${input.f} b=${input.b} l=${input.l} r=${input.r}`);
           if(playerBody){
             try {
-              const dir=new THREE.Vector3(); camera.getWorldDirection(dir); dir.y=0; dir.normalize();
-              const right=new THREE.Vector3().crossVectors(dir,new THREE.Vector3(0,1,0)).normalize();
-              const speed = 0.1;
-              
-              let dx = 0, dz = 0;
-              dx += dir.x*(input.f-input.b) + right.x*(input.r-input.l);
-              dz += dir.z*(input.f-input.b) + right.z*(input.r-input.l);
-              
-              // Direct kinematic movement without character controller
-              const newX = cachedPlayerPos.x + dx * speed;
-              const newZ = cachedPlayerPos.z + dz * speed;
-              
-              playerBody.setNextKinematicTranslation(newX, cachedPlayerPos.y, newZ);
-              cachedPlayerPos.set(newX, cachedPlayerPos.y, newZ);
-            } catch(e) {
-              console.warn('Simple physics movement failed:', e);
-              // Disable physics on repeated failures
-              if(!e._physicsFailed) {
-                e._physicsFailed = true;
-                Store.setState(s => ({scene: {...s.scene, physics: false}}));
-                document.getElementById('physChip').textContent = 'Physics: OFF (error)';
+              // Use mouse yaw for direction in mouse look mode, otherwise use camera
+              let dir, right;
+              if(mouseLookEnabled){
+                // Movement relative to mouse look yaw (forward = direction camera looks)
+                dir = new THREE.Vector3(Math.sin(mouseYaw), 0, Math.cos(mouseYaw));
+                right = new THREE.Vector3(Math.cos(mouseYaw), 0, -Math.sin(mouseYaw));
+              } else {
+                // Movement relative to camera
+                dir = new THREE.Vector3(); 
+                camera.getWorldDirection(dir); 
+                dir.y = 0; 
+                dir.normalize();
+                right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0,1,0)).normalize();
               }
+              
+              const force = 3.5; // Moderate force for good platformer feel
+              
+              let fx = 0, fz = 0;
+              fx += dir.x*(input.f-input.b) + right.x*(input.r-input.l);
+              fz += dir.z*(input.f-input.b) + right.z*(input.r-input.l);
+              
+              // Apply impulse for responsive control
+              const impulse = {x: fx * force, y: 0, z: fz * force};
+              playerBody.applyImpulse(impulse, true);
+              
+              // Limit horizontal velocity to prevent runaway speed
+              const vel = playerBody.linvel();
+              const maxSpeed = 4.0; // Reasonable platformer speed
+              const horizSpeed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
+              if(horizSpeed > maxSpeed){
+                const scale = maxSpeed / horizSpeed;
+                playerBody.setLinvel({x: vel.x * scale, y: vel.y, z: vel.z * scale}, true);
+              }
+            } catch(e) {
+              console.warn('Physics movement failed:', e);
             }
+          } else {
+            console.warn('[PHYSICS] No playerBody for movement');
           }
         }
 
-        // Basic physics step without complex collision
+        // Sync jumpVelocity from physics body for animation
+        if(!ziplineState.active){
+          try{
+            const p = {x: cachedPlayerPos.x, y: cachedPlayerPos.y, z: cachedPlayerPos.z};
+            
+            // Check if falling off the world
+            if(p.y < 0 && physicsSpawnPos){
+              console.log('[PHYSICS] Fell off world, respawning at spawn point');
+              playerBody.setTranslation(physicsSpawnPos, true);
+              playerBody.setLinvel({x: 0, y: 0, z: 0}, true);
+              cachedPlayerPos.set(physicsSpawnPos.x, physicsSpawnPos.y, physicsSpawnPos.z);
+              jumpVelocity = 0;
+              landingSquashTime = 0;
+            } else {
+              // Sync jumpVelocity with actual physics velocity for animation
+              const vel = playerBody.linvel();
+              jumpVelocity = vel.y * 2; // Scale for animation sensitivity
+              
+              // Detect landing for squash animation using raycast
+              const wasAirborne = (jumpVelocity < -2);
+              // Raycast downward to detect ground/platforms
+              let nowGrounded = false;
+              if(RAPIER && rapierWorld && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)){
+                try{
+                  const ray = new RAPIER.Ray({x: p.x, y: p.y, z: p.z}, {x: 0, y: -1, z: 0});
+                  const maxToi = 0.6;
+                  const hit = rapierWorld.castRay(ray, maxToi, true);
+                  nowGrounded = hit !== null && Math.abs(vel.y) < 1.0;
+                }catch(e){
+                  // Silently ignore raycast errors
+                }
+              }
+              if(wasAirborne && nowGrounded && landingSquashTime === 0){
+                landingSquashTime = 1; // Trigger landing squash
+                console.log('[PHYSICS] Landing detected!');
+              }
+            }
+          }catch(e){
+            console.warn('Jump sync failed:', e);
+          }
+        }
+        
+        // Physics step - must happen BEFORE reading back position
         if(!ziplineState.active){
           try {
-            // Apply jump if requested
-            if(input.j){ handleJump(); }
-      rapierWorld.step();
-            // follow camera using cached position (target + position)
-      if(playerBody){
+            rapierWorld.step();
+            
+            // Update cached position AFTER physics step
+            if(playerBody){
+              const translation = playerBody.translation();
+              cachedPlayerPos.set(translation.x, translation.y, translation.z);
+            }
+            
+            // Follow camera using updated position
+            if(mouseLookEnabled){
+              // First-person / third-person platformer camera with mouse look
+              const playerPos = new THREE.Vector3(cachedPlayerPos.x, cachedPlayerPos.y + 0.8, cachedPlayerPos.z);
+              
+              // Camera positioned behind and above player
+              const distance = 6.0;
+              const height = 2.5;
+              
+              // Calculate camera position based on mouse yaw/pitch
+              const camX = playerPos.x - Math.sin(mouseYaw) * distance * Math.cos(mousePitch);
+              const camY = playerPos.y + height + Math.sin(mousePitch) * distance;
+              const camZ = playerPos.z - Math.cos(mouseYaw) * distance * Math.cos(mousePitch);
+              
+              camera.position.set(camX, camY, camZ);
+              controls.target.copy(playerPos);
+              
+              // Disable orbit controls during mouse look
+              controls.enableRotate = false;
+              controls.enablePan = false;
+            } else {
+              // Default third-person camera when not in mouse look during physics
               const t = new THREE.Vector3(cachedPlayerPos.x, cachedPlayerPos.y+0.8, cachedPlayerPos.z);
               controls.target.lerp(t, 0.12);
               const desired = new THREE.Vector3(t.x+6, t.y+3.2, t.z+7.5);
@@ -10333,16 +10539,18 @@ const Scene = (()=>{
       for(const arr of arrays){
         if(!arr) continue; const T = arr.params && arr.params.timed; if(!T) continue;
         if(T.previewInArray){
-          const dur = (T.dir>0? T.ticks : (T.reverseTicks||T.ticks));
-          T.t = (T.t + 1);
-          const r = Math.min(1, T.t / Math.max(1,dur));
-          const p = (T.dir>0 ? r : (1 - r));
           // Ensure timing defaults are sane even if only PREVIEW was called
           if(!T.ticks) { T.ticks = 120; }
           // Ensure baseOffset captured once to compute from starting state
           if(!T.baseOffset){ T.baseOffset = { ...(arr.offset||{x:0,y:0,z:0}) }; }
           // Ensure a timed plan exists; if not, derive from formulas
           if(!T.plan.length){ try{ (Scene.buildTimedPlanFromArray||buildTimedPlanFromArray)(arr); }catch{} }
+          
+          // Calculate progress for this frame
+          const dur = (T.dir>0? T.ticks : (T.reverseTicks||T.ticks));
+          // Use T.t+1 for drawing so we reach exactly p=1.0 at the endpoint
+          const r = Math.min(1, (T.t + 1) / Math.max(1,dur));
+          const p = (T.dir>0 ? r : (1 - r));
           // Green overlays for transformed cells only; ensure overlays draw over everything
           if(T.overlay){
             // Clear previous overlay contents
@@ -10453,29 +10661,40 @@ const Scene = (()=>{
               const mesh = new THREE.Mesh(overlayGeo, mat.clone()); mesh.renderOrder=9999; mesh.position.copy(parentIsFrame? anchorL : (arr._frame? anchorL.clone().applyMatrix4(arr._frame.matrixWorld) : anchorL.clone().add(new THREE.Vector3((arr.offset?.x||0),(arr.offset?.y||0),(arr.offset?.z||0)))) ); T.overlay.group.add(mesh);
             }
           }
-          // End/loop logic — snap back to exact start when a leg completes
+          // Increment time AFTER drawing current frame
+          T.t = (T.t + 1);
+          
+          // End/loop logic — transition at completion (check if NEXT frame would exceed)
           if(r>=1){
-            // Reset time BEFORE flipping dir so the next frame starts at p=0/1 cleanly
-            T.t = 0;
+            console.log(`[PREVIEW] Array #${arr.id} completed: r=${r.toFixed(3)}, dir=${T.dir}, reverse=${T.reverse}, repeat=${T.repeat}`);
+            T.t = 0; // Reset time for next cycle
             let continueCycle = false;
             if(T.reverse){
               if(T.dir>0){
-                T.dir = -1;
+                console.log(`[PREVIEW] Array #${arr.id} switching to REVERSE direction`);
+                T.dir = -1; // Switch to reverse direction
                 continueCycle = true;
               } else {
-                T.dir = 1;
+                console.log(`[PREVIEW] Array #${arr.id} reverse complete, repeat=${T.repeat}`);
+                T.dir = 1; // Switch back to forward
                 continueCycle = !!T.repeat;
               }
             } else if(T.repeat){
-              T.dir = 1;
+              console.log(`[PREVIEW] Array #${arr.id} repeating from start`);
+              T.dir = 1; // Keep forward direction
               continueCycle = true;
             }
-            if(continueCycle){ continue; }
-            // one-shot: clear overlay after brief hold and unmask content
-            setTimeout(()=>{ try{ while(T.overlay.group.children.length){ const ch=T.overlay.group.children.pop(); ch.geometry?.dispose?.(); ch.material?.dispose?.(); } }catch{} }, 120);
-            try{ T.overlay.group.parent?.remove(T.overlay.group); }catch{}
-            T.overlay=null;
-            try{ maskArrayForPreview(arr,false); }catch{}
+            console.log(`[PREVIEW] Array #${arr.id} continueCycle=${continueCycle}`);
+            // Only stop and cleanup if NOT continuing the cycle
+            if(!continueCycle){
+              console.log(`[PREVIEW] Array #${arr.id} STOPPING preview`);
+              // one-shot: clear overlay after brief hold and unmask content
+              T.previewInArray = false;
+              setTimeout(()=>{ try{ while(T.overlay.group.children.length){ const ch=T.overlay.group.children.pop(); ch.geometry?.dispose?.(); ch.material?.dispose?.(); } }catch{} }, 120);
+              try{ T.overlay.group.parent?.remove(T.overlay.group); }catch{}
+              T.overlay=null;
+              try{ maskArrayForPreview(arr,false); }catch{}
+            }
           }
         }
         // If global 3D preview is enabled, apply full-array motion using the same plan and p3D
@@ -10982,6 +11201,40 @@ const Scene = (()=>{
 
   // keyboard for physics locomotion
   const input={f:0,b:0,l:0,r:0,j:0};
+  let mouseLookEnabled = false;
+  let mouseYaw = 0; // Camera rotation around Y axis
+  let mousePitch = 0; // Camera rotation around X axis
+  
+  // Mouse look for physics mode (3D platformer controls)
+  window.addEventListener('mousemove',(e)=>{
+    if(!mouseLookEnabled || !Store.getState().scene.physics) return;
+    
+    const sensitivity = 0.002;
+    mouseYaw -= e.movementX * sensitivity;
+    mousePitch -= e.movementY * sensitivity;
+    mousePitch = Math.max(-Math.PI/3, Math.min(Math.PI/3, mousePitch)); // Limit pitch
+    
+    console.log(`[PHYSICS] Mouse look: yaw=${(mouseYaw*180/Math.PI).toFixed(1)}°, pitch=${(mousePitch*180/Math.PI).toFixed(1)}°`);
+  }, true);
+  
+  // Click to enable mouse look in physics mode
+  window.addEventListener('click',(e)=>{
+    if(Store.getState().scene.physics && !mouseLookEnabled){
+      e.preventDefault();
+      mouseLookEnabled = true;
+      document.body.requestPointerLock?.();
+      console.log('[PHYSICS] Mouse look enabled - move mouse to look around, ESC to exit');
+    }
+  }, true);
+  
+  // Detect pointer lock changes
+  document.addEventListener('pointerlockchange',()=>{
+    if(!document.pointerLockElement){
+      mouseLookEnabled = false;
+      console.log('[PHYSICS] Mouse look disabled');
+    }
+  });
+  
   // Toggle arrow mapping via middle mouse button (Mouse 3)
   window.addEventListener('mousedown',(e)=>{
     if(e.button===1){
@@ -10998,13 +11251,18 @@ const Scene = (()=>{
       const activeTag = document.activeElement?.tagName;
       const direct = document.getElementById('directEdit');
       const typing = (activeTag==='INPUT' || activeTag==='TEXTAREA' || (direct && direct.style.display==='block'));
-      if(!typing && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Spacebar','w','a','s','d','W','A','S','D'].includes(e.key)){
+      if(!typing && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Spacebar','w','a','s','d','W','A','S','D','Escape'].includes(e.key)){
         e.preventDefault();
         if(e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.f=1;
         if(e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.b=1;
-        if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.l=1;
-        if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.r=1;
+        if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.r=1;
+        if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.l=1;
         if(e.key===' '||e.key==='Spacebar') input.j=1;
+        if(e.key==='Escape'){
+          console.log('[PHYSICS] ESC pressed - exiting physics mode');
+          Actions.togglePhysics();
+          return;
+        }
         return;
       }
       if(e.key==='p'||e.key==='P'){ Actions.togglePhysics(); return; }
@@ -11095,24 +11353,29 @@ const Scene = (()=>{
         const depthMode = !!Store.getState().scene.arrowMapDepth;
         let dx=0, dy=0, dz=0;
         if(depthMode){
-          // Depth mode: Up/Down control depth (Z) relative to camera; Left/Right control X relative to camera
+          // Depth mode: Up/Down control depth (Z) away/toward camera; Left/Right control X
           if(e.key==='ArrowLeft')  dx = (signX>0 ? -1 : +1);
           if(e.key==='ArrowRight') dx = (signX>0 ? +1 : -1);
-          if(e.key==='ArrowUp')    dz = (signZ>0 ? -1 : +1);
-          if(e.key==='ArrowDown')  dz = (signZ>0 ? +1 : -1);
+          if(e.key==='ArrowUp')    dz = (signZ>0 ? +1 : -1); // Fixed: toward camera (+Z when viewing from +Z)
+          if(e.key==='ArrowDown')  dz = (signZ>0 ? -1 : +1); // Fixed: away from camera (-Z when viewing from +Z)
       } else {
           // Standard view-dependent mapping (height on Up/Down except top/bottom views)
           if(major==='X'){
-            if(e.key==='ArrowLeft')  dz = (sign>0 ? -1 : +1);
-            if(e.key==='ArrowRight') dz = (sign>0 ? +1 : -1);
+            // Viewing along X axis (east/west): Left/Right control Z, Up/Down control Y
+            // When viewing from +X (east), left should be +Z (north), right should be -Z (south)
+            if(e.key==='ArrowLeft')  dz = (sign>0 ? +1 : -1);
+            if(e.key==='ArrowRight') dz = (sign>0 ? -1 : +1);
             if(e.key==='ArrowUp')    dy = -1;
             if(e.key==='ArrowDown')  dy = +1;
           } else if(major==='Z'){
-            if(e.key==='ArrowLeft')  dx = (sign>0 ? -1 : +1);
-            if(e.key==='ArrowRight') dx = (sign>0 ? +1 : -1);
+            // Viewing along Z axis (north/south): Left/Right control X, Up/Down control Y
+            // When viewing from +Z (south), left should be +X (east), right should be -X (west)
+            if(e.key==='ArrowLeft')  dx = (sign>0 ? +1 : -1);
+            if(e.key==='ArrowRight') dx = (sign>0 ? -1 : +1);
             if(e.key==='ArrowUp')    dy = -1;
             if(e.key==='ArrowDown')  dy = +1;
           } else { // major==='Y'
+            // Viewing from top/bottom: Left/Right control X, Up/Down control Z
             if(e.key==='ArrowLeft')  dx = -1;
             if(e.key==='ArrowRight') dx = +1;
             if(e.key==='ArrowUp')    dz = (sign>0 ? -1 : +1);
@@ -11129,7 +11392,11 @@ const Scene = (()=>{
         }
       }
       // Immediate typing: Enter resumes, other printable keys clear and start typing
-      if(e.key==='Enter') { UI.openEditor(); }
+      if(e.key==='Enter') { 
+        // Don't re-open if editor was just closed (prevents clearing cell on rapid Enter presses)
+        const timeSinceClose = Date.now() - (els.direct._closedAt || 0);
+        if(timeSinceClose > 300) UI.openEditor(); 
+      }
       else if(e.key==='=') { UI.startDirectTyping('='); e.preventDefault(); }
       else if(e.key.length===1 && !e.ctrlKey && !e.altKey && !e.metaKey) { UI.startDirectTyping(e.key); e.preventDefault(); }
       else if(e.key==='f'||e.key==='F') UI.toggleFxPanel();
@@ -11145,13 +11412,13 @@ const Scene = (()=>{
         e.preventDefault();
         if(e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.f=0;
         if(e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.b=0;
-        if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.l=0;
-        if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.r=0;
+        if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.r=0;
+        if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.l=0;
         if(e.key===' '||e.key==='Spacebar') input.j=0; 
         return;
       }
     }
-    if(e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.f=0; if(e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.b=0; if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.l=0; if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.r=0; if(e.key===' '||e.key==='Spacebar') input.j=0; 
+    if(e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.f=0; if(e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.b=0; if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.r=0; if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.l=0; if(e.key===' '||e.key==='Spacebar') input.j=0; 
   },true);
   const highlights=new Map(); // anchor -> {mode, mesh}
   function setHighlightMode(arr,anchor,config){
@@ -11539,7 +11806,7 @@ const Scene = (()=>{
     function create(THREE){
       const group = new THREE.Group();
       group.name = 'ArrayaAvatar';
-      group.scale.setScalar(0.42);
+      group.scale.setScalar(0.28); // Smaller than Celli
       const greens = greensRaw.map(rgb=> new THREE.Color(rgb[0], rgb[1], rgb[2]));
       const segments=[];
       for(let i=0;i<NSEG;i++){
@@ -11548,11 +11815,14 @@ const Scene = (()=>{
         const norArray = new Float32Array(cubeBase.positions.length);
         geometry.setAttribute('position', new THREE.BufferAttribute(posArray,3));
         geometry.setAttribute('normal', new THREE.BufferAttribute(norArray,3));
-        geometry.setIndex(cubeBase.indices);
-        const mat = new THREE.MeshLambertMaterial({ color: greens[i] });
-        mat.depthTest = false; mat.depthWrite = false; mat.toneMapped = false;
+        const IndexType = cubeBase.indices.constructor;
+        const indexCopy = new IndexType(cubeBase.indices);
+        geometry.setIndex(new THREE.BufferAttribute(indexCopy, 1));
+        const mat = new THREE.MeshLambertMaterial({ color: greens[i], side: THREE.DoubleSide }); // DoubleSide for proper depth visibility
+        mat.depthTest = true; mat.depthWrite = true; mat.toneMapped = false;
         const mesh = new THREE.Mesh(geometry, mat);
-        mesh.castShadow = false; mesh.receiveShadow = false; mesh.renderOrder = 10500;
+        mesh.castShadow = false; mesh.receiveShadow = false;
+        mesh.renderOrder = 50; // Body segments render before faces (50 < 100)
         group.add(mesh);
         segments.push({ mesh, posArray, norArray, geometry });
       }
@@ -11561,7 +11831,12 @@ const Scene = (()=>{
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(base.positions.slice(),3));
         if(base.normals){ geometry.setAttribute('normal', new THREE.BufferAttribute(base.normals.slice(),3)); }
-        geometry.setIndex(base.indices);
+        if(base.indices && base.indices.length > 0){ 
+          // Create a new TypedArray of the same type as the original
+          const IndexType = base.indices.constructor;
+          const indexCopy = new IndexType(base.indices);
+          geometry.setIndex(new THREE.BufferAttribute(indexCopy, 1));
+        }
         return geometry;
       }
 
@@ -11578,14 +11853,27 @@ const Scene = (()=>{
         smileGeo.attributes.normal.array.set(normals);
       }
 
-      const featureMat = new THREE.MeshLambertMaterial({ color: new THREE.Color(0.06,0.07,0.07) });
-      featureMat.depthTest = false; featureMat.depthWrite = false; featureMat.toneMapped = false;
-      const eyeL = new THREE.Mesh(eyeGeo.clone(), featureMat.clone());
-      const eyeR = new THREE.Mesh(eyeGeo.clone(), featureMat.clone());
-      const smile = new THREE.Mesh(smileGeo.clone(), featureMat.clone());
+      const featureMat = new THREE.MeshLambertMaterial({ 
+        color: new THREE.Color(0.06,0.07,0.07), 
+        side: THREE.FrontSide // Only visible from front
+      });
+      featureMat.depthTest = true; 
+      featureMat.depthWrite = true; 
+      featureMat.toneMapped = false;
+      featureMat.colorWrite = true; // Ensure they render
+      const eyeL = new THREE.Mesh(eyeGeo, featureMat.clone());
+      const eyeR = new THREE.Mesh(eyeGeo, featureMat.clone());
+      const smile = new THREE.Mesh(smileGeo, featureMat.clone());
       eyeL.castShadow = eyeR.castShadow = smile.castShadow = false;
       eyeL.receiveShadow = eyeR.receiveShadow = smile.receiveShadow = false;
-      eyeL.renderOrder = eyeR.renderOrder = smile.renderOrder = 10500;
+      // Set render order so faces render on top of body segments
+      eyeL.renderOrder = 100;
+      eyeR.renderOrder = 100;
+      smile.renderOrder = 100;
+      // Frustum culling enabled so back faces are culled properly
+      eyeL.frustumCulled = false;
+      eyeR.frustumCulled = false;
+      smile.frustumCulled = false;
       group.add(eyeL, eyeR, smile);
 
       const hd = D/2;
@@ -11604,6 +11892,7 @@ const Scene = (()=>{
             if(v) this.needsUpdate = true;
           } else {
             group.visible = v;
+            if(v) this.needsUpdate = true;
           }
         },
         setAnchor(vec){ group.position.copy(vec); },
@@ -11706,10 +11995,6 @@ const Scene = (()=>{
     return { create };
   })();
 
-  if(typeof ensureArrayaAvatar === 'function'){
-    try{ ensureArrayaAvatar(); }catch(err){ console.warn('Arraya avatar deferred init failed:', err); }
-  }
-
   // Celli and Arraya avatars
   let celli, arraya, arrayaAvatar;
   function ensureArrayaAvatar(){
@@ -11733,6 +12018,103 @@ const Scene = (()=>{
   }
 
   function updateAvatars(sel){
+    // Don't update avatars during swap animation
+    if(swapAnimating) return;
+    
+    const physicsMode = Store.getState().scene.physics;
+    
+    // ONLY position from physics if physics is actually enabled AND playerBody exists
+    if(physicsMode && playerBody && rapierWorld){
+      try{
+        const translation = playerBody.translation();
+        celli.position.set(translation.x, translation.y - 0.3, translation.z); // Lower visual to sit on cells
+        celli.visible = true;
+        
+        // Stretch and squash animation during jump/fall with anticipation
+        const baseScale = 0.7;
+        
+        // Anticipation squash when preparing to jump
+        if(anticipationSquashTime > 0){
+          const squashY = 0.65; // Squash down to build energy
+          const expandXZ = 1.25; // Expand horizontally
+          celli.scale.set(baseScale * expandXZ, baseScale * squashY, baseScale * expandXZ);
+          landingSquashTime = 0; // Reset landing animation
+        }
+        // Jump stretch - elongate while ascending
+        else if(jumpVelocity > 4){
+          const stretchAmount = 1 + (jumpVelocity - 4) * 0.06; // More dramatic stretch
+          const compressXZ = 1 - (jumpVelocity - 4) * 0.02; // Compress horizontally
+          celli.scale.set(baseScale * Math.max(0.75, compressXZ), baseScale * stretchAmount, baseScale * Math.max(0.75, compressXZ));
+          landingSquashTime = 0;
+        }
+        // Falling stretch - elongate while descending fast
+        else if(jumpVelocity < -3){
+          const fallStretch = 1 + Math.abs(jumpVelocity + 3) * 0.04;
+          const fallCompress = 1 - Math.abs(jumpVelocity + 3) * 0.015;
+          celli.scale.set(baseScale * Math.max(0.8, fallCompress), baseScale * fallStretch, baseScale * Math.max(0.8, fallCompress));
+          landingSquashTime = 0;
+        }
+        // Landing squash and recovery
+        else if(Math.abs(jumpVelocity) < 0.5 && translation.y <= 0.8){
+          if(landingSquashTime === 0){
+            landingSquashTime = 1; // Trigger landing squash
+          }
+          // Landing squash and recovery animation over ~300ms
+          if(landingSquashTime < 18){
+            const t = landingSquashTime / 18;
+            // Squash down then bounce back up
+            let squashY, expandXZ;
+            if(t < 0.3){
+              // Initial impact squash (frames 1-5)
+              const impactT = t / 0.3;
+              squashY = 1 - 0.35 * impactT; // 1.0 -> 0.65
+              expandXZ = 1 + 0.3 * impactT; // 1.0 -> 1.3
+            } else {
+              // Recovery with slight overshoot (frames 6-18)
+              const recoveryT = (t - 0.3) / 0.7;
+              const easeOut = 1 - Math.pow(1 - recoveryT, 3); // Cubic ease out
+              squashY = 0.65 + 0.38 * easeOut; // 0.65 -> 1.03 -> 1.0
+              expandXZ = 1.3 - 0.32 * easeOut; // 1.3 -> 0.98 -> 1.0
+              // Add slight overshoot at the end
+              if(recoveryT > 0.8){
+                const overshootT = (recoveryT - 0.8) / 0.2;
+                squashY += 0.03 * Math.sin(overshootT * Math.PI);
+              }
+            }
+            celli.scale.set(baseScale * expandXZ, baseScale * squashY, baseScale * expandXZ);
+            landingSquashTime++;
+          } else {
+            // Fully recovered to normal
+            celli.scale.set(baseScale, baseScale, baseScale);
+          }
+        }
+        // Normal state (walking or gentle movement)
+        else {
+          celli.scale.set(baseScale, baseScale, baseScale);
+          if(Math.abs(jumpVelocity) > 1) landingSquashTime = 0; // Reset if airborne
+        }
+        
+        // Physics mode: face movement direction
+        if(mouseLookEnabled){
+          // Face the mouse look direction
+          celli.rotation.y = mouseYaw;
+        } else {
+          // Face camera direction
+          const camDir = new THREE.Vector3();
+          camera.getWorldDirection(camDir);
+          camDir.y = 0;
+          camDir.normalize();
+          const targetAngle = Math.atan2(camDir.x, camDir.z);
+          celli.rotation.y = targetAngle;
+        }
+      }catch{
+        celli.visible = false;
+      }
+      if(arrayaAvatar) arrayaAvatar.setVisible(false);
+      return;
+    }
+    
+    // Edit mode: position from selection
     if(!sel.arrayId||!sel.focus){
       celli.visible=false;
       if(arrayaAvatar) arrayaAvatar.setVisible(false);
@@ -11740,8 +12122,7 @@ const Scene = (()=>{
     }
     const arr=Store.getState().arrays[sel.arrayId];
     const pos=worldPos(arr,sel.focus.x,sel.focus.y,sel.focus.z);
-    celli.position.copy(pos).add(new THREE.Vector3(0,.7,0)); celli.visible=true; celli.rotation.y+=0.02;
-
+    
     let cell = null;
     try{ cell = UI.getCell(sel.arrayId,sel.focus); }catch{}
     if(!cell){
@@ -11751,16 +12132,186 @@ const Scene = (()=>{
     const valueText = (cell?.value||'');
     const hasArray = /ARRAY\(/i.test(formulaText) || /ARRAY\(/i.test(valueText);
     ensureArrayaAvatar();
+    
+    // Swap between Celli and Arraya with animation
     if(arrayaAvatar){
-      arrayaAvatar.setVisible(hasArray);
-      if(hasArray){
+      const shouldShowArraya = hasArray;
+      const arrayaVisible = arrayaAvatar.group?.visible || false;
+      const wasArraya = arrayaAvatar._lastCell && arrayaAvatar._lastCell.hasArray;
+      const currentCellKey = `${sel.arrayId}:${sel.focus.x},${sel.focus.y},${sel.focus.z}`;
+      const cellChanged = (arrayaAvatar._lastCellKey !== currentCellKey);
+      
+      if(shouldShowArraya && !arrayaVisible){
+        // Swap from Celli to Arraya with swirl animation
+        console.log('[AVATAR] Starting swap: Celli -> Arraya');
+        // Update Arraya's body to get correct headOffset before animating
+        arrayaAvatar.needsUpdate = true;
         arrayaAvatar.update(0);
-        const target = pos.clone().add(new THREE.Vector3(.8,0,0));
-        const headOffset = arrayaAvatar.headOffset || new THREE.Vector3();
-        const scale = arrayaAvatar.group?.scale?.x || 1;
-        const offsetWorld = headOffset.clone().multiplyScalar(scale);
-        arrayaAvatar.setAnchor(target.clone().sub(offsetWorld));
+        // Calculate facing angle before swap - use cell position for consistent angle
+        const cellToCamera = new THREE.Vector3().subVectors(camera.position, pos);
+        cellToCamera.y = 0;
+        cellToCamera.normalize();
+        const targetAngle = Math.atan2(cellToCamera.x, cellToCamera.z);
+        const degrees = (targetAngle * 180 / Math.PI).toFixed(1);
+        console.log(`[AVATAR] Swap spawn: cell(${pos.x.toFixed(1)},${pos.z.toFixed(1)}), camera(${camera.position.x.toFixed(1)},${camera.position.z.toFixed(1)}), direction(${cellToCamera.x.toFixed(2)},${cellToCamera.z.toFixed(2)}), angle=${degrees}°`);
+        arrayaAvatar._targetRotation = targetAngle;
+        animateAvatarSwap(celli, arrayaAvatar, pos);
+        arrayaAvatar._lastCellKey = currentCellKey;
+        arrayaAvatar._lastCell = {hasArray: true};
+      } else if(!shouldShowArraya && arrayaVisible){
+        // Swap from Arraya back to Celli
+        console.log('[AVATAR] Starting swap: Arraya -> Celli');
+        animateAvatarSwap(arrayaAvatar.group, celli, pos);
+        arrayaAvatar._lastCellKey = currentCellKey;
+        arrayaAvatar._lastCell = {hasArray: false};
+      } else if(shouldShowArraya){
+        // Moving between ARRAY cells: just reposition Arraya, no swap
+        arrayaAvatar.setVisible(true);
+        celli.visible = false;
+        
+        // Update body curve if cell changed
+        if(cellChanged){
+          arrayaAvatar.needsUpdate = true;
+          arrayaAvatar.update(0);
+        }
+        
+        // Position centered ABOVE the cell - simple direct positioning
+        const target = pos.clone().add(new THREE.Vector3(0, 0.8, 0));
+        arrayaAvatar.group.position.copy(target);
+        arrayaAvatar.group.scale.set(0.28, 0.28, 0.28);
+        
+        // Update rotation on cell change or if not set
+        if(cellChanged || arrayaAvatar._targetRotation === undefined){
+          // Face camera - calculate direction from cell to camera
+          const cellToCamera = new THREE.Vector3().subVectors(camera.position, pos);
+          cellToCamera.y = 0;
+          cellToCamera.normalize();
+          // For character facing: atan2(x, z) where character looks down +Z by default
+          const targetAngle = Math.atan2(cellToCamera.x, cellToCamera.z);
+          const degrees = (targetAngle * 180 / Math.PI).toFixed(1);
+          console.log(`[AVATAR] Arraya spawn at cell(${pos.x.toFixed(1)},${pos.z.toFixed(1)}), camera(${camera.position.x.toFixed(1)},${camera.position.z.toFixed(1)}), direction(${cellToCamera.x.toFixed(2)},${cellToCamera.z.toFixed(2)}), angle=${degrees}°`);
+          arrayaAvatar.group.rotation.y = targetAngle;
+          arrayaAvatar._targetRotation = targetAngle;
+        } else {
+          // Keep static rotation
+          arrayaAvatar.group.rotation.y = arrayaAvatar._targetRotation;
+        }
+        
+        arrayaAvatar._lastCellKey = currentCellKey;
+        arrayaAvatar._lastCell = {hasArray: true};
+      } else {
+        // Celli is visible - continuous camera tracking
+        celli.position.copy(pos).add(new THREE.Vector3(0,.7,0));
+        celli.visible=true;
+        celli.scale.set(0.7, 0.7, 0.7); // Smaller Celli
+        
+        // Celli continuously faces camera
+        const celliToCamera = new THREE.Vector3().subVectors(camera.position, celli.position);
+        celliToCamera.y = 0; // Project to horizontal plane
+        celliToCamera.normalize();
+        const targetAngle = Math.atan2(celliToCamera.x, celliToCamera.z);
+        celli.rotation.y = targetAngle;
+        
+        arrayaAvatar._lastCellKey = currentCellKey;
+        arrayaAvatar._lastCell = {hasArray: false};
       }
+    }
+  }
+
+  let swapAnimating = false; // Guard against overlapping swap animations
+  
+  function animateAvatarSwap(fromAvatar, toAvatarOrFactory, cellPos){
+    if(swapAnimating){
+      console.log('[AVATAR] Swap already in progress, skipping');
+      return;
+    }
+    swapAnimating = true;
+    console.log('[AVATAR] animateAvatarSwap called', {from: fromAvatar.name || 'Celli', to: toAvatarOrFactory.group?.name || 'Celli'});
+    
+    try{
+      // Magical swirl/spin/shrink animation
+      const startPos = fromAvatar.position.clone();
+      const startScale = fromAvatar.scale?.clone() || new THREE.Vector3(1,1,1);
+      const startRot = fromAvatar.rotation?.y || 0;
+      const isCelliFrom = (fromAvatar === celli);
+      const isArrayaTo = (toAvatarOrFactory.group != null);
+      const toAvatar = toAvatarOrFactory.group || toAvatarOrFactory;
+      const isCelliTo = (toAvatar === celli);
+      const finalTargetScale = isCelliTo ? 0.7 : 0.28;
+      
+      let t0 = null;
+      const dur = 400; // 400ms for smooth magical swap
+      
+      const swapFrame = (ts)=>{
+        if(t0 == null) t0 = ts;
+        const elapsed = ts - t0;
+        const u = Math.min(1, elapsed / dur);
+        
+        if(u % 0.1 < 0.02) console.log(`[AVATAR] Swap u=${u.toFixed(2)}`);
+        
+        // First half: shrink and spin out
+        if(u <= 0.5){
+          const t = u * 2; // 0 to 1 in first half
+          const scale = startScale.x * (1 - (0.7 * t)); // Shrink to 30%
+          const spin = startRot + (Math.PI * 4 * t); // 4 full rotations
+          const rise = 0.35 * Math.sin(t * Math.PI); // Hop up
+          fromAvatar.scale.set(scale, scale, scale);
+          fromAvatar.rotation.y = spin;
+          fromAvatar.position.x = startPos.x;
+          fromAvatar.position.y = startPos.y + rise;
+          fromAvatar.position.z = startPos.z;
+          fromAvatar.visible = true;
+          toAvatar.visible = false;
+        } else {
+          // Second half: grow and spin in with new avatar
+          fromAvatar.visible = false;
+          const t = (u - 0.5) * 2; // 0 to 1 in second half
+          
+          toAvatar.visible = true;
+          const scale = finalTargetScale * (0.3 + (0.7 * t)); // Grow from 30% to 100%
+          const targetRotation = arrayaAvatar._targetRotation || startRot;
+          const spin = targetRotation + Math.PI * 2 - (Math.PI * 2 * t); // Reverse spin
+          const rise = 0.35 * Math.sin((1-t) * Math.PI);
+          toAvatar.scale.set(scale, scale, scale);
+          toAvatar.rotation.y = spin;
+          
+          // Position matching updateAvatars logic - simple direct positioning
+          const targetY = isArrayaTo ? 0.8 : 0.7;
+          const targetPos = cellPos.clone().add(new THREE.Vector3(0, targetY, 0));
+          toAvatar.position.x = targetPos.x;
+          toAvatar.position.y = targetPos.y + rise;
+          toAvatar.position.z = targetPos.z;
+        }
+        
+        if(u < 1){
+          requestAnimationFrame(swapFrame);
+        } else {
+          console.log('[AVATAR] Swap complete');
+          // Final cleanup
+          fromAvatar.visible = false;
+          fromAvatar.scale.copy(startScale);
+          toAvatar.visible = true;
+          toAvatar.scale.set(finalTargetScale, finalTargetScale, finalTargetScale);
+          
+          // Final position matching updateAvatars logic
+          const targetY = isArrayaTo ? 0.8 : 0.7;
+          toAvatar.position.copy(cellPos).add(new THREE.Vector3(0, targetY, 0));
+          if(arrayaAvatar._targetRotation !== undefined && isArrayaTo){
+            toAvatar.rotation.y = arrayaAvatar._targetRotation;
+          }
+          swapAnimating = false;
+        }
+      };
+      requestAnimationFrame(swapFrame);
+    }catch(e){
+      console.warn('Avatar swap animation failed:', e);
+      swapAnimating = false;
+      // Fallback: instant swap
+      fromAvatar.visible = false;
+      const toAvatar = toAvatarOrFactory.group || toAvatarOrFactory;
+      toAvatar.visible = true;
+      const finalScale = (toAvatar === celli) ? 0.7 : 0.28;
+      toAvatar.scale?.set(finalScale, finalScale, finalScale);
     }
   }
 
@@ -11776,34 +12327,68 @@ const Scene = (()=>{
   }
   // Jump physics
   let jumpVelocity=0;
+  let physicsSpawnPos = null; // Store spawn position for respawn on fall
+  let landingSquashTime = 0; // Track landing squash animation
+  let anticipationSquashTime = 0; // Track jump anticipation squash
+  
   function handleJump(){
     // --- START: ZIPLINE DETACHMENT ---
     if(ziplineState.active){
       ziplineState.active = false;
       jumpVelocity = 4; // Give a small hop off the line
+      console.log('[PHYSICS] Detached from zipline');
       return;
     }
     // --- END: ZIPLINE DETACHMENT ---
 
-    if(rapierWorld && playerBody){
+    if(RAPIER && rapierWorld && playerBody){
       try {
-        // Simple jump without character controller
-        const p = {x: cachedPlayerPos.x, y: cachedPlayerPos.y, z: cachedPlayerPos.z};
-        const grounded=p.y<=1.05;
-      if(grounded && jumpVelocity<=0) jumpVelocity=8;
-        if(jumpVelocity>0){ 
-          const newY = p.y + jumpVelocity*0.045;
-          playerBody.setNextKinematicTranslation(p.x, newY, p.z); 
-          cachedPlayerPos.set(p.x, newY, p.z);
-          jumpVelocity-=0.55; 
+        // Check if grounded using raycast for proper platformer support
+        const translation = playerBody.translation();
+        const vel = playerBody.linvel();
+        
+        // Validate position before raycasting
+        if(!Number.isFinite(translation.x) || !Number.isFinite(translation.y) || !Number.isFinite(translation.z)){
+          console.warn('[PHYSICS] Invalid player position for jump check');
+          return;
+        }
+        
+        // Raycast downward from player position to detect ground/platforms
+        const ray = new RAPIER.Ray(translation, {x: 0, y: -1, z: 0});
+        const maxToi = 0.6; // Check 0.6 units below (player capsule radius is 0.5)
+        const solid = true;
+        
+        const hit = rapierWorld.castRay(ray, maxToi, solid);
+        const grounded = hit !== null && Math.abs(vel.y) < 1.0;
+        
+        console.log(`[PHYSICS] Jump check - grounded=${grounded}, rayHit=${hit !== null}, y=${translation.y.toFixed(2)}, vel.y=${vel.y.toFixed(2)}`);
+        
+        if(grounded){
+          // Trigger anticipation squash before jump
+          anticipationSquashTime = 1;
+          // Delay actual jump for anticipation animation (about 3-4 frames at 60fps)
+          setTimeout(() => {
+            if(playerBody && rapierWorld){
+              const currentVel = playerBody.linvel();
+              playerBody.setLinvel({x: currentVel.x, y: 8.0, z: currentVel.z}, true);
+              jumpVelocity = 8; // Track for animation
+              anticipationSquashTime = 0; // Reset anticipation
+              console.log('[PHYSICS] Jump velocity set! vel.y=8.0');
+            }
+          }, 50); // 50ms delay for anticipation
         }
       } catch(e) {
         console.warn('Jump failed:', e);
       }
+    } else {
+      console.warn('[PHYSICS] No rapierWorld or playerBody for jump');
     }
   }
 
   function updateValueSprite(arr, x, y, z, cell){
+    // Skip updating sprites if array is being deleted
+    if(arr?._deleting) return;
+    
     const key=`${arr.id}:${x},${y},${z}`;
     
     // Remove old sprite if exists
@@ -11849,7 +12434,7 @@ const Scene = (()=>{
       rec.deadlineTimer = null;
     }
   }
-  function scheduleDeletionDeadline(arrId, delay=12000){
+  function scheduleDeletionDeadline(arrId, delay=30000){
     try{
       const key = normalizeArrayId(arrId);
       const rec = pendingDatafallDeletes.get(key);
@@ -11896,7 +12481,8 @@ const Scene = (()=>{
     range: '#f59e0b',
     address: '#f59e0b',
     number: '#1d4ed8',
-    binary: '#2563eb'
+    binary: '#2563eb',
+    unicode: '#a855f7'
   };
   function cssColor(color){
     if(typeof color === 'number'){ return `#${color.toString(16).padStart(6,'0')}`; }
@@ -11953,79 +12539,119 @@ const Scene = (()=>{
     }catch{ return baseHexForTypeKey('empty'); }
   }
   function lockDeletionInteractions(){
+    // Camera movement should NOT be blocked during delete animations
     deleteInteractionLock = true;
-    try{
-      if(controls){
-        deletionControlState = {
-          rotate: controls.enableRotate,
-          pan: controls.enablePan,
-          zoom: controls.enableZoom
-        };
-        controls.enableRotate = false;
-        controls.enablePan = false;
-        controls.enableZoom = false;
-      }
-    }catch{}
   }
   function releaseDeletionInteractions(){
-    try{
-      if(controls && deletionControlState){
-        controls.enableRotate = deletionControlState.rotate;
-        controls.enablePan = deletionControlState.pan;
-        controls.enableZoom = deletionControlState.zoom;
-      }
-    }catch{}
-    deletionControlState = null;
+    // Camera movement should NOT be blocked during delete animations
     deleteInteractionLock = false;
   }
   function startAxisFall(arr, onDone){
     try{
-      const labels = (arr?.labels||[]).filter(Boolean);
-      if(!labels.length){ if(typeof onDone==='function') onDone(); return; }
-      const actors = [];
-      labels.forEach(label=>{
-        try{ if(label.userData?.billboard) unmarkBillboard(label); }catch{}
-        try{
-          const worldPos = label.getWorldPosition(new THREE.Vector3());
-          const worldQuat = label.getWorldQuaternion(new THREE.Quaternion());
-          const worldScale = label.scale ? label.scale.clone() : new THREE.Vector3(1,1,1);
-          label.parent?.remove(label);
-          label.position.copy(worldPos);
-          label.quaternion.copy(worldQuat);
-          if(worldScale) label.scale.copy(worldScale);
-          scene.add(label);
-          actors.push({
-            mesh: label,
-            vel: new THREE.Vector3((Math.random()-0.5)*0.02, Math.random()*0.04 + 0.02, (Math.random()-0.5)*0.02),
-            rot: new THREE.Vector3((Math.random()-0.5)*0.06, (Math.random()-0.5)*0.06, (Math.random()-0.5)*0.06),
-            age: 0,
-            life: 1100 + Math.random()*500
+      // First: shrink the frame mesh itself, but leave axis labels at full size
+      if(arr._frame){
+        const frame = arr._frame;
+        const startScale = frame.scale.clone();
+        const dur = 600;
+        let t0 = null;
+        // Store initial label positions before shrinking
+        const labels = (arr?.labels||[]).filter(Boolean);
+        const labelInitialWorldPos = new Map();
+        labels.forEach(label=>{
+          try{
+            labelInitialWorldPos.set(label, label.getWorldPosition(new THREE.Vector3()));
+          }catch{}
+        });
+        
+        const shrinkFrame = (ts)=>{
+          if(t0 == null) t0 = ts;
+          const elapsed = ts - t0;
+          const u = Math.min(1, elapsed / dur);
+          const e = 1 - Math.pow(1-u, 3);
+          const scale = 1 - (0.9 * e);
+          frame.scale.copy(startScale).multiplyScalar(Math.max(0.01, scale));
+          // Keep labels at original size by counter-scaling them
+          labels.forEach(label=>{
+            try{
+              const counterScale = 1 / Math.max(0.01, scale);
+              if(label.scale) label.scale.set(counterScale, counterScale, counterScale);
+            }catch{}
           });
-        }catch{}
+          if(u < 1){
+            requestAnimationFrame(shrinkFrame);
+          } else {
+            // Frame shrunk, remove it and start axis label fall
+            try{
+              frame.parent?.remove(frame);
+              frame.traverse(obj=>{
+                if(obj?.geometry) obj.geometry.dispose?.();
+                if(obj?.material){
+                  obj.material.map?.dispose?.();
+                  obj.material.dispose?.();
+                }
+              });
+            }catch{}
+            startLabelFall();
+          }
+        };
+        requestAnimationFrame(shrinkFrame);
+      } else {
+        startLabelFall();
+      }
+
+      function startLabelFall(){
+        const labels = (arr?.labels||[]).filter(Boolean);
+        if(!labels.length){ if(typeof onDone==='function') onDone(); return; }
+        const actors = [];
+        labels.forEach(label=>{
+          try{ if(label.userData?.billboard) unmarkBillboard(label); }catch{}
+          try{
+            const worldPos = label.getWorldPosition(new THREE.Vector3());
+            const worldQuat = label.getWorldQuaternion(new THREE.Quaternion());
+            // Reset scale to 1 when converting to world space
+            const worldScale = new THREE.Vector3(1,1,1);
+            label.parent?.remove(label);
+            label.position.copy(worldPos);
+            label.quaternion.copy(worldQuat);
+            label.scale.copy(worldScale);
+            scene.add(label);
+            actors.push({
+              mesh: label,
+              vel: new THREE.Vector3((Math.random()-0.5)*0.02, Math.random()*0.04 + 0.02, (Math.random()-0.5)*0.02),
+              rot: new THREE.Vector3((Math.random()-0.5)*0.06, (Math.random()-0.5)*0.06, (Math.random()-0.5)*0.06),
+              age: 0,
+              life: 1100 + Math.random()*500
+            });
+          }catch{}
         });
         arr.labels = [];
         try{ if(arr._frame?.userData) arr._frame.userData.grab = null; }catch{}
         if(!actors.length){ if(typeof onDone==='function') onDone(); return; }
-      deleteEffects.push({
-        phase:'axisFall',
-        sourceArrId: arr.id,
-        labels: actors,
-        onDone:()=>{
-          actors.forEach(actor=>{
-            try{ if(actor.mesh.userData?.billboard) unmarkBillboard(actor.mesh); }catch{}
-            try{ actor.mesh.parent?.remove(actor.mesh); }catch{}
-            try{ actor.mesh.material?.map?.dispose?.(); actor.mesh.material?.dispose?.(); }catch{}
-          });
-          if(typeof onDone==='function') onDone();
-        }
-      });
+        deleteEffects.push({
+          phase:'axisFall',
+          sourceArrId: arr.id,
+          labels: actors,
+          onDone:()=>{
+            actors.forEach(actor=>{
+              try{ if(actor.mesh.userData?.billboard) unmarkBillboard(actor.mesh); }catch{}
+              try{ actor.mesh.parent?.remove(actor.mesh); }catch{}
+              try{ actor.mesh.material?.map?.dispose?.(); actor.mesh.material?.dispose?.(); }catch{}
+            });
+            if(typeof onDone==='function') onDone();
+          }
+        });
+      }
     }catch{ if(typeof onDone==='function') onDone(); }
   }
   function maybeFinalizeDeletion(arrId, force=false){
     const key = normalizeArrayId(arrId);
     try{
       const rec = pendingDatafallDeletes.get(key);
-      if(!rec) return;
+      if(!rec){
+        console.log(`DELETE: No record for array #${arrId}`);
+        return;
+      }
+      console.log(`DELETE: maybeFinalize for array #${arrId}, finished:${rec.finished}, count:${rec.count}, force:${force}`);
       if(force){
         rec.finished = true;
         rec.count = 0;
@@ -12039,12 +12665,17 @@ const Scene = (()=>{
           return;
         }
       }
-      if(rec.finalizing) return;
+      if(rec.finalizing){
+        console.log(`DELETE: Already finalizing array #${arrId}`);
+        return;
+      }
+      console.log(`DELETE: Starting finalization for array #${arrId}`);
       rec.finalizing = true;
       clearDeletionDeadline(rec);
       pendingDatafallDeletes.set(key, rec);
       discardDeleteEffectsForArray(arrId);
       const finalizeNow = ()=>{
+        console.log(`DELETE: Final cleanup for array #${arrId}`);
         pendingDatafallDeletes.delete(key);
         try{ Actions.deleteArray(arrId); }catch{}
         releaseDeletionInteractions();
@@ -12052,8 +12683,10 @@ const Scene = (()=>{
       const store = Store.getState();
       const arr = store.arrays?.[arrId] ?? store.arrays?.[key];
       if(arr && !force){
+        console.log(`DELETE: Starting axis fall for array #${arrId}`);
         startAxisFall(arr, finalizeNow);
       } else {
+        console.log(`DELETE: Immediate finalization for array #${arrId} (force:${force})`);
         finalizeNow();
       }
     }catch{ releaseDeletionInteractions(); }
@@ -12082,6 +12715,67 @@ const Scene = (()=>{
   }
   function spawnCellDatafallAt(position, cell, parentArrId){
     const arrKey = normalizeArrayId(parentArrId);
+    
+    // HIDE the original cell AS this animation starts - this is the magic moment!
+    try{
+      if(cell && cell.x != null && cell.y != null && cell.z != null){
+        const arr = Store.getState().arrays[parentArrId];
+        if(arr){
+          // Hide value sprite immediately
+          const spriteKey = `${parentArrId}:${cell.x},${cell.y},${cell.z}`;
+          const sprite = valueSprites.get(spriteKey);
+          if(sprite) sprite.visible = false;
+          
+          // Find and hide this cell in chunk's index2cell system
+          Object.values(arr.chunks||{}).forEach(chunk=>{
+            try{
+              if(!chunk.index2cell) return;
+              const idx = chunk.index2cell.findIndex(c => c && c.x === cell.x && c.y === cell.y && c.z === cell.z);
+              if(idx >= 0){
+                const zeroMatrix = new THREE.Matrix4();
+                zeroMatrix.makeScale(0, 0, 0); // Completely invisible
+                
+                // Hide in LOD1 instanced mesh
+                if(chunk.meshLOD1 && chunk.meshLOD1.isInstancedMesh){
+                  chunk.meshLOD1.setMatrixAt(idx, zeroMatrix);
+                  chunk.meshLOD1.instanceMatrix.needsUpdate = true;
+                }
+                // Hide in LOD2 instanced mesh
+                if(chunk.meshLOD2 && chunk.meshLOD2.isInstancedMesh){
+                  chunk.meshLOD2.setMatrixAt(idx, zeroMatrix);
+                  chunk.meshLOD2.instanceMatrix.needsUpdate = true;
+                }
+                // Hide in shell instanced mesh
+                if(chunk.meshShell && chunk.meshShell.isInstancedMesh){
+                  chunk.meshShell.setMatrixAt(idx, zeroMatrix);
+                  chunk.meshShell.instanceMatrix.needsUpdate = true;
+                }
+              }
+            }catch{}
+          });
+          
+          // Also hide in legacy chunkMeshes system
+          chunkMeshes.forEach((mesh, key)=>{
+            if(String(key).startsWith(`${parentArrId}:`)){
+              try{
+                const chunkKey = key.split(':')[1];
+                const chunk = arr.chunks[chunkKey];
+                if(chunk && chunk.cells){
+                  const cellIdx = chunk.cells.findIndex(c => c.x === cell.x && c.y === cell.y && c.z === cell.z);
+                  if(cellIdx >= 0){
+                    const m = new THREE.Matrix4();
+                    m.makeScale(0, 0, 0);
+                    mesh.setMatrixAt(cellIdx, m);
+                    mesh.instanceMatrix.needsUpdate = true;
+                  }
+                }
+              }catch{}
+            }
+          });
+        }
+      }
+    }catch{}
+    
     try{
       try{
         const rec = pendingDatafallDeletes.get(arrKey) || {count:0, finished:false, finalizing:false, deadlineTimer:null};
@@ -12106,6 +12800,20 @@ const Scene = (()=>{
       shell.renderOrder = 2101;
       group.add(core);
       group.add(shell);
+      
+      // Add the cell's value sprite to the shrinking group so text shrinks with cell
+      const spriteKey = `${parentArrId}:${cell?.x},${cell?.y},${cell?.z}`;
+      const originalSprite = valueSprites.get(spriteKey);
+      if(originalSprite && cell){
+        // Detach from parent and add to this animation group
+        const spriteWorldPos = new THREE.Vector3();
+        originalSprite.getWorldPosition(spriteWorldPos);
+        originalSprite.parent?.remove(originalSprite);
+        originalSprite.position.set(0, 0, 0.6); // Position relative to cell center
+        group.add(originalSprite);
+        originalSprite.visible = true; // Make visible since it's now part of the animation
+      }
+      
       group.position.copy(position);
       const dur=420; let t0;
       const step=(ts)=>{
@@ -12128,6 +12836,18 @@ const Scene = (()=>{
           const hasContent = !!(cell && ((cell.formula && String(cell.formula).length) || (cell.value!=='' && cell.value!==null && cell.value!==undefined)));
           if(!hasContent){
             try{
+              // Clean up sprite even for empty cells
+              if(cell && cell.x != null && cell.y != null && cell.z != null){
+                const spriteKey = `${parentArrId}:${cell.x},${cell.y},${cell.z}`;
+                const sprite = valueSprites.get(spriteKey);
+                if(sprite){
+                  try{ unmarkBillboard(sprite); }catch{}
+                  sprite.parent?.remove(sprite);
+                  sprite.material?.map?.dispose?.();
+                  sprite.material?.dispose?.();
+                  valueSprites.delete(spriteKey);
+                }
+              }
               const rec = pendingDatafallDeletes.get(arrKey);
               if(rec){
                 rec.count = Math.max(0, (rec.count||0) - 1);
@@ -12167,6 +12887,18 @@ const Scene = (()=>{
             }],
             onDone:()=>{
               try{
+                // Clean up the value sprite now that animation is complete
+                if(cell && cell.x != null && cell.y != null && cell.z != null){
+                  const spriteKey = `${parentArrId}:${cell.x},${cell.y},${cell.z}`;
+                  const sprite = valueSprites.get(spriteKey);
+                  if(sprite){
+                    try{ unmarkBillboard(sprite); }catch{}
+                    sprite.parent?.remove(sprite);
+                    sprite.material?.map?.dispose?.();
+                    sprite.material?.dispose?.();
+                    valueSprites.delete(spriteKey);
+                  }
+                }
                 const rec = pendingDatafallDeletes.get(arrKey);
                 if(rec){
                   rec.count = Math.max(0, (rec.count||0) - 1);
@@ -12186,6 +12918,7 @@ const Scene = (()=>{
   }
   function startDatafallDelete(arr){
     try{
+      // First, ensure meshes exist for animation
       try{
         if(!arr._frame) renderArray(arr);
         Object.values(arr.chunks||{}).forEach(ch=>{
@@ -12194,12 +12927,34 @@ const Scene = (()=>{
           rehydrateChunkInstances(arr, ch);
         });
       }catch{}
+      
+      // Don't hide anything upfront - cells and labels stay visible
+      // Each cell will hide AS its individual animation spawns
+      // Labels will hide during the final axis fall
+      
+      // Mark as deleting to prevent any further re-rendering
+      arr._deleting = true;
+      
       if(!deleteInteractionLock) lockDeletionInteractions();
       const items=[];
       try{
+        // Get all cells that exist in chunks (have been rendered)
+        const cellsWithMeshes = [];
         Object.values(arr.chunks||{}).forEach(ch=>{
-          (ch.cells||[]).forEach(c=>{ items.push({x:c.x,y:c.y,z:c.z}); });
+          (ch.cells||[]).forEach(c=>{ cellsWithMeshes.push({x:c.x,y:c.y,z:c.z}); });
         });
+        // Also include ALL cells in bounds for complete coverage
+        for(let z=0; z<arr.size.z; z++){
+          for(let y=0; y<arr.size.y; y++){
+            for(let x=0; x<arr.size.x; x++){
+              const exists = cellsWithMeshes.some(c=> c.x===x && c.y===y && c.z===z);
+              if(!exists) items.push({x,y,z});
+            }
+          }
+        }
+        // Merge chunks cells with remaining cells
+        items.push(...cellsWithMeshes);
+        // Shuffle for random deletion order
         for(let i=items.length-1; i>0; i--){
           const j = Math.floor(Math.random()*(i+1));
           const tmp = items[i];
@@ -12208,8 +12963,11 @@ const Scene = (()=>{
         }
       }catch{}
       let idx=0;
-      const waveSize=8;
-      const waveDelay=160;
+      // One cell at a time - timing scaled for magical effect
+      const waveSize = 1;
+      // Scale timing based on total cells for best feel
+      const totalCells = items.length;
+      const waveDelay = totalCells <= 20 ? 160 : totalCells <= 100 ? 100 : 60; // Slower for small arrays
       const arrKey = normalizeArrayId(arr.id);
       pendingDatafallDeletes.set(arrKey, {count:0, finished:false, finalizing:false, arrId: arr.id, startedAt: nowMs(), lastActive: nowMs(), deadlineTimer:null});
       scheduleDeletionDeadline(arr.id);
@@ -12224,109 +12982,59 @@ const Scene = (()=>{
       }
       const spawnWave=()=>{
         const S=Store.getState();
-        if(!S.arrays[arr.id]) return;
+        if(!S.arrays[arr.id]){
+          console.warn('DELETE: Array removed mid-wave, finalizing');
+          try{
+            const rec=pendingDatafallDeletes.get(arrKey)||{count:0};
+            rec.finished=true;
+            rec.finishedAt = nowMs();
+            rec.arrId = rec.arrId ?? arr.id;
+            rec.lastActive = nowMs();
+            pendingDatafallDeletes.set(arrKey, rec);
+            scheduleDeletionDeadline(arr.id, 500);
+            maybeFinalizeDeletion(arr.id);
+          }catch{}
+          return;
+        }
         for(let k=0;k<waveSize && idx<items.length;k++,idx++){
           const c=items[idx];
           let cell=null;
           try{
             cell = Formula.getCell({arrId:arr.id,x:c.x,y:c.y,z:c.z});
           }catch{}
+          // Sprite and mesh hiding is now handled inside spawnCellDatafallAt as animation starts
           const pos = cellWorldPos(arr, c.x, c.y, c.z);
+          const hasContent = cell && ((cell.formula && String(cell.formula).length) || (cell.value!=='' && cell.value!==null && cell.value!==undefined));
           spawnCellDatafallAt(pos, cell? {...cell, arrId: arr.id, x:c.x, y:c.y, z:c.z } : null, arr.id);
-          try{
-            const CH = chunkOf(c.x,c.y,c.z);
-            const key = keyChunk(CH.x,CH.y,CH.z);
-            const ch = (arr.chunks||{})[key];
-            if(ch){
-              const mesh = ch.meshLOD1 || ch.meshLOD2 || null;
-              const list = ch.index2cell || [];
-              if(mesh && list && list.length){
-                const idx3 = list.findIndex(q=> q && q.x===c.x && q.y===c.y && q.z===c.z);
-                if(idx3>=0){
-                  const mat = new THREE.Matrix4();
-                  mat.makeScale(0,0,0);
-                  mesh.setMatrixAt(idx3, mat);
-                  mesh.instanceMatrix.needsUpdate = true;
-                  if(ch.meshShell){ try{ ch.meshShell.setMatrixAt(idx3, mat); ch.meshShell.instanceMatrix.needsUpdate = true; }catch{} }
-                  if(ch.meshGhost){ try{ ch.meshGhost.setMatrixAt(idx3, mat); ch.meshGhost.instanceMatrix.needsUpdate = true; }catch{} }
-                }
-              } else {
-                const rec = layerMeshes.get(`${arr.id}:${c.z}:filled`) || layerMeshes.get(`${arr.id}:${c.z}:formula`) || layerMeshes.get(`${arr.id}:${c.z}:empty`);
-                if(rec && rec.mesh && rec.index2cell){
-                  const idxL = rec.index2cell.findIndex(q=> q && q.x===c.x && q.y===c.y && q.z===c.z);
-                  if(idxL>=0){
-                    const mat = new THREE.Matrix4();
-                    mat.makeScale(0,0,0);
-                    rec.mesh.setMatrixAt(idxL, mat);
-                    rec.mesh.instanceMatrix.needsUpdate=true;
-                  }
-                }
-                const recShell = layerMeshes.get(`${arr.id}:${c.z}:edges`);
-                if(recShell && recShell.mesh && recShell.index2cell){
-                  const idxS = recShell.index2cell.findIndex(q=> q && q.x===c.x && q.y===c.y && q.z===c.z);
-                  if(idxS>=0){
-                    const mat = new THREE.Matrix4();
-                    mat.makeScale(0,0,0);
-                    recShell.mesh.setMatrixAt(idxS, mat);
-                    recShell.mesh.instanceMatrix.needsUpdate = true;
-                  }
-                }
-              }
-            }
-          }catch{}
         }
+        const waveNum = Math.floor((idx-1) / waveSize) + 1;
+        console.log(`DELETE: Wave ${waveNum} complete, processed ${idx}/${items.length} cells`);
         if(idx<items.length){
           setTimeout(spawnWave, waveDelay);
         } else {
+          // All cells spawned
+          console.log(`DELETE: All ${items.length} cells spawned for array #${arr.id}`);
           setTimeout(()=>{
             try{
               const rec=pendingDatafallDeletes.get(arrKey)||{count:0};
+              console.log(`DELETE: Marking finished for array #${arr.id}, pending count: ${rec.count}`);
               rec.finished=true;
               rec.finishedAt = nowMs();
               rec.arrId = rec.arrId ?? arr.id;
               rec.lastActive = nowMs();
               pendingDatafallDeletes.set(arrKey, rec);
-              scheduleDeletionDeadline(arr.id, 1800);
+              scheduleDeletionDeadline(arr.id, 3000);
               maybeFinalizeDeletion(arr.id);
             }catch{}
-          }, 200);
+          }, 300);
         }
       };
+      console.log(`DELETE: Starting wave deletion for array #${arr.id} with ${items.length} cells`);
       spawnWave();
     }catch(e){
       console.warn('startDatafallDelete failed', e);
       releaseDeletionInteractions();
     }
-  }
-  function spawnDeleteExplosion(arr){
-    try{
-      const group = new THREE.Group();
-      group.userData.kind = 'deleteEffect';
-      scene.add(group);
-
-      const clones = [];
-      const particles = [];
-
-      // Duplicate the visible value sprites for this array, then animate them
-      valueSprites.forEach((sprite, key)=>{
-        if(!String(key).startsWith(`${arr.id}:`)) return;
-        const [_, coords] = key.split(':');
-        const [x, y, z] = coords.split(',').map(Number);
-        const cell = Formula.getCell({arrId: arr.id, x, y, z});
-        const displayText = cell?.meta?.displayText;
-        const actualText = displayText !== undefined ? displayText : cell?.value;
-        if(actualText === '' || actualText === null || actualText === undefined) return;
-
-        const label = String(actualText).slice(0, 12);
-        const clone = makeValueSprite(label, !!cell?.formula);
-        const wp = cellWorldPos(arr, x, y, z);
-        clone.position.copy(wp).add(new THREE.Vector3(0, 0, 0.55));
-        group.add(clone);
-        clones.push({ sprite: clone, cell, origin: clone.position.clone(), t: 0, text: label });
-      });
-
-      deleteEffects.push({ group, clones, particles, t: 0, phase: 'hover', stage: 'chars', stageT: 0, sourceArrId: arr.id });
-    }catch(e){ console.warn('spawnDeleteExplosion failed', e); }
   }
 
   function updateDeleteEffects(dtMs){
@@ -12344,7 +13052,7 @@ const Scene = (()=>{
           pr.vel.y -= 0.003;
           pr.sprite.position.add(pr.vel);
           pr.sprite.material.opacity = Math.max(0, 1 - Math.pow(pr.age/pr.life, 2));
-          if(pr.sprite.rotation !== undefined){ pr.sprite.rotation += (pr.rot||0); }
+          if(pr.rot && pr.sprite.material && pr.sprite.material.rotation !== undefined){ pr.sprite.material.rotation += pr.rot; }
 
           if(pr.age > pr.life){
             const pos = pr.sprite.position.clone();
@@ -12369,26 +13077,28 @@ const Scene = (()=>{
                 const trimmed = text.trim();
                 if(trimmed===''){ nextKind = null; }
                 else if(tokenKind === 'number' || (!Number.isNaN(Number(trimmed)) && trimmed!=='')){
+                  // Numbers go directly to binary in blue
                   const n = parseInt(trimmed, 10) || 0;
                   const bin = Math.abs(n).toString(2);
                   const bits = bin.length ? Array.from(bin) : ['0'];
-                  newTokens = bits.map(bit=> ({ text: bit, tokenKind: 'binary_bit', color: DATAFALL_COLORS.number }));
+                  newTokens = bits.map(bit=> ({ text: bit, tokenKind: 'binary_bit', color: DATAFALL_COLORS.binary }));
                   nextKind = 'binary_bit';
                 } else {
+                  // Strings and black text (syntax/function/punctuation) go to unicode in purple
                   const plain = tokenKind === 'string' ? text.replace(/^\"|\"$/g,'') : text;
                   const chars = Array.from(plain);
                   newTokens = chars.map(ch=>{
                     const code = ch.codePointAt(0);
-                    return { text: code != null ? String(code) : '', tokenKind: 'char_code', color: pr.color || DATAFALL_COLORS.syntax, code, sourceChar: ch };
+                    return { text: code != null ? String(code) : '', tokenKind: 'char_code', color: DATAFALL_COLORS.unicode, code, sourceChar: ch };
                   }).filter(tok=> tok.text !== '');
                   nextKind = 'char_code';
                 }
               } else if(pr.kind === 'char_code'){
-                const baseColor = pr.color || DATAFALL_COLORS.binary;
+                // Unicode codes (purple) transform to binary in blue
                 const n = (typeof pr.code === 'number' && Number.isFinite(pr.code)) ? pr.code : parseInt(pr.text ?? '0', 10);
                 if(!Number.isFinite(n)) { continue; }
                 const bin = Math.abs(n).toString(2) || '0';
-                newTokens = Array.from(bin).map(bit=> ({ text: bit, tokenKind: 'binary_bit', color: baseColor }));
+                newTokens = Array.from(bin).map(bit=> ({ text: bit, tokenKind: 'binary_bit', color: DATAFALL_COLORS.binary }));
                 nextKind = 'binary_bit';
               } else { continue; }
             }catch{ continue; }
@@ -12459,136 +13169,38 @@ const Scene = (()=>{
         continue;
       }
 
-      if(eff.phase === 'hover'){
-        // Subtle hover/vibrate for ~450ms
-        eff.clones.forEach(c=>{
-          c.t += dtMs;
-          const up = Math.sin(c.t * 0.01) * 0.06;
-          const wob = 0.9 + Math.sin(c.t * 0.013) * 0.05 + 0.05;
-          c.sprite.position.y = c.origin.y + up;
-          c.sprite.scale.set(wob, wob, 1);
-        });
-        if(eff.t > 450){
-          // Explode into raining characters (prefer full formula text)
-          eff.phase = 'explode';
-          eff.clones.forEach(c=>{
-            try{
-              let raw = (c.cell?.formula && String(c.cell.formula)[0] === '=') ? String(c.cell.formula) : String(c.cell?.value ?? '');
-              if(!raw || raw.trim()==='') raw = String(c.text||'');
-              // Split into Unicode code points (grapheme clusters approximation)
-              const chars = Array.from(raw).slice(0, 96);
-              // Remove the big clone before raining
-              try{ unmarkBillboard(c.sprite); }catch{}
-              c.sprite.parent?.remove(c.sprite);
-              c.sprite.material.map?.dispose?.();
-              c.sprite.material?.dispose?.();
-
-              chars.forEach(ch=>{
-                if(ch === ' ') return;
-                const p = makeCharSprite(ch);
-                p.position.copy(c.origin).add(new THREE.Vector3((Math.random()-0.5)*0.4, (Math.random()-0.5)*0.4, 0.55));
-                const vel = new THREE.Vector3(
-                  (Math.random()-0.5)*0.06,
-                  -(Math.random()*0.06 + 0.02),
-                  (Math.random()-0.5)*0.06
-                );
-                p.rotation = (Math.random()-0.5)*0.5;
-                eff.group.add(p);
-                eff.particles.push({ kind:'char', ch, sprite:p, vel, age:0, life:900 + Math.random()*500, rot:(Math.random()-0.5)*0.12 });
-              });
-            }catch{}
-          });
-          eff.clones.length = 0;
-          // Per-particle staged cascade handled in update loop
-        }
-      } else if(eff.phase === 'explode'){
-        // Per-particle cascade with slow downward drift
-        const next = [];
-        for(let k=0; k<eff.particles.length; k++){
-          const pr = eff.particles[k];
-          pr.age += dtMs;
-          // Slow downward drift
-          pr.vel.y -= 0.003;
-          pr.sprite.position.add(pr.vel);
-          pr.sprite.material.opacity = Math.max(0, 1 - pr.age/pr.life);
-          pr.sprite.rotation += pr.rot;
-
-          // Stage transitions per particle
-          if(pr.kind === 'char' && pr.age > pr.life){
-            try{
-              const code = (pr.ch && pr.ch.codePointAt) ? pr.ch.codePointAt(0) : null;
-              const label = (code!=null)
-                ? (code > 0x7f ? `U+${code.toString(16).toUpperCase()}` : String(code))
-                : String(pr.ch||'');
-              // Replace char sprite with a number sprite at current position
-              const pos = pr.sprite.position.clone();
-              try{ unmarkBillboard(pr.sprite); }catch{}
-              pr.sprite.parent?.remove(pr.sprite);
-              pr.sprite.material?.map?.dispose?.();
-              pr.sprite.material?.dispose?.();
-              const sp = makeCharSprite(label);
-              sp.position.copy(pos);
-              const vel = new THREE.Vector3((Math.random()-0.5)*0.04, -(Math.random()*0.04 + 0.01), (Math.random()-0.5)*0.04);
-              eff.group.add(sp);
-              next.push({ kind:'number', code, sprite:sp, vel, age:0, life:900 + Math.random()*500, rot:(Math.random()-0.5)*0.14 });
-            }catch{}
-            continue;
-          }
-
-          if(pr.kind === 'number' && pr.age > pr.life){
-            try{
-              const pos = pr.sprite.position.clone();
-              const n = (typeof pr.code==='number' && isFinite(pr.code)) ? pr.code : null;
-              let bin = (n!=null) ? n.toString(2) : '';
-              if(!bin) bin = '0';
-              try{ unmarkBillboard(pr.sprite); }catch{}
-              pr.sprite.parent?.remove(pr.sprite);
-              pr.sprite.material?.map?.dispose?.();
-              pr.sprite.material?.dispose?.();
-              // Spawn bits from current position
-              Array.from(bin).forEach(bit=>{
-                const sp = makeCharSprite(bit);
-                sp.position.copy(pos).add(new THREE.Vector3((Math.random()-0.5)*0.12, (Math.random())*0.10, (Math.random()-0.5)*0.12));
-                const vel = new THREE.Vector3((Math.random()-0.5)*0.06, -(Math.random()*0.06 + 0.02), (Math.random()-0.5)*0.06);
-                eff.group.add(sp);
-                next.push({ kind:'bit', sprite:sp, vel, age:0, life:1000 + Math.random()*500, rot:(Math.random()-0.5)*0.2 });
-              });
-            }catch{}
-            continue;
-          }
-
-          if(pr.kind === 'bit' && pr.age > pr.life){
-            try{
-              try{ unmarkBillboard(pr.sprite); }catch{}
-              pr.sprite.parent?.remove(pr.sprite);
-              pr.sprite.material?.map?.dispose?.();
-              pr.sprite.material?.dispose?.();
-            }catch{}
-            continue;
-          }
-
-          // keep particle
-          next.push(pr);
-        }
-        eff.particles = next;
-
-        // Clean up when all particles are gone
-        if(eff.particles.length === 0){
-          try{
-            eff.group.parent?.remove(eff.group);
-            eff.group.traverse(obj=>{
-              if(obj.isSprite){
-                obj.material?.map?.dispose?.();
-                obj.material?.dispose?.();
-              }else if(obj.isMesh){
-                obj.geometry?.dispose?.();
-                obj.material?.dispose?.();
-              }
+      // OLD HOVER/EXPLODE PHASE REMOVED - only datafall and axisFall are used
+      if(eff.phase === 'hover' || eff.phase === 'explode'){
+        // Cleanup and remove old unused effect immediately
+        try{
+          if(eff.group?.parent) eff.group.parent.remove(eff.group);
+          if(eff.clones){
+            eff.clones.forEach(c=>{
+              try{
+                if(c.sprite){
+                  c.sprite.parent?.remove(c.sprite);
+                  c.sprite.material?.map?.dispose?.();
+                  c.sprite.material?.dispose?.();
+                }
+              }catch{}
             });
-          }catch{}
-          deleteEffects.splice(i, 1);
-        }
-    }
+          }
+          if(eff.particles){
+            eff.particles.forEach(pr=>{
+              try{
+                if(pr.sprite){
+                  try{ unmarkBillboard(pr.sprite); }catch{}
+                  pr.sprite.parent?.remove(pr.sprite);
+                  pr.sprite.material?.map?.dispose?.();
+                  pr.sprite.material?.dispose?.();
+                }
+              }catch{}
+            });
+          }
+        }catch{}
+        deleteEffects.splice(i, 1);
+        continue;
+      }
   }
 
     if(deleteInteractionLock){
@@ -12860,6 +13472,23 @@ const Scene = (()=>{
     }catch{}
   }
   
+  function spawnPlayerAt(x, y, z){
+    if(playerBody){
+      try{
+        playerBody.setTranslation({x, y, z}, true);
+        playerBody.setLinvel({x: 0, y: 0, z: 0}, true); // Reset all velocities
+        playerBody.setAngvel({x: 0, y: 0, z: 0}, true); // Reset angular velocity
+        cachedPlayerPos.set(x, y, z);
+        jumpVelocity = 0; // Reset jump velocity on spawn
+        landingSquashTime = 0; // Reset squash animation
+        physicsSpawnPos = {x, y, z}; // Store for respawn on fall
+        console.log(`[PHYSICS] Spawned player at (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`);
+      }catch(e){
+        console.warn('spawnPlayerAt failed:', e);
+      }
+    }
+  }
+
   function updateArrayLabelPlacement(arr){
     const label = arr?._frame?.userData?.labelSprite;
     const grab  = arr.labels?.find(l => l.userData?.type === 'grab');
@@ -12890,7 +13519,106 @@ const Scene = (()=>{
     // keep it facing camera without touching renderOrder
     label.lookAt(camera.position);
   }
-  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, spawnDeleteExplosion, startDatafallDelete, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray};
+
+  function togglePhysicsMode(){
+    const current = Store.getState().scene.physics;
+    const next = !current;
+    console.log(`[PHYSICS MODE TOGGLE] Current: ${current}, Next: ${next}`);
+    Store.setState(s=>({scene:{...s.scene, physics:next}})); 
+    
+    if(next){
+      // On enable: create player body and spawn at current selected cell
+      if(RAPIER && rapierWorld && !playerBody){
+        try{
+          const rb=RAPIER.RigidBodyDesc.dynamic();
+          rb.setTranslation(0, 0.7, 0);
+          rb.lockRotations(true, true);
+          rb.setCanSleep(false);
+          rb.setLinearDamping(5.0);
+          rb.setAngularDamping(1.0);
+          rb.setCcdEnabled(true);
+          playerBody=rapierWorld.createRigidBody(rb);
+          const capsuleDesc = RAPIER.ColliderDesc.capsule(0.35, 0.25);
+          capsuleDesc.setRestitution(0.0);
+          capsuleDesc.setFriction(0.7);
+          capsuleDesc.setDensity(1.5);
+          playerCollider=rapierWorld.createCollider(capsuleDesc, playerBody);
+          cachedPlayerPos.set(0, 0.7, 0);
+          console.log('[PHYSICS] Created player body');
+          document.getElementById('physChip').textContent='Physics: ON';
+        }catch(e){
+          console.warn('[PHYSICS] Failed to create player body:', e);
+        }
+      }
+      const sel = Store.getState().selection;
+      let spawnPos = {x: 0, y: 1, z: 0}; // Default spawn position
+      if(sel?.arrayId && sel.focus){
+        const arr = Store.getState().arrays[sel.arrayId];
+        if(arr){
+          const pos = worldPos(arr, sel.focus.x, sel.focus.y, sel.focus.z);
+          spawnPos = {x: pos.x, y: pos.y + 0.7, z: pos.z};
+          spawnPlayerAt(spawnPos.x, spawnPos.y, spawnPos.z);
+          console.log(`[PHYSICS] Spawned Celli at cell (${sel.focus.x},${sel.focus.y},${sel.focus.z}) -> world (${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)})`);
+        }
+      } else {
+        // No selection, spawn at default position
+        spawnPlayerAt(spawnPos.x, spawnPos.y, spawnPos.z);
+      }
+      // Position camera to show Celli from a good platformer angle
+      if(camera && controls){
+        // Target Celli's position (slightly above ground)
+        const targetPos = {x: spawnPos.x, y: spawnPos.y + 1.5, z: spawnPos.z};
+        controls.target.set(targetPos.x, targetPos.y, targetPos.z);
+        // Camera behind and above for good platformer view
+        const camDistance = 8;
+        const camHeight = 4;
+        camera.position.set(targetPos.x - 3, targetPos.y + camHeight, targetPos.z + camDistance);
+        controls.update();
+        console.log(`[PHYSICS] Camera positioned at (${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)}) targeting (${targetPos.x.toFixed(2)}, ${targetPos.y.toFixed(2)}, ${targetPos.z.toFixed(2)})`);
+      }
+      // Build colliders for all arrays
+      Object.values(Store.getState().arrays).forEach(a=>debounceColliderRebuild(a));
+      // Initialize mouse look angles from current camera
+      try{
+        if(camera){
+          const dir = new THREE.Vector3();
+          camera.getWorldDirection(dir);
+          mouseYaw = Math.atan2(-dir.x, -dir.z);
+          mousePitch = Math.asin(dir.y);
+          console.log(`[PHYSICS] Initialized mouse look from camera direction`);
+        }
+      }catch{}
+    } else {
+      // On disable: destroy player body and release pointer lock
+      if(playerBody && rapierWorld){
+        try{
+          if(playerCollider) rapierWorld.removeCollider(playerCollider, false);
+          rapierWorld.removeRigidBody(playerBody);
+          playerBody = null;
+          playerCollider = null;
+          console.log('[PHYSICS] Destroyed player body');
+        }catch(e){
+          console.warn('[PHYSICS] Failed to destroy player body:', e);
+        }
+      }
+      try{
+        if(document.pointerLockElement){
+          document.exitPointerLock();
+        }
+        mouseLookEnabled = false;
+      }catch{}
+      // Explicitly re-enable orbit controls when physics is disabled
+      if(controls){
+        controls.enableRotate = true;
+        controls.enablePan = true;
+        controls.enabled = true;
+        console.log('[PHYSICS] Orbit controls re-enabled');
+      }
+      document.getElementById('physChip').textContent='Physics: OFF';
+    }
+  }
+
+  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode};
 })();
 
 /* ===========================
@@ -13677,23 +14405,18 @@ const UI = (()=>{
     const onDP=(dx,dy,dz)=>{
       const s=Store.getState().selection; if(!s?.arrayId||!s.focus) return;
       const arr=Store.getState().arrays[s.arrayId]; if(!arr) return;
-      // Respect depth mode: map vertical dpad to Z in depth mode
-      const depthMode = !!Store.getState().scene.arrowMapDepth;
-      let ddx=dx, ddy=dy, ddz=dz;
-      if(depthMode){ ddz += dy; ddy = 0; }
-      const nx=Math.max(0, Math.min(arr.size.x-1, s.focus.x + ddx));
-      const ny=Math.max(0, Math.min(arr.size.y-1, s.focus.y + ddy));
-      const nz=Math.max(0, Math.min(arr.size.z-1, s.focus.z + ddz));
+      // D-pad is static: up/down = Y, left/right = X, depthUp/depthDown = Z
+      const nx=Math.max(0, Math.min(arr.size.x-1, s.focus.x + dx));
+      const ny=Math.max(0, Math.min(arr.size.y-1, s.focus.y + dy));
+      const nz=Math.max(0, Math.min(arr.size.z-1, s.focus.z + dz));
       Actions.setSelection(arr.id, {x:nx,y:ny,z:nz}, null, '3d');
     };
     dpad.querySelectorAll('.dp').forEach(btn=>{
       btn.addEventListener('click',()=>{
-        let dx=+btn.getAttribute('data-dx')||0;
-        let dy=+btn.getAttribute('data-dy')||0;
-        let dz=+btn.getAttribute('data-dz')||0;
-        // Reverse depth mapping so that up means toward camera (negative Z in front-facing)
-        const depthMode = !!Store.getState().scene.arrowMapDepth;
-        if(depthMode){ if(dy!==0){ dz = -dy; dy = 0; } }
+        const dx=+btn.getAttribute('data-dx')||0;
+        const dy=+btn.getAttribute('data-dy')||0;
+        const dz=+btn.getAttribute('data-dz')||0;
+        // D-pad buttons use their data attributes directly - no mode toggling
         onDP(dx,dy,dz);
       });
     });
@@ -14152,6 +14875,8 @@ const UI = (()=>{
       sheetEl.style.bottom = '16px';
       sheetEl.style.transform = '';
     }
+    // Mark sheet as user-sized after intro so renderSheet doesn't resize it
+    sheetEl.dataset.userSized = '1';
     console.log('triggerIntroCollapse: after', {classes: sheetEl.className, left: sheetEl.style.left, top: sheetEl.style.top, bottom: sheetEl.style.bottom, transform: sheetEl.style.transform});
     return true;
   }
@@ -14267,6 +14992,22 @@ const UI = (()=>{
     applyCrystalStyle(Store.getState().ui?.crystal2D);
     els.sheetTitle.textContent=`Array ${arr.id}${arr.name?` — "${arr.name}"`:''}`;
 
+    // Size sheet ONLY during intro - after that, keep user-defined size
+    const sheet = document.getElementById('sheet');
+    if(sheet && !sheet.dataset.userSized){
+      const isHome = (arr.id === 1);
+      if(isHome && !sheet.dataset.initialSized){
+        // Match the size that will be used after intro collapse
+        const vw = Math.max(720, Math.floor(window.innerWidth * 0.42));
+        const vh = Math.max(360, Math.floor(window.innerHeight * 0.40));
+        sheet.style.width = `${vw}px`;
+        sheet.style.height = `${vh}px`;
+        console.log(`[SHEET] Initial sizing for home array: ${vw}x${vh}`);
+        // Mark as sized so we don't resize on selection changes
+        sheet.dataset.initialSized = '1';
+      }
+    }
+
     // Update UI controls when sheet renders
     updateUIControls(arr);
 
@@ -14292,7 +15033,31 @@ const UI = (()=>{
     if(cols) cols.innerHTML=''; if(rows) rows.innerHTML='';
     console.log('renderSheet: building grid', {arrayId:arr.id, size:arr.size});
     // Leading corner cell: show current Z layer as greek letter
-    const th0=document.createElement('th'); th0.textContent=greek(getZLayer()); cols.appendChild(th0);
+    // Z layer header with prev/next buttons
+    const th0=document.createElement('th'); 
+    th0.style.cssText='padding:2px 4px; position:sticky; left:0; background:var(--panel); z-index:2;';
+    const zLayerWrap = document.createElement('div');
+    zLayerWrap.style.cssText='display:flex; align-items:center; gap:2px; justify-content:center;';
+    const zPrevBtn = document.createElement('button');
+    zPrevBtn.textContent = '‹';
+    zPrevBtn.className = 'layer-btn';
+    zPrevBtn.style.cssText = 'padding:0 4px; font-size:12px; min-width:20px;';
+    zPrevBtn.disabled = (getZLayer() <= 0);
+    zPrevBtn.onclick = ()=> document.getElementById('zPrev')?.click();
+    const zLabel = document.createElement('span');
+    zLabel.textContent = greek(getZLayer());
+    zLabel.style.cssText = 'font-weight:600; min-width:16px; text-align:center;';
+    const zNextBtn = document.createElement('button');
+    zNextBtn.textContent = '›';
+    zNextBtn.className = 'layer-btn';
+    zNextBtn.style.cssText = 'padding:0 4px; font-size:12px; min-width:20px;';
+    zNextBtn.disabled = (getZLayer() >= (arr.size.z - 1));
+    zNextBtn.onclick = ()=> document.getElementById('zNext')?.click();
+    zLayerWrap.appendChild(zPrevBtn);
+    zLayerWrap.appendChild(zLabel);
+    zLayerWrap.appendChild(zNextBtn);
+    th0.appendChild(zLayerWrap);
+    cols.appendChild(th0);
     // TanStack Virtual for efficient large sheet rendering
     const gridWrap = document.querySelector('#sheet .grid-wrap');
     const wrapRect = gridWrap?.getBoundingClientRect?.() || {width:760, height:360};
@@ -14300,10 +15065,12 @@ const UI = (()=>{
     const cellW = 100; // default cell width
     
     // Create virtualizers if TanStack is available
-    let rowStart = 0, rowEnd = Math.min(arr.size.y, 20);
-    let colStart = 0, colEnd = Math.min(arr.size.x, 10);
+    // For array #1 (Celli's home), render ALL cells with no virtualization
+    const isHome = (arr.id === 1);
+    let rowStart = 0, rowEnd = isHome ? arr.size.y : Math.min(arr.size.y, 20);
+    let colStart = 0, colEnd = isHome ? arr.size.x : Math.min(arr.size.x, 10);
     
-    if(typeof TanStackVirtualCore !== 'undefined' && gridWrap){
+    if(typeof TanStackVirtualCore !== 'undefined' && gridWrap && !isHome){
       try{
         const scrollTop = gridWrap.scrollTop || 0;
         const scrollLeft = gridWrap.scrollLeft || 0;
@@ -14698,7 +15465,8 @@ const UI = (()=>{
       Write.commit(tx);
     } 
     
-    els.direct.style.display='none'; 
+    els.direct.style.display='none';
+    els.direct._closedAt = Date.now(); // Track when editor was closed to prevent rapid re-open
     els.fx.value = ''; // Clear formula box
     updateFocusChip(); // Refresh UI
   }
