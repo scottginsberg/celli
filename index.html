@@ -9705,7 +9705,31 @@ const Scene = (()=>{
             queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'transpose'});
           }
           if(/ARRAY\(/i.test(f)){
-            const dims = parseDims(f); if(dims){ queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'array', ...dims}); }
+            let dims = null;
+            try{
+              const emittedMap = Store.getState().emittedByAnchor;
+              if(emittedMap && emittedMap.get){
+                const ak = aKey({arrId:arr.id, x:c.x, y:c.y, z:c.z});
+                const emitted = emittedMap.get(ak);
+                if(emitted && emitted.size){
+                  let maxDx = 0, maxDy = 0, maxDz = 0;
+                  emitted.forEach(key=>{
+                    try{
+                      const [aid, rest] = key.split(':');
+                      if(+aid !== arr.id) return;
+                      const [ex,ey,ez] = rest.split(',').map(Number);
+                      if(!Number.isFinite(ex) || !Number.isFinite(ey) || !Number.isFinite(ez)) return;
+                      maxDx = Math.max(maxDx, ex - c.x);
+                      maxDy = Math.max(maxDy, ey - c.y);
+                      maxDz = Math.max(maxDz, ez - c.z);
+                    }catch{}
+                  });
+                  dims = { w: Math.max(1, (maxDx|0) + 1), h: Math.max(1, (maxDy|0) + 1), d: Math.max(1, (maxDz|0) + 1) };
+                }
+              }
+            }catch{}
+            if(!dims){ dims = parseDims(f); }
+            if(dims){ queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'array', ...dims}); }
           }
         }
       }
@@ -9749,7 +9773,7 @@ const Scene = (()=>{
   // Temporarily hide colored fills/formulas so expansion overlay is visible over white grid
   function maskArrayForPreview(arr, enable){
     try{
-      arr._previewMask = arr._previewMask || { layerKeys:[], chunkLODs:[], chunkLOD2:[], chunkGhosts:[] };
+      arr._previewMask = arr._previewMask || { layerKeys:[], chunkLODs:[], chunkLOD2:[], chunkGhosts:[], chunkShells:[] };
       if(enable){
         // Hide underlying solids to create empty cell receptacles, but keep shells/ghosts for outline context
         if(Scene.ChunkManager && Scene.ChunkManager.enabled){
@@ -9759,6 +9783,7 @@ const Scene = (()=>{
             // Keep shells for context; hide ghosts
             if(ch.meshGhost && ch.meshGhost.visible){ arr._previewMask.chunkGhosts.push(ch); ch.meshGhost.visible=false; }
             if(ch.meshLOD2 && ch.meshLOD2.visible){ arr._previewMask.chunkLOD2.push(ch); ch.meshLOD2.visible=false; }
+            if(ch.meshShell && ch.meshShell.visible){ arr._previewMask.chunkShells.push(ch); ch.meshShell.visible=false; }
           });
         } else {
         for(let z=0; z<arr.size.z; z++){
@@ -9776,7 +9801,8 @@ const Scene = (()=>{
         (arr._previewMask.chunkLODs||[]).forEach(ch=>{ if(ch.meshLOD1) ch.meshLOD1.visible=true; });
         (arr._previewMask.chunkLOD2||[]).forEach(ch=>{ if(ch.meshLOD2) ch.meshLOD2.visible=true; });
         (arr._previewMask.chunkGhosts||[]).forEach(ch=>{ if(ch.meshGhost) ch.meshGhost.visible=true; });
-        arr._previewMask = { layerKeys:[], chunkLODs:[], chunkLOD2:[], chunkGhosts:[] };
+        (arr._previewMask.chunkShells||[]).forEach(ch=>{ if(ch.meshShell) ch.meshShell.visible=true; });
+        arr._previewMask = { layerKeys:[], chunkLODs:[], chunkLOD2:[], chunkGhosts:[], chunkShells:[] };
       }
     }catch{}
   }
