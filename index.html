@@ -11263,6 +11263,51 @@ const Scene = (()=>{
   const nowMs = ()=> (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   let deleteInteractionLock = false;
   let deletionControlState = null;
+  function clearDeletionDeadline(rec){
+    if(rec && rec.deadlineTimer){
+      try{ clearTimeout(rec.deadlineTimer); }catch{}
+      rec.deadlineTimer = null;
+    }
+  }
+  function scheduleDeletionDeadline(arrId, delay=12000){
+    try{
+      const key = normalizeArrayId(arrId);
+      const rec = pendingDatafallDeletes.get(key);
+      if(!rec) return;
+      clearDeletionDeadline(rec);
+      rec.deadlineTimer = setTimeout(()=>{
+        try{ maybeFinalizeDeletion(arrId, true); }catch{}
+      }, delay);
+      rec.lastActive = nowMs();
+      pendingDatafallDeletes.set(key, rec);
+    }catch{}
+  }
+  function discardDeleteEffectsForArray(arrId){
+    for(let i = deleteEffects.length - 1; i >= 0; i--){
+      const eff = deleteEffects[i];
+      if(!eff || eff.sourceArrId !== arrId) continue;
+      try{
+        if(eff.group){
+          eff.group.parent?.remove(eff.group);
+          if(typeof eff.group.traverse === 'function'){
+            eff.group.traverse(obj=>{
+              if(obj?.material){
+                try{ obj.material.map?.dispose?.(); }catch{}
+                try{ obj.material.dispose?.(); }catch{}
+              }
+              if(obj?.geometry){ try{ obj.geometry.dispose?.(); }catch{} }
+            });
+          }
+        }
+        if(Array.isArray(eff.clones)){
+          eff.clones.forEach(c=>{
+            try{ if(c?.sprite){ unmarkBillboard(c.sprite); c.sprite.parent?.remove(c.sprite); c.sprite.material?.map?.dispose?.(); c.sprite.material?.dispose?.(); } }catch{}
+          });
+        }
+      }catch{}
+      deleteEffects.splice(i, 1);
+    }
+  }
   const DATAFALL_COLORS = {
     syntax: '#111827',
     function: '#111827',
@@ -11383,6 +11428,7 @@ const Scene = (()=>{
         if(!actors.length){ if(typeof onDone==='function') onDone(); return; }
       deleteEffects.push({
         phase:'axisFall',
+        sourceArrId: arr.id,
         labels: actors,
         onDone:()=>{
           actors.forEach(actor=>{
@@ -11395,26 +11441,40 @@ const Scene = (()=>{
       });
     }catch{ if(typeof onDone==='function') onDone(); }
   }
-  function maybeFinalizeDeletion(arrId){
+  function maybeFinalizeDeletion(arrId, force=false){
     const key = normalizeArrayId(arrId);
     try{
       const rec = pendingDatafallDeletes.get(key);
-      if(rec && rec.finished && ((rec.count|0) <= 0)){
-        if(rec.finalizing) return;
-        rec.finalizing = true;
-        pendingDatafallDeletes.set(key, rec);
-        const finalizeNow = ()=>{
-          pendingDatafallDeletes.delete(key);
-          try{ Actions.deleteArray(arrId); }catch{}
-          releaseDeletionInteractions();
-        };
-        const store = Store.getState();
-        const arr = store.arrays?.[arrId] ?? store.arrays?.[key];
-        if(arr){
-          startAxisFall(arr, finalizeNow);
+      if(!rec) return;
+      if(force){
+        rec.finished = true;
+        rec.count = 0;
+      }
+      if(!rec.finished || (rec.count|0) > 0){
+        if(force){
+          // Even if counts are stuck, force completion once deadline hits
+          rec.finished = true;
+          rec.count = 0;
         } else {
-          finalizeNow();
+          return;
         }
+      }
+      if(rec.finalizing) return;
+      rec.finalizing = true;
+      clearDeletionDeadline(rec);
+      pendingDatafallDeletes.set(key, rec);
+      discardDeleteEffectsForArray(arrId);
+      const finalizeNow = ()=>{
+        pendingDatafallDeletes.delete(key);
+        try{ Actions.deleteArray(arrId); }catch{}
+        releaseDeletionInteractions();
+      };
+      const store = Store.getState();
+      const arr = store.arrays?.[arrId] ?? store.arrays?.[key];
+      if(arr && !force){
+        startAxisFall(arr, finalizeNow);
+      } else {
+        finalizeNow();
       }
     }catch{ releaseDeletionInteractions(); }
   }
@@ -11444,12 +11504,13 @@ const Scene = (()=>{
     const arrKey = normalizeArrayId(parentArrId);
     try{
       try{
-        const rec = pendingDatafallDeletes.get(arrKey) || {count:0, finished:false, finalizing:false};
+        const rec = pendingDatafallDeletes.get(arrKey) || {count:0, finished:false, finalizing:false, deadlineTimer:null};
         rec.count = (rec.count||0) + 1;
         rec.arrId = rec.arrId ?? parentArrId;
         rec.startedAt = rec.startedAt ?? nowMs();
         rec.lastActive = nowMs();
         pendingDatafallDeletes.set(arrKey, rec);
+        scheduleDeletionDeadline(parentArrId);
       }catch{}
       const group = new THREE.Group();
       group.userData.kind='microCollapse';
@@ -11510,6 +11571,7 @@ const Scene = (()=>{
           const vel = new THREE.Vector3(0,0.022,0);
           deleteEffects.push({
             phase:'datafall',
+            sourceArrId: parentArrId,
             group:effGroup,
             particles:[{
               kind:'value',
@@ -11531,6 +11593,7 @@ const Scene = (()=>{
                   rec.arrId = rec.arrId ?? parentArrId;
                   rec.lastActive = nowMs();
                   pendingDatafallDeletes.set(arrKey, rec);
+                  scheduleDeletionDeadline(parentArrId);
                   maybeFinalizeDeletion(parentArrId);
                 }
               }catch{}
@@ -11568,12 +11631,14 @@ const Scene = (()=>{
       const waveSize=8;
       const waveDelay=160;
       const arrKey = normalizeArrayId(arr.id);
-      pendingDatafallDeletes.set(arrKey, {count:0, finished:false, finalizing:false, arrId: arr.id, startedAt: nowMs(), lastActive: nowMs()});
+      pendingDatafallDeletes.set(arrKey, {count:0, finished:false, finalizing:false, arrId: arr.id, startedAt: nowMs(), lastActive: nowMs(), deadlineTimer:null});
+      scheduleDeletionDeadline(arr.id);
       if(items.length===0){
         try{
           const rec=pendingDatafallDeletes.get(arrKey);
           if(rec){ rec.finished=true; rec.finishedAt = nowMs(); rec.lastActive = nowMs(); pendingDatafallDeletes.set(arrKey, rec); }
         }catch{}
+        scheduleDeletionDeadline(arr.id, 1000);
         maybeFinalizeDeletion(arr.id);
         return;
       }
@@ -11641,6 +11706,7 @@ const Scene = (()=>{
               rec.arrId = rec.arrId ?? arr.id;
               rec.lastActive = nowMs();
               pendingDatafallDeletes.set(arrKey, rec);
+              scheduleDeletionDeadline(arr.id, 1800);
               maybeFinalizeDeletion(arr.id);
             }catch{}
           }, 200);
@@ -11679,7 +11745,7 @@ const Scene = (()=>{
         clones.push({ sprite: clone, cell, origin: clone.position.clone(), t: 0, text: label });
       });
 
-      deleteEffects.push({ group, clones, particles, t: 0, phase: 'hover', stage: 'chars', stageT: 0 });
+      deleteEffects.push({ group, clones, particles, t: 0, phase: 'hover', stage: 'chars', stageT: 0, sourceArrId: arr.id });
     }catch(e){ console.warn('spawnDeleteExplosion failed', e); }
   }
 
@@ -11956,6 +12022,7 @@ const Scene = (()=>{
           if(Number.isFinite(arrId)){ finalizeIds.push(arrId); }
           else {
             try{ releaseDeletionInteractions(); }catch{}
+            clearDeletionDeadline(rec);
             pendingDatafallDeletes.delete(key);
           }
           return;
@@ -11969,6 +12036,7 @@ const Scene = (()=>{
             if(Number.isFinite(arrId)){ finalizeIds.push(arrId); }
             else {
               try{ releaseDeletionInteractions(); }catch{}
+              clearDeletionDeadline(rec);
               pendingDatafallDeletes.delete(key);
             }
           }
@@ -12242,7 +12310,7 @@ const Scene = (()=>{
     // keep it facing camera without touching renderOrder
     label.lookAt(camera.position);
   }
-  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, spawnDeleteExplosion, startDatafallDelete, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings};
+  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, spawnDeleteExplosion, startDatafallDelete, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray};
 })();
 
 /* ===========================
@@ -12532,8 +12600,9 @@ const UI = (()=>{
       updatePresentButton(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
       els.presentToggle.onclick=()=>{
         const state = Actions.togglePresentMode();
-        updatePresentButton(state);
-        setGraphicsControlsEnabled(state);
+        const actual = Scene.isPresentEnabled ? Scene.isPresentEnabled() : state;
+        updatePresentButton(actual);
+        setGraphicsControlsEnabled(actual);
         syncGraphicsSettings();
       };
       setGraphicsControlsEnabled(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
