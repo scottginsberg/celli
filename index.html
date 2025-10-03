@@ -5732,6 +5732,7 @@ tag('PREVIEW',["SCENE"],(anchor,arr,ast)=>{
       if(enableIn){
         try{ T.plan = []; }catch{}
         try{ Scene.buildTimedPlanFromArray?.(arr); }catch{}
+        try{ arr._previewBursts = new Set(); }catch{}
         T.previewInArray = true;
         // Default looping animation if not configured by TIMED_TRANSLATION
         if(!(T.ticks>0)){ T.ticks = 120; }
@@ -5740,6 +5741,7 @@ tag('PREVIEW',["SCENE"],(anchor,arr,ast)=>{
         T.t = 0; T.dir = 1;
       } else {
         T.previewInArray = false;
+        if(arr._previewBursts){ try{ arr._previewBursts.clear(); }catch{} arr._previewBursts = null; }
       }
     }
     // The rest: overlay/mask handling unchanged
@@ -7457,15 +7459,17 @@ const Scene = (()=>{
         material.blending = THREE.NormalBlending;
         material.toneMapped = true;
       }else{
-        material = new THREE.MeshBasicMaterial({
+        material = new THREE.MeshLambertMaterial({
           color: 0xffffff,
           transparent: true,
           opacity: 0.35,
-          blending: THREE.NormalBlending,
           depthWrite: false,
           depthTest: true,
           vertexColors: true
         });
+        material.blending = THREE.NormalBlending;
+        material.emissive = new THREE.Color(0x000000);
+        material.emissiveIntensity = 0.0;
         material.toneMapped = false;
       }
     }else{
@@ -7503,12 +7507,14 @@ const Scene = (()=>{
         material.toneMapped = true;
       }else{
         const isEmpty = (baseType === 'empty');
-        material = new THREE.MeshBasicMaterial({
+        material = new THREE.MeshLambertMaterial({
           color: isEmpty ? COLORS.empty : 0xffffff,
           transparent: false,
           depthWrite: true,
           vertexColors: true
         });
+        material.emissive = new THREE.Color(0x000000);
+        material.emissiveIntensity = 0.0;
         material.toneMapped = false;
       }
     }
@@ -9593,7 +9599,36 @@ const Scene = (()=>{
   }
   function queueTimedOp(arr, anchor, op){
     const t = ensureTimedState(arr);
-    t.plan.push({ ...op, anchor:{...anchor} });
+    const entry = { ...op, anchor:{...anchor} };
+    if(entry.anchor && entry.anchor.arrId==null) entry.anchor.arrId = arr?.id;
+    t.plan.push(entry);
+    try{
+      if(arr?.params?.timed?.previewInArray && entry.type === 'array'){
+        const toDim=(v)=>{ const n=Number(v); return Number.isFinite(n)? Math.max(1, Math.round(Math.abs(n))) : 1; };
+        const dims={
+          w: toDim(entry.w ?? entry.width ?? entry.dims?.w ?? entry.params?.w ?? 1),
+          h: toDim(entry.h ?? entry.height ?? entry.dims?.h ?? entry.params?.h ?? 1),
+          d: toDim(entry.d ?? entry.depth ?? entry.dims?.d ?? entry.params?.d ?? 1)
+        };
+        const burstSet = arr._previewBursts || (arr._previewBursts = new Set());
+        const a = entry.anchor || {};
+        const burstKey = `${a.arrId ?? arr.id}:${a.x},${a.y},${a.z}|${dims.w}x${dims.h}x${dims.d}`;
+        if(!burstSet.has(burstKey)){
+          burstSet.add(burstKey);
+          addTimedTranslation(arr, entry.anchor || {x:0,y:0,z:0,arrId:arr?.id}, {
+            ticks: Math.max(24, Math.min(360, (t.ticks|0) || 60)),
+            repeat: false,
+            reverse: false,
+            reverseTicks: null,
+            type: 'array',
+            w: dims.w,
+            h: dims.h,
+            d: dims.d,
+            op: entry.opText || entry.op || ''
+          });
+        }
+      }
+    }catch{}
   }
   function queueArrayPlanFromArray(arr){
     try{
@@ -9613,7 +9648,7 @@ const Scene = (()=>{
           const f=String(c.formula||'');
           if(/ARRAY\(/i.test(f)){
             const dims=parseDims(f); if(!dims) continue;
-            queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, { type:'array', ...dims });
+            queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, { type:'array', ...dims, opText:f });
             return true;
           }
         }
@@ -9662,7 +9697,7 @@ const Scene = (()=>{
                     const dxv = reNum(args[n-3]);
                     const dyv = reNum(args[n-2]);
                     const dzv = reNum(args[n-1]);
-                    queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'translate', dx:dxv, dy:dyv, dz:dzv});
+                    queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'translate', dx:dxv, dy:dyv, dz:dzv, opText:f});
                   }
                 }
               }
@@ -9691,7 +9726,7 @@ const Scene = (()=>{
                   const sx = n>=1 ? reNum(args[n-3] ?? 0) : 0;
                   const sy = n>=2 ? reNum(args[n-2] ?? 0) : 0;
                   const sz = n>=3 ? reNum(args[n-1] ?? 0) : 0;
-                  queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'rotate', sx, sy, sz});
+                  queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'rotate', sx, sy, sz, opText:f});
                 }
               }
             }catch{}
@@ -9699,10 +9734,10 @@ const Scene = (()=>{
           // SHIFT(input, dx[, dy[, dz]]) -> treat as translate for previews
           if(/SHIFT\(/i.test(f)){
             const m = /SHIFT\(\s*[^,]+,\s*([^,]+)\s*(?:,\s*([^,]+)\s*)?(?:,\s*([^,]+)\s*)?\)/i.exec(f);
-            if(m){ queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'translate', dx:reNum(m[1]||0), dy:reNum(m[2]||0), dz:reNum(m[3]||0)}); }
+            if(m){ queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'translate', dx:reNum(m[1]||0), dy:reNum(m[2]||0), dz:reNum(m[3]||0), opText:f}); }
           }
           if(/TRANSPOSE\(/i.test(f)){
-            queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'transpose'});
+            queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'transpose', opText:f});
           }
           if(/ARRAY\(/i.test(f)){
             let dims = null;
@@ -9729,7 +9764,7 @@ const Scene = (()=>{
               }
             }catch{}
             if(!dims){ dims = parseDims(f); }
-            if(dims){ queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'array', ...dims}); }
+            if(dims){ queueTimedOp(arr, {x:c.x,y:c.y,z:c.z,arrId:arr.id}, {type:'array', ...dims, opText:f}); }
           }
         }
       }
@@ -9749,6 +9784,7 @@ const Scene = (()=>{
   function stopTimed(arr){
     const t=ensureTimedState(arr);
     t.previewInArray=false;
+    if(arr && arr._previewBursts){ try{ arr._previewBursts.clear(); }catch{} arr._previewBursts=null; }
     // Restore base transforms
     try{ if(t.baseOffset){ setArrayOffset(arr, {x:t.baseOffset.x,y:t.baseOffset.y,z:t.baseOffset.z}, {interactive:true}); } }catch{}
     try{ if(arr._frame && t.baseQuat){ arr._frame.quaternion.copy(t.baseQuat); } }catch{}
@@ -9820,33 +9856,85 @@ const Scene = (()=>{
   try{ Scene.refreshLightsForArray = refreshLightsForArray; }catch{}
   try{ Scene.ensureTimed3D = ensureTimed3D; }catch{}
   function addTimedTranslation(arr, anchor, cfg){
-    const { ticks=60, repeat=false, reverse=false, reverseTicks=null, op='' } = cfg||{};
+    const {
+      ticks=60,
+      repeat=false,
+      reverse=false,
+      reverseTicks=null,
+      op='',
+      type=null
+    } = cfg||{};
     const group = new THREE.Group();
     group.userData.kind = 'procAnim';
     scene.add(group);
 
     const GREEN_MAT = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.5, depthTest: true, depthWrite: false });
     const makeCell = (sx=0.9,sy=0.9,sz=0.9)=>{ const m=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz), GREEN_MAT.clone()); m.renderOrder=2100; return m; };
-    const anchorArr = (anchor && anchor.arrId!=null && Store.getState().arrays && Store.getState().arrays[anchor.arrId]) || arr;
-    const startPos = worldPos(anchorArr, anchor.x, anchor.y, anchor.z);
+    const safeAnchor = {
+      x: Number.isFinite(anchor?.x) ? anchor.x : 0,
+      y: Number.isFinite(anchor?.y) ? anchor.y : 0,
+      z: Number.isFinite(anchor?.z) ? anchor.z : 0,
+      arrId: (anchor && anchor.arrId!=null) ? anchor.arrId : (arr?.id)
+    };
+    const anchorArr = (safeAnchor.arrId!=null && Store.getState().arrays && Store.getState().arrays[safeAnchor.arrId]) || arr;
+    const startPos = worldPos(anchorArr, safeAnchor.x, safeAnchor.y, safeAnchor.z);
 
     // Parse op
     const text = String(op||'').trim();
     const reNum = (s)=>{ const n = parseFloat(String(s).replace(/[^0-9\-+.]/g,'')); return Number.isFinite(n)? n : 0; };
-      const mTrans = /(?:3D_)?TRANSLATE(?:_ARRAY)?\(\s*(?:[^,]+\s*,\s*)?([^,]+)\s*,\s*([^,]+)\s*,\s*([^,\)]+)\s*\)/i.exec(text);
+    const mTrans = /(?:3D_)?TRANSLATE(?:_ARRAY)?\(\s*(?:[^,]+\s*,\s*)?([^,]+)\s*,\s*([^,]+)\s*,\s*([^,\)]+)\s*\)/i.exec(text);
     const mRot = /(?:3D_)?ROTATE(?:_ARRAY)?\(\s*([^,)]*)\s*(?:,\s*([^,)]*)\s*)?(?:,\s*([^,)]*)\s*)?\)/i.exec(text);
     const mArrayFill = /ARRAY\(\s*"fill"\s*,\s*([^,]+)\s*,\s*([^,\)]+)\s*(?:,\s*([^,\)]+)\s*)?/i.exec(text);
     const isTranspose = /TRANSPOSE\(/i.test(text);
 
-    let animType='translate';
+    const explicitType = type ? String(type).toLowerCase() : '';
+    const toDelta = (v)=>{ const n = Number(v); return Number.isFinite(n)? n : 0; };
+    const toDim = (v)=>{ const n = Number(v); return Number.isFinite(n)? Math.max(1, Math.round(Math.abs(n))) : 1; };
+
+    let animType = '';
     let params={};
-    if(mTrans){ animType='translate'; params={ dx: reNum(mTrans[1]), dy: reNum(mTrans[2]), dz: reNum(mTrans[3]) }; }
-    else if(mRot){ animType='rotate'; params={ sx: reNum(mRot[1]||0), sy: reNum(mRot[2]||0), sz: reNum(mRot[3]||0) }; }
-    else if(mArrayFill){ animType='array'; params={ w: Math.max(1, reNum(mArrayFill[1])|0), h: Math.max(1, reNum(mArrayFill[2])|0), d: Math.max(1, reNum(mArrayFill[3]||1)|0) }; }
-    else if(isTranspose){ animType='transpose'; params={}; }
+    if(explicitType==='translate'){
+      animType='translate';
+      params={
+        dx: toDelta(cfg?.dx ?? cfg?.params?.dx ?? 0),
+        dy: toDelta(cfg?.dy ?? cfg?.params?.dy ?? 0),
+        dz: toDelta(cfg?.dz ?? cfg?.params?.dz ?? 0)
+      };
+    } else if(explicitType==='rotate'){
+      animType='rotate';
+      params={
+        sx: toDelta(cfg?.sx ?? cfg?.params?.sx ?? 0),
+        sy: toDelta(cfg?.sy ?? cfg?.params?.sy ?? 0),
+        sz: toDelta(cfg?.sz ?? cfg?.params?.sz ?? 0)
+      };
+    } else if(explicitType==='array'){
+      animType='array';
+      params={
+        w: toDim(cfg?.w ?? cfg?.width ?? cfg?.params?.w ?? 1),
+        h: toDim(cfg?.h ?? cfg?.height ?? cfg?.params?.h ?? 1),
+        d: toDim(cfg?.d ?? cfg?.depth ?? cfg?.params?.d ?? 1)
+      };
+    } else if(explicitType==='transpose'){
+      animType='transpose';
+      params={};
+    }
+
+    if(!animType){
+      if(mTrans){ animType='translate'; params={ dx: reNum(mTrans[1]), dy: reNum(mTrans[2]), dz: reNum(mTrans[3]) }; }
+      else if(mRot){ animType='rotate'; params={ sx: reNum(mRot[1]||0), sy: reNum(mRot[2]||0), sz: reNum(mRot[3]||0) }; }
+      else if(mArrayFill){ animType='array'; params={ w: Math.max(1, reNum(mArrayFill[1])|0), h: Math.max(1, reNum(mArrayFill[2])|0), d: Math.max(1, reNum(mArrayFill[3]||1)|0) }; }
+      else if(isTranspose){ animType='transpose'; params={}; }
+      else { animType='translate'; params={ dx:0, dy:0, dz:0 }; }
+    }
+
+    if(animType==='array'){
+      params.w = toDim(params.w);
+      params.h = toDim(params.h);
+      params.d = toDim(params.d);
+    }
 
     // Build visuals per type
-    const record = { group, arrId:arr.id, anchor:{...anchor}, ticks:Math.max(1,ticks|0), repeat:!!repeat, reverse:!!reverse, reverseTicks: (reverseTicks==null? null : Math.max(1, reverseTicks|0)), t:0, dir:1, type:animType, params, _built:false };
+    const record = { group, arrId:arr.id, anchor:{...safeAnchor}, ticks:Math.max(1,ticks|0), repeat:!!repeat, reverse:!!reverse, reverseTicks: (reverseTicks==null? null : Math.max(1, reverseTicks|0)), t:0, dir:1, type:animType, params, _built:false };
 
     if(animType==='translate'){
       const cube = makeCell(); cube.position.copy(startPos); group.add(cube);
@@ -9866,7 +9954,7 @@ const Scene = (()=>{
       const {w,h,d}=params; const cells=[];
       for(let zz=0; zz<d; zz++) for(let yy=0; yy<h; yy++) for(let xx=0; xx<w; xx++){
         const c=makeCell(0.84,0.84,0.84);
-        const wp = worldPos(arr, anchor.x+xx, anchor.y+yy, anchor.z+zz);
+        const wp = worldPos(anchorArr, safeAnchor.x+xx, safeAnchor.y+yy, safeAnchor.z+zz);
         c.position.copy(wp); c.visible=false; group.add(c); cells.push({mesh:c, xx, yy, zz});
       }
       record.update = (p)=>{
