@@ -2158,113 +2158,6 @@ tag('3D_TRANSLATE',["SCENE"],(anchor,arr,ast)=>{
     }
   }
 
-  // Micro-collapse followed by staged datafall for a single cell
-  function spawnCellDatafallAt(position, cell, parentArrId){
-    try{
-      // Track active effect under the parent array id (not inferred from cell)
-      try{ const arrId = parentArrId|0; const rec=pendingDatafallDeletes.get(arrId)||{count:0,finished:false}; rec.count++; pendingDatafallDeletes.set(arrId, rec); }catch{}
-      const group = new THREE.Group(); group.userData.kind='microCollapse'; scene.add(group);
-      const micro = { size:4, scale:0.18, spacing:0.22 };
-      const offs = (micro.size-1)/2;
-      const geom = new THREE.BoxGeometry(micro.scale, micro.scale, micro.scale);
-      const mat = new THREE.MeshBasicMaterial({ color: 0x4f46e5, transparent:true, opacity:0.9, depthTest:true, depthWrite:false });
-      const cubes=[];
-      for(let x=0;x<micro.size;x++) for(let y=0;y<micro.size;y++) for(let z=0;z<micro.size;z++){
-        const m = new THREE.Mesh(geom, mat.clone());
-        m.position.set((x-offs)*micro.spacing, (y-offs)*micro.spacing, (z-offs)*micro.spacing);
-        group.add(m); cubes.push(m);
-      }
-      group.position.copy(position);
-      const dur=420; let t0;
-      const step=(ts)=>{
-        if(t0==null) t0=ts; const u=Math.min(1,(ts-t0)/dur); const e=1-Math.pow(1-u,4);
-        cubes.forEach(m=>{ m.position.multiplyScalar(1-e); m.scale.setScalar(1-(0.7*e)); m.material.opacity=0.9*(1-e)+0.1; });
-        if(u<1){ requestAnimationFrame(step); }
-        else {
-          try{ scene.remove(group); group.traverse(o=>{ if(o.isMesh){ o.geometry?.dispose?.(); o.material?.dispose?.(); } }); }catch{}
-          const hasContent = !!(cell && ((cell.formula && String(cell.formula).length) || (cell.value!=='' && cell.value!==null && cell.value!==undefined)));
-          if(!hasContent){
-            try{ const arrId = parentArrId|0; const rec=pendingDatafallDeletes.get(arrId); if(rec){ rec.count--; pendingDatafallDeletes.set(arrId, rec); maybeFinalizeDeletion(arrId); } }catch{}
-            return;
-          }
-          const effGroup=new THREE.Group(); scene.add(effGroup);
-          const hasFormula = !!(cell && typeof cell.formula === 'string' && cell.formula.trim().length);
-          const displayText = hasFormula ? String(cell.formula) : String(cell?.value ?? '');
-          const baseToken = hasFormula ? { tokenKind:'formula', color: DATAFALL_COLORS.syntax } : classifyRawValue(displayText);
-          const baseColor = baseToken.color || DATAFALL_COLORS.syntax;
-          const sp = makeCharSprite(displayText, baseColor);
-          sp.position.copy(position);
-          effGroup.add(sp);
-          const vel = new THREE.Vector3(0,0.022,0);
-          deleteEffects.push({ phase:'datafall', group:effGroup, particles:[{ kind:'value', cell, text:displayText, sprite:sp, vel, age:0, life: 420, rot:0, color: baseColor, tokenKind: baseToken.tokenKind }], onDone:()=>{ try{ const arrId = parentArrId|0; const rec=pendingDatafallDeletes.get(arrId); if(rec){ rec.count--; pendingDatafallDeletes.set(arrId, rec); maybeFinalizeDeletion(arrId); } }catch{} } });
-        }
-      };
-      requestAnimationFrame(step);
-    }catch{}
-  }
-
-  function startDatafallDelete(arr){
-    try{
-      // Disable legacy hover/explode effect for this run by not scheduling spawnDeleteExplosion
-      // Ensure array is fully rendered and chunk meshes exist for per-cell zero scaling
-      try{
-        if(!arr._frame) Scene.renderArray(arr);
-        Object.values(arr.chunks||{}).forEach(ch=>{ ch.ensureMesh?.(); ch.setLOD?.(1); rehydrateChunkInstances(arr, ch); });
-      }catch{}
-      const items=[];
-      try{
-        Object.values(arr.chunks||{}).forEach(ch=>{ (ch.cells||[]).forEach(c=>{ items.push({x:c.x,y:c.y,z:c.z}); }); });
-        items.sort((a,b)=> a.z-b.z || a.y-b.y || a.x-b.x);
-      }catch{}
-      let idx=0; const waveSize=8; const waveDelay=160;
-      // Mark deletion as in-progress
-      pendingDatafallDeletes.set(arr.id, {count:0, finished:false});
-      const spawnWave=()=>{
-        const S=Store.getState(); if(!S.arrays[arr.id]) return;
-        for(let k=0;k<waveSize && idx<items.length;k++,idx++){
-          const c=items[idx];
-          let cell=null; try{ cell = Formula.getCell({arrId:arr.id,x:c.x,y:c.y,z:c.z}); }catch{}
-          const pos = cellWorldPos(arr, c.x, c.y, c.z);
-          spawnCellDatafallAt(pos, cell? {...cell, arrId: arr.id } : null, arr.id);
-          // Hide this cell's voxel instance immediately to simulate shrinking
-          try{
-            const CH = chunkOf(c.x,c.y,c.z); const key = keyChunk(CH.x,CH.y,CH.z);
-            const ch = (arr.chunks||{})[key];
-            if(ch){
-              const mesh = ch.meshLOD1 || ch.meshLOD2 || null;
-              const list = ch.index2cell || [];
-              if(mesh && list && list.length){
-                const idx3 = list.findIndex(q=> q && q.x===c.x && q.y===c.y && q.z===c.z);
-                if(idx3>=0){
-                  const mat = new THREE.Matrix4(); mat.makeScale(0,0,0);
-                  mesh.setMatrixAt(idx3, mat);
-                  mesh.instanceMatrix.needsUpdate = true;
-                }
-              } else {
-                // Fallback to legacy layerMeshes path per Z slice
-                const rec = layerMeshes.get(`${arr.id}:${c.z}:filled`) || layerMeshes.get(`${arr.id}:${c.z}:formula`) || layerMeshes.get(`${arr.id}:${c.z}:empty`);
-                if(rec && rec.mesh && rec.index2cell){
-                  const idxL = rec.index2cell.findIndex(q=> q && q.x===c.x && q.y===c.y && q.z===c.z);
-                  if(idxL>=0){ const mat = new THREE.Matrix4(); mat.makeScale(0,0,0); rec.mesh.setMatrixAt(idxL, mat); rec.mesh.instanceMatrix.needsUpdate=true; }
-                }
-              }
-            }
-          }catch{}
-        }
-        if(idx<items.length) setTimeout(spawnWave, waveDelay);
-        else {
-          // After last wave, mark finished; do NOT hard-hide to keep remaining context visible; finalize when all effects done
-          setTimeout(()=>{ try{ const rec=pendingDatafallDeletes.get(arr.id)||{count:0}; rec.finished=true; pendingDatafallDeletes.set(arr.id, rec); maybeFinalizeDeletion(arr.id); }catch{} }, 200);
-        }
-      };
-      spawnWave();
-    }catch(e){ console.warn('startDatafallDelete failed', e); }
-  }
-  globalThis.__startDatafallDelete = startDatafallDelete;
-  if(globalThis.Scene){
-    try{ globalThis.Scene.startDatafallDelete = startDatafallDelete; }catch{}
-  }
-
   if(!targetArr){ Actions.setCell(arr.id, anchor, '!ERR:TARGET', ast.raw, true); return; }
 
   // If PREVIEW is on (in-array or 3D), do not apply now; animation system will read formulas
@@ -11012,6 +10905,186 @@ const Scene = (()=>{
     spr.renderOrder = 2100;
     return spr;
   }
+  function spawnCellDatafallAt(position, cell, parentArrId){
+    try{
+      try{
+        const arrId = parentArrId|0;
+        const rec = pendingDatafallDeletes.get(arrId) || {count:0, finished:false};
+        rec.count++;
+        pendingDatafallDeletes.set(arrId, rec);
+      }catch{}
+      const group = new THREE.Group();
+      group.userData.kind='microCollapse';
+      scene.add(group);
+      const micro = { size:4, scale:0.18, spacing:0.22 };
+      const offs = (micro.size-1)/2;
+      const geom = new THREE.BoxGeometry(micro.scale, micro.scale, micro.scale);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x4f46e5, transparent:true, opacity:0.9, depthTest:true, depthWrite:false });
+      const cubes=[];
+      for(let x=0;x<micro.size;x++) for(let y=0;y<micro.size;y++) for(let z=0;z<micro.size;z++){
+        const m = new THREE.Mesh(geom, mat.clone());
+        m.position.set((x-offs)*micro.spacing, (y-offs)*micro.spacing, (z-offs)*micro.spacing);
+        group.add(m);
+        cubes.push(m);
+      }
+      group.position.copy(position);
+      const dur=420; let t0;
+      const step=(ts)=>{
+        if(t0==null) t0=ts;
+        const u=Math.min(1,(ts-t0)/dur);
+        const e=1-Math.pow(1-u,4);
+        cubes.forEach(m=>{
+          m.position.multiplyScalar(1-e);
+          m.scale.setScalar(1-(0.7*e));
+          m.material.opacity=0.9*(1-e)+0.1;
+        });
+        if(u<1){
+          requestAnimationFrame(step);
+        } else {
+          try{
+            scene.remove(group);
+            group.traverse(o=>{
+              if(o.isMesh){
+                o.geometry?.dispose?.();
+                o.material?.dispose?.();
+              }
+            });
+          }catch{}
+          const hasContent = !!(cell && ((cell.formula && String(cell.formula).length) || (cell.value!=='' && cell.value!==null && cell.value!==undefined)));
+          if(!hasContent){
+            try{
+              const arrId = parentArrId|0;
+              const rec = pendingDatafallDeletes.get(arrId);
+              if(rec){
+                rec.count--;
+                pendingDatafallDeletes.set(arrId, rec);
+                maybeFinalizeDeletion(arrId);
+              }
+            }catch{}
+            return;
+          }
+          const effGroup=new THREE.Group();
+          scene.add(effGroup);
+          const hasFormula = !!(cell && typeof cell.formula === 'string' && cell.formula.trim().length);
+          const displayText = hasFormula ? String(cell.formula) : String(cell?.value ?? '');
+          const baseToken = hasFormula ? { tokenKind:'formula', color: DATAFALL_COLORS.syntax } : classifyRawValue(displayText);
+          const baseColor = baseToken.color || DATAFALL_COLORS.syntax;
+          const sp = makeCharSprite(displayText, baseColor);
+          sp.position.copy(position);
+          effGroup.add(sp);
+          const vel = new THREE.Vector3(0,0.022,0);
+          deleteEffects.push({
+            phase:'datafall',
+            group:effGroup,
+            particles:[{
+              kind:'value',
+              cell,
+              text:displayText,
+              sprite:sp,
+              vel,
+              age:0,
+              life:420,
+              rot:0,
+              color: baseColor,
+              tokenKind: baseToken.tokenKind
+            }],
+            onDone:()=>{
+              try{
+                const arrId = parentArrId|0;
+                const rec = pendingDatafallDeletes.get(arrId);
+                if(rec){
+                  rec.count--;
+                  pendingDatafallDeletes.set(arrId, rec);
+                  maybeFinalizeDeletion(arrId);
+                }
+              }catch{}
+            }
+          });
+        }
+      };
+      requestAnimationFrame(step);
+    }catch{}
+  }
+  function startDatafallDelete(arr){
+    try{
+      try{
+        if(!arr._frame) renderArray(arr);
+        Object.values(arr.chunks||{}).forEach(ch=>{
+          ch.ensureMesh?.();
+          ch.setLOD?.(1);
+          rehydrateChunkInstances(arr, ch);
+        });
+      }catch{}
+      const items=[];
+      try{
+        Object.values(arr.chunks||{}).forEach(ch=>{
+          (ch.cells||[]).forEach(c=>{ items.push({x:c.x,y:c.y,z:c.z}); });
+        });
+        items.sort((a,b)=> a.z-b.z || a.y-b.y || a.x-b.x);
+      }catch{}
+      let idx=0;
+      const waveSize=8;
+      const waveDelay=160;
+      pendingDatafallDeletes.set(arr.id, {count:0, finished:false});
+      const spawnWave=()=>{
+        const S=Store.getState();
+        if(!S.arrays[arr.id]) return;
+        for(let k=0;k<waveSize && idx<items.length;k++,idx++){
+          const c=items[idx];
+          let cell=null;
+          try{
+            cell = Formula.getCell({arrId:arr.id,x:c.x,y:c.y,z:c.z});
+          }catch{}
+          const pos = cellWorldPos(arr, c.x, c.y, c.z);
+          spawnCellDatafallAt(pos, cell? {...cell, arrId: arr.id } : null, arr.id);
+          try{
+            const CH = chunkOf(c.x,c.y,c.z);
+            const key = keyChunk(CH.x,CH.y,CH.z);
+            const ch = (arr.chunks||{})[key];
+            if(ch){
+              const mesh = ch.meshLOD1 || ch.meshLOD2 || null;
+              const list = ch.index2cell || [];
+              if(mesh && list && list.length){
+                const idx3 = list.findIndex(q=> q && q.x===c.x && q.y===c.y && q.z===c.z);
+                if(idx3>=0){
+                  const mat = new THREE.Matrix4();
+                  mat.makeScale(0,0,0);
+                  mesh.setMatrixAt(idx3, mat);
+                  mesh.instanceMatrix.needsUpdate = true;
+                }
+              } else {
+                const rec = layerMeshes.get(`${arr.id}:${c.z}:filled`) || layerMeshes.get(`${arr.id}:${c.z}:formula`) || layerMeshes.get(`${arr.id}:${c.z}:empty`);
+                if(rec && rec.mesh && rec.index2cell){
+                  const idxL = rec.index2cell.findIndex(q=> q && q.x===c.x && q.y===c.y && q.z===c.z);
+                  if(idxL>=0){
+                    const mat = new THREE.Matrix4();
+                    mat.makeScale(0,0,0);
+                    rec.mesh.setMatrixAt(idxL, mat);
+                    rec.mesh.instanceMatrix.needsUpdate=true;
+                  }
+                }
+              }
+            }
+          }catch{}
+        }
+        if(idx<items.length){
+          setTimeout(spawnWave, waveDelay);
+        } else {
+          setTimeout(()=>{
+            try{
+              const rec=pendingDatafallDeletes.get(arr.id)||{count:0};
+              rec.finished=true;
+              pendingDatafallDeletes.set(arr.id, rec);
+              maybeFinalizeDeletion(arr.id);
+            }catch{}
+          }, 200);
+        }
+      };
+      spawnWave();
+    }catch(e){
+      console.warn('startDatafallDelete failed', e);
+    }
+  }
   function spawnDeleteExplosion(arr){
     try{
       const group = new THREE.Group();
@@ -11536,15 +11609,8 @@ const Scene = (()=>{
     // keep it facing camera without touching renderOrder
     label.lookAt(camera.position);
   }
-  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, spawnDeleteExplosion, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings};
+  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, spawnDeleteExplosion, startDatafallDelete, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings};
 })();
-
-try{
-  if(globalThis.__startDatafallDelete){
-    Scene.startDatafallDelete = globalThis.__startDatafallDelete;
-    delete globalThis.__startDatafallDelete;
-  }
-}catch{}
 
 /* ===========================
    UI
