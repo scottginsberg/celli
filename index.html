@@ -730,6 +730,81 @@ function playCellClick(){
   lastCellClickSound = now;
   playClickSound();
 }
+
+const ChimeSystem = (()=>{
+  const NOTE_BASE = { C:-9, D:-7, E:-5, F:-4, G:-2, A:0, B:2 };
+  let ctx = null;
+  let master = null;
+
+  function ensureContext(){
+    if(typeof window === 'undefined') return null;
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if(!AudioCtx) return null;
+    if(!ctx){
+      try{
+        ctx = new AudioCtx();
+        master = ctx.createGain();
+        master.gain.value = 0.22;
+        master.connect(ctx.destination);
+      }catch{ ctx = null; master = null; return null; }
+    }
+    if(ctx && ctx.state === 'suspended'){
+      try{ ctx.resume(); }catch{}
+    }
+    return ctx && master ? { ctx, master } : null;
+  }
+
+  function parseNote(raw){
+    if(raw == null) return null;
+    const str = String(raw).trim();
+    if(!str) return null;
+    const letter = str[0].toUpperCase();
+    if(!NOTE_BASE.hasOwnProperty(letter)) return null;
+    let accidental = '';
+    const rest = str.slice(1).trim();
+    if(rest.startsWith('#')) accidental = '#';
+    else if(rest.startsWith('b') || rest.startsWith('B')) accidental = 'b';
+    let offset = NOTE_BASE[letter];
+    if(accidental === '#') offset += 1;
+    if(accidental === 'b') offset -= 1;
+    return { label: `${letter}${accidental}`, offset };
+  }
+
+  function toOctave(raw){
+    if(raw == null || raw === '') return 4;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : 4;
+  }
+
+  function toFrequency(offset, octave){
+    const semitones = offset + (octave - 4) * 12;
+    return 440 * Math.pow(2, semitones / 12);
+  }
+
+  function play(offset, octave, duration = 0.65){
+    const ctxData = ensureContext();
+    if(!ctxData) return;
+    const { ctx, master: masterGain } = ctxData;
+    try{
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      const now = ctx.currentTime;
+      const freq = toFrequency(offset, octave);
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, now);
+      env.gain.setValueAtTime(0, now);
+      env.gain.linearRampToValueAtTime(1, now + 0.018);
+      env.gain.exponentialRampToValueAtTime(0.0001, now + Math.max(0.2, duration));
+      osc.connect(env);
+      env.connect(masterGain);
+      osc.start(now);
+      osc.stop(now + Math.max(0.25, duration) + 0.12);
+    }catch(e){ console.warn('Chime playback failed', e); }
+  }
+
+  return { ensureContext, parseNote, toOctave, toFrequency, play };
+})();
+try{ window.CelliChimes = ChimeSystem; }catch{}
 // Early touch detection so initial sizing uses correct mode (coarse pointer or small screen with touch)
 try{
   const coarse = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
@@ -2094,7 +2169,7 @@ const ALWAYS = new Set([
   'FUNCTIONS','LOCK','CREATE','ARRAY','PARAMETERS','ADDRESS','ALT_ADDRESS','COMBINE','COLOR','GETCOLOR',
   'ON_SELECT','ON_EVENT','FIRE_EVENT','SET_GLOBAL','GET_GLOBAL','FOCUS_SET','COPY',
   'SOKOBAN','SOKO_STEP','SOKOBAN2','SOKO_STEP2','SSR','SSR_STEP','DEP_VIS','GET_ARRAY_POS','SET_ARRAY_POS','TRANSLATE_ARRAY','ROTATE_ARRAY',
-  'INVENTORY','3D_TRANSLATE','3D_ROTATE','DELETE','DEL','REMOVE'
+  'INVENTORY','3D_TRANSLATE','3D_ROTATE','DELETE','DEL','REMOVE','LIGHT','CHIME'
 ]);
 const Fn = {}; // name -> {tags:[...], impl(anchor, arr, ast)}
 const tag = (name,tags,impl)=>{ Fn[name]={tags:new Set(tags),impl}; };
@@ -6180,6 +6255,62 @@ tag('SET_SELECT',['ACTION'],(anchor,arr,ast)=>{
   Actions.setSelection(t.arrId,{x:t.x,y:t.y,z:t.z},null,'3d');
   Actions.setCell(arr.id, anchor, `Select:${A1(t.x)}${t.y+1}${greek(t.z)}`, ast.raw, true);
 });
+tag('LIGHT',['SCENE'],(anchor,arr,ast)=>{
+  const toBool = (v)=>{
+    if(v == null) return false;
+    if(typeof v === 'boolean') return v;
+    if(typeof v === 'number') return v !== 0;
+    const s = String(v).trim().toLowerCase();
+    if(!s) return false;
+    return !['0','false','off','no'].includes(s);
+  };
+  try{
+    const stateVal = Formula.valOf(ast.args[0]);
+    const enabled = toBool(stateVal);
+    const targetRef = (ast.args[1] && ast.args[1].kind==='ref') ? ast.args[1] : null;
+    const lumensRaw = ast.args[2] ? Formula.valOf(ast.args[2]) : null;
+    let lumens = (lumensRaw==null || lumensRaw==='') ? 800 : parseFloat(lumensRaw);
+    if(!Number.isFinite(lumens)) lumens = 800;
+    lumens = Math.max(0, lumens);
+    const source = { arrId:arr.id, x:anchor.x, y:anchor.y, z:anchor.z };
+    if(!enabled || lumens<=0){
+      try{ Scene.removeCellLight?.(source); }catch{}
+      Actions.setCell(arr.id, anchor, 'LIGHT:OFF', ast.raw, true);
+      return;
+    }
+    const cell = Formula.getCell({arrId:arr.id, x:anchor.x, y:anchor.y, z:anchor.z}) || {};
+    const color = cell?.meta?.color || '#ffffff';
+    try{
+      Scene.upsertCellLight?.(source, {
+        enabled:true,
+        mode: targetRef ? 'spot' : 'point',
+        targetRef,
+        lumens,
+        color
+      });
+    }catch(e){ console.warn('LIGHT() upsert failed', e); }
+    Actions.setCell(arr.id, anchor, targetRef ? 'LIGHT:SPOT' : 'LIGHT:POINT', ast.raw, true);
+  }catch(e){
+    console.warn('LIGHT() failed', e);
+    Actions.setCell(arr.id, anchor, `!ERR:${e.message||'LIGHT'}`, ast.raw, true);
+  }
+});
+tag('CHIME',['AUDIO'],(anchor,arr,ast)=>{
+  try{
+    const noteVal = Formula.valOf(ast.args[0]);
+    const parsed = ChimeSystem.parseNote(noteVal);
+    if(!parsed){ Actions.setCell(arr.id, anchor, '!ERR:NOTE', ast.raw, true); return; }
+    const octVal = ast.args[1] ? Formula.valOf(ast.args[1]) : null;
+    const octave = ChimeSystem.toOctave(octVal);
+    const durVal = ast.args[2] ? Number(Formula.valOf(ast.args[2])) : null;
+    const duration = Number.isFinite(durVal) && durVal>0 ? durVal : 0.65;
+    try{ ChimeSystem.play(parsed.offset, octave, duration); }catch(e){ console.warn('Chime playback error', e); }
+    Actions.setCell(arr.id, anchor, `CHIME:${parsed.label}${octave}`, ast.raw, true);
+  }catch(e){
+    console.warn('CHIME() failed', e);
+    Actions.setCell(arr.id, anchor, '!ERR:CHIME', ast.raw, true);
+  }
+});
 tag('2D_PLATFORMER',['META'],(anchor,arr,ast)=>{
   console.log('2D_PLATFORMER: Starting execution...', anchor, arr.id);
   try {
@@ -6639,7 +6770,13 @@ const Scene = (()=>{
 
   function ensureFancyComposer(){
     if(FancyGraphics.composer) return;
-    FancyGraphics.composer = new EffectComposer(renderer);
+    const fancyTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+      depthBuffer: true,
+      stencilBuffer: true
+    });
+    FancyGraphics.composer = new EffectComposer(renderer, fancyTarget);
+    if(FancyGraphics.composer.renderTarget1) FancyGraphics.composer.renderTarget1.stencilBuffer = true;
+    if(FancyGraphics.composer.renderTarget2) FancyGraphics.composer.renderTarget2.stencilBuffer = true;
     FancyGraphics.passes.render = new RenderPass(scene, camera);
     FancyGraphics.composer.addPass(FancyGraphics.passes.render);
 
@@ -7377,6 +7514,10 @@ const Scene = (()=>{
   // Global map for value label sprites (persist across rebuilds)
   window.valueSprites = window.valueSprites || new Map();
   const valueSprites = window.valueSprites;
+  window.cellLights = window.cellLights || new Map();
+  const cellLights = window.cellLights;
+  window.cellLightTargets = window.cellLightTargets || new Map();
+  const cellLightTargets = window.cellLightTargets;
   let lastCamSig = '';
   const SPRITE_FACE_OFFSET = 0.58; // push label fully outside cell face (avoid z-fight/inside look)
   function axisCharToNum(ch){ return ch==='X'?0 : ch==='Y'?1 : 2; }
@@ -7417,9 +7558,149 @@ const Scene = (()=>{
         else { dy = off; }
         sprite.position.set(base.x+dx, base.y+dy, base.z+dz);
         // Ensure sprite is visible when repositioned; occlusion masking will hide if blocked
-        sprite.visible = true;
-      });
+      sprite.visible = true;
+    });
     }catch{}
+  }
+
+  function lightKey(ref){ if(!ref) return ''; return `${ref.arrId}:${ref.x},${ref.y},${ref.z}`; }
+  function untrackLightTarget(key, targetRef){
+    if(!targetRef) return;
+    const set = cellLightTargets.get(targetRef.arrId);
+    if(set){ set.delete(key); if(set.size===0) cellLightTargets.delete(targetRef.arrId); }
+  }
+  function trackLightTarget(key, targetRef){
+    if(!targetRef) return;
+    let set = cellLightTargets.get(targetRef.arrId);
+    if(!set){ set = new Set(); cellLightTargets.set(targetRef.arrId, set); }
+    set.add(key);
+  }
+  function ensureLightInstance(record){
+    if(!record) return;
+    const wantSpot = record.config?.mode === 'spot';
+    const haveSpot = !!record.light?.isSpotLight;
+    if(!record.light || wantSpot !== haveSpot){
+      if(record.light){ record.group.remove(record.light); }
+      if(record.target){ record.group.remove(record.target); record.target = null; }
+      if(wantSpot){
+        const spot = new THREE.SpotLight(0xffffff, 1, 24, Math.PI/4, 0.35, 2.0);
+        spot.castShadow = false;
+        const target = new THREE.Object3D();
+        record.group.add(spot);
+        record.group.add(target);
+        spot.target = target;
+        record.light = spot;
+        record.target = target;
+      } else {
+        const point = new THREE.PointLight(0xffffff, 1, 18, 2);
+        point.castShadow = false;
+        record.group.add(point);
+        record.light = point;
+        record.target = null;
+      }
+    }
+  }
+  function attachLightToArray(record){
+    if(!record) return;
+    const arr = Store.getState().arrays[record.source.arrId];
+    if(!arr) return;
+    const local = localPos(arr, record.source.x, record.source.y, record.source.z);
+    if(arr._frame){
+      if(record.group.parent !== arr._frame){
+        record.group.parent?.remove(record.group);
+        arr._frame.add(record.group);
+      }
+      record.group.position.copy(local);
+    } else {
+      const world = cellWorldPos(arr, record.source.x, record.source.y, record.source.z);
+      if(record.group.parent !== scene){
+        record.group.parent?.remove(record.group);
+        scene.add(record.group);
+      }
+      record.group.position.copy(world);
+    }
+  }
+  function updateLightTarget(record){
+    if(!record?.light?.isSpotLight) return;
+    const arr = Store.getState().arrays[record.source.arrId];
+    if(!arr) return;
+    const originWorld = cellWorldPos(arr, record.source.x, record.source.y, record.source.z);
+    let dir = new THREE.Vector3(0,-1,0);
+    const targetRef = record.config?.targetRef;
+    if(targetRef){
+      const tgtArr = Store.getState().arrays[targetRef.arrId];
+      if(tgtArr){
+        const targetWorld = cellWorldPos(tgtArr, targetRef.x, targetRef.y, targetRef.z);
+        dir = targetWorld.clone().sub(originWorld);
+      }
+    }
+    if(dir.lengthSq() < 1e-6) dir.set(0,-1,0);
+    dir.normalize();
+    if(arr._frame){
+      const inv = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().copy(arr._frame.matrixWorld).invert());
+      dir.applyMatrix3(inv).normalize();
+    }
+    const range = record.config?.beamLength ?? 4.5;
+    if(record.target){ record.target.position.copy(dir.clone().multiplyScalar(range)); }
+  }
+  function updateLightProperties(record){
+    if(!record?.light) return;
+    const lumens = Math.max(0, Number(record.config?.lumens ?? 0));
+    const intensity = lumens <= 0 ? 0 : Math.max(0.1, lumens / 800);
+    const distance = record.config?.distance ?? (lumens <= 0 ? 0 : Math.min(60, 8 + Math.sqrt(lumens||0) * 0.18));
+    const color = record.config?.color || '#ffffff';
+    try{ record.light.color.set(color); }catch{ record.light.color.set(0xffffff); }
+    record.light.intensity = intensity;
+    record.light.distance = distance;
+    record.light.decay = 2;
+    if(record.light.isSpotLight){
+      record.light.angle = record.config?.angle ?? (Math.PI/5);
+      record.light.penumbra = record.config?.penumbra ?? 0.4;
+      updateLightTarget(record);
+    }
+  }
+  function removeCellLight(ref){
+    const key = typeof ref === 'string' ? ref : lightKey(ref);
+    if(!key) return;
+    const record = cellLights.get(key);
+    if(!record) return;
+    if(record.config?.targetRef) untrackLightTarget(key, record.config.targetRef);
+    try{ record.group?.parent?.remove(record.group); }catch{}
+    cellLights.delete(key);
+    needsRender = true;
+  }
+  function upsertCellLight(ref, config){
+    if(!ref) return null;
+    const arr = Store.getState().arrays[ref.arrId];
+    if(!arr) return null;
+    const key = lightKey(ref);
+    if(!config || !config.enabled || (config.lumens!=null && config.lumens<=0)){
+      removeCellLight(key);
+      return null;
+    }
+    let record = cellLights.get(key);
+    if(!record){
+      record = { source:{...ref}, config:{}, group:new THREE.Group(), light:null, target:null };
+      record.group.userData.kind = 'cellLight';
+      cellLights.set(key, record);
+    }
+    if(record.config?.targetRef) untrackLightTarget(key, record.config.targetRef);
+    record.source = {...ref};
+    record.config = { ...config };
+    if(config.targetRef) trackLightTarget(key, config.targetRef);
+    ensureLightInstance(record);
+    attachLightToArray(record);
+    updateLightProperties(record);
+    needsRender = true;
+    return record;
+  }
+  function refreshLightsForArray(arrId){
+    cellLights.forEach((record)=>{
+      if(record.source?.arrId === arrId || record.config?.targetRef?.arrId === arrId){
+        attachLightToArray(record);
+        updateLightProperties(record);
+      }
+    });
   }
   function clearOcclusion(arr){ try{ if(arr){ delete arr._occlusionData; } }catch{} }
   let lastFocusedArrayId = null;
@@ -8454,6 +8735,7 @@ const Scene = (()=>{
     // center frame at array offset like voxels
     const off=arr.offset||{x:0,y:0,z:0};
     arr._frame.position.set(off.x,off.y,off.z);
+    try{ refreshLightsForArray(arr.id); }catch{}
     // No in-scene d-pad overlay (HUD-only)
     buildAxes(arr);
     // Reparent any chunk meshes/shells under frame to ensure center alignment
@@ -9416,6 +9698,9 @@ const Scene = (()=>{
   try{ Scene.buildTimedPlanFromArray = buildTimedPlanFromArray; }catch{}
   try{ Scene.configTimed = configTimed; }catch{}
   try{ Scene.stopTimed = stopTimed; }catch{}
+  try{ Scene.upsertCellLight = upsertCellLight; }catch{}
+  try{ Scene.removeCellLight = removeCellLight; }catch{}
+  try{ Scene.refreshLightsForArray = refreshLightsForArray; }catch{}
   try{ Scene.ensureTimed3D = ensureTimed3D; }catch{}
   function addTimedTranslation(arr, anchor, cfg){
     const { ticks=60, repeat=false, reverse=false, reverseTicks=null, op='' } = cfg||{};
@@ -10359,6 +10644,8 @@ const Scene = (()=>{
       }
     });
 
+    try{ refreshLightsForArray(arr.id); }catch{}
+
     // Skip rebuilding axes during movement to prevent stamping
     // buildAxes(arr); // Commented out - only rebuild when array structure changes
     const s=Store.getState().selection; if(s.arrayId===arr.id) updateFocus(s);
@@ -10656,6 +10943,10 @@ const Scene = (()=>{
       const MAT_DARK  = new THREE.MeshLambertMaterial({ color: 0x374151 });
       const MAT_BLUSH = new THREE.MeshLambertMaterial({ color: 0xec4899 });
       const MAT_WING  = new THREE.MeshLambertMaterial({ color: 0xf59e0b, side: THREE.DoubleSide });
+      const MAT_OUTLINE = new THREE.MeshBasicMaterial({ color: 0x111827 });
+      MAT_OUTLINE.depthTest = false;
+      MAT_OUTLINE.depthWrite = false;
+      MAT_OUTLINE.toneMapped = false;
       const root = new THREE.Group();
       root.scale.setScalar(0.40);
       // Body
@@ -10740,8 +11031,27 @@ const Scene = (()=>{
       const legL = makeLeg(-.20), legR = makeLeg(.20);
       legR.legRoot.position.set(Math.abs(legL.legRoot.position.x), legL.legRoot.position.y, legL.legRoot.position.z);
       root.add(bodyGroup, L.armRoot, R.armRoot, legL.legRoot, legR.legRoot);
+      const baseMeshes = [];
+      root.traverse(n=>{ if(n.isMesh) baseMeshes.push(n); });
+      baseMeshes.forEach(mesh=>{
+        const outline = new THREE.Mesh(mesh.geometry, MAT_OUTLINE);
+        outline.name = `${mesh.name||'part'}_outline`;
+        outline.userData.isAvatarOutline = true;
+        outline.scale.set(1.08,1.08,1.08);
+        outline.position.set(0,0,0);
+        outline.castShadow = false;
+        outline.receiveShadow = false;
+        mesh.add(outline);
+      });
       // Ensure overlay rendering above voxels
-      root.traverse(n=>{ if(n.isMesh){ n.material.depthTest = true; n.material.depthWrite = false; n.renderOrder = 2000; } });
+      root.traverse(n=>{
+        if(!n.isMesh) return;
+        const isOutline = !!n.userData?.isAvatarOutline;
+        n.material.depthTest = false;
+        n.material.depthWrite = false;
+        if(n.material.toneMapped !== false) n.material.toneMapped = false;
+        n.renderOrder = isOutline ? 10499 : 10500;
+      });
       return root;
     }
   };
@@ -12745,6 +13055,7 @@ const UI = (()=>{
       {name:'ENTER',tags:'ACTION EMBED',syntax:'=ENTER(embeddedRef)',params:'cell containing embed',desc:'Moves focus into the embedded array pocket; parent appears as upscaled room skin.'},
       {name:'PHYSICS',tags:'ACTION',syntax:'=PHYSICS(1|0)',params:'0/1',desc:'Toggles platforming/physics mode in the scene.'},
       {name:'HIGHLIGHT',tags:'SCENE',syntax:'=HIGHLIGHT(mode[, scope[, style]])',params:'mode: "dynamic"|"static" · scope: "cell"|"face" · style: "wireframe"|"solid"|"glow"',desc:'Controls selection highlighting. Dynamic adapts to camera angle, face highlights just the camera-facing side.'},
+      {name:'LIGHT',tags:'SCENE',syntax:'=LIGHT(state[, targetCell[, lumens]])',params:'state: TRUE/FALSE or 1/0 · targetCell: optional cell reference (0 keeps point light) · lumens: brightness in lumens (default 800)',desc:'Creates a light at the calling cell using its color. Optionally aim at another cell for a spotlight. Lights follow array transforms.'},
       {name:'TIMED_TRANSLATION',tags:'SCENE',syntax:'=TIMED_TRANSLATION(state[, ticks[, reverse]])',params:'state: 0/1 enable · ticks: duration · reverse: 0/1 bidirectional',desc:'Sets animation preview state; shows green prism motion previews.'},
       {name:'HIDE',tags:'SCENE',syntax:'=HIDE(target, mode[, scope])',params:'target: ref/range/array · mode: 0=show,1=hide · scope: "contents"|"voxel"|"array"',desc:'Hides cell contents, voxels themselves, ranges, or entire arrays with axes/2D visibility.'},
       {name:'HYPERLINK',tags:'IO',syntax:'=HYPERLINK(url[, label])',params:'url: string/ref · label: optional display text',desc:'Creates clickable link in cell with metadata.'},
@@ -12766,6 +13077,7 @@ const UI = (()=>{
       {name:'STORE_ARRAY',tags:'PURE',syntax:'=STORE_ARRAY(source[, "Name"])',params:'source: range (A1α:C3α), dimensions (w,h,d), or inline values (1,2,3) · Name: optional template name',desc:'Captures data as a reusable template. Dimensions collect from anchor area, ranges from specified cells, inline values as list.'},
       {name:'CAST',tags:'SCENE',syntax:'=CAST(direction[, data])',params:'direction: "UP"|"DOWN"|"FORWARD"|"BACK"|"LEFT"|"RIGHT" · data: optional payload',desc:'Spawns a moving voxel packet in the specified direction (physics integration pending).'},
       {name:'ON_COLLIDE',tags:'SCENE',syntax:'=ON_COLLIDE(handler)',params:'handler: formula to execute when hit by CAST packet',desc:'Sets collision response handler for incoming voxel packets.'},
+      {name:'CHIME',tags:'AUDIO',syntax:'=CHIME(note[, octave[, duration]])',params:'note: A–G with optional # or b · octave: integer (default 4) · duration: optional seconds',desc:'Plays a musical chime. Triggerable from formulas, DO(), onClick(), or onSelect() for interactive instruments.'},
       {name:'FUNCTION_UI',tags:'META',syntax:'=FUNCTION_UI([port[, filter[, page[, perPage]]]])',params:'port: "east"|"west"|"north"|"south" · filter: substring filter · page: page number · perPage: functions per page',desc:'Creates diegetic function browser. Rows use ON_SELECT hooks: ▶ inserts to focus and toasts; 📋 copies call and toasts.'},
       {name:'INVENTORY',tags:'META',syntax:'=INVENTORY([port[, title]])',params:'port: dock position · title: inventory name',desc:'Creates interactive inventory with +/- quantity buttons and ▶ use buttons.'},
       {name:'2D_PLATFORMER',tags:'META',syntax:'=2D_PLATFORMER([port])',params:'port: dock position for controller',desc:'Creates controller (ON_SELECT joystick) and screen; center button spawns screen via ON_SELECT.'},
