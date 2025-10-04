@@ -886,6 +886,62 @@ const debugCoord = (label, arrId, coord) => { console.log(`${label}: 3D(${coord.
 const parseA1g = (s,defId)=>{const m=/^([A-Z]+)(\d+)([\u03b1-\u03c9])?(?:\^(-?\d+))?$/.exec(s.trim()); if(!m) return null; let x=0; for(let i=0;i<m[1].length;i++) x=x*26+(m[1].charCodeAt(i)-64); x--; const y=+m[2]-1; const G='αβγδεζηθικλμνξοπρστυφχψω'; const z=m[3]?G.indexOf(m[3]):null; const arrId=m[4]!==undefined?+m[4]:defId; return {x,y,z,arrId};};
 const showToast=(t)=>{const el=document.getElementById('toast'); el.textContent=t; el.style.display='block'; setTimeout(()=>el.style.display='none',1200);};
 
+const META_KEY_ALIASES = {
+  on_click: ['onClick'],
+  on_hold: ['onHold'],
+  on_touch: ['onTouch'],
+  on_land: ['onLand']
+};
+const META_KEY_CANONICAL = {};
+Object.entries(META_KEY_ALIASES).forEach(([canonical, aliases])=>{
+  META_KEY_CANONICAL[canonical] = canonical;
+  aliases.forEach(alias=>{ META_KEY_CANONICAL[alias] = canonical; });
+});
+function canonicalMetaKey(key){
+  return META_KEY_CANONICAL[key] || key;
+}
+function normalizeMetaKeys(meta){
+  if(!meta) return {};
+  let changed=false;
+  const result={};
+  Object.entries(meta).forEach(([key,value])=>{
+    if(value===undefined) return;
+    const canonical = canonicalMetaKey(key);
+    if(canonical!==key) changed=true;
+    if(result[canonical]===undefined) result[canonical]=value;
+  });
+  if(!changed && Object.keys(result).length===Object.keys(meta).length){
+    return meta;
+  }
+  return result;
+}
+function getMetaAction(meta, canonical){
+  if(!meta) return undefined;
+  const canonicalKey = canonicalMetaKey(canonical);
+  if(meta[canonicalKey] !== undefined) return meta[canonicalKey];
+  const aliases = META_KEY_ALIASES[canonicalKey] || [];
+  for(const alias of aliases){
+    if(meta[alias] !== undefined){
+      const val = meta[alias];
+      meta[canonicalKey] = val;
+      delete meta[alias];
+      return val;
+    }
+  }
+  return undefined;
+}
+function ensureOnSelectHooks(arr){
+  if(!arr) return [];
+  if(Array.isArray(arr.on_select_hooks)) return arr.on_select_hooks;
+  if(Array.isArray(arr.onSelectHooks)){
+    arr.on_select_hooks = arr.onSelectHooks;
+    delete arr.onSelectHooks;
+    return arr.on_select_hooks;
+  }
+  arr.on_select_hooks = [];
+  return arr.on_select_hooks;
+}
+
 /* ===========================
    Tiny Store (Zustand-ish)
 =========================== */
@@ -909,7 +965,7 @@ const Store = createStore((set,get)=>{
     hidden:new Set(), // aKey(cell) -> hidden (per-cell visual mask)
     namedMacros:new Map(), // name -> formula
     // Deferred/meta binding queue for robust late resolution
-    pendingMeta: [], // {kind:'onClick'|'note', target:{arrId,x,y,z}, meta:{...}}
+    pendingMeta: [], // {kind:'on_click'|'note', target:{arrId,x,y,z}, meta:{...}}
     // Global state and event system
     globalState: new Map(), // key -> value
     eventListeners: new Map(), // eventName -> [listenerObjects]
@@ -981,7 +1037,8 @@ const Store = createStore((set,get)=>{
             };
           }catch{}
           if(a.axesVisible !== undefined) outA.axesVisible = !!a.axesVisible;
-          if(a.onSelectHooks)             outA.onSelectHooks = a.onSelectHooks;
+          const selectHooks = ensureOnSelectHooks(a);
+          if(selectHooks.length)          outA.on_select_hooks = selectHooks;
           if(a.uiControls)                outA.uiControls    = a.uiControls;
           if(a.cameraLock)                outA.cameraLock    = a.cameraLock;
           if(a.viewMode)                  outA.viewMode      = a.viewMode;
@@ -995,7 +1052,9 @@ const Store = createStore((set,get)=>{
               
               // Save ALL cells with content, formulas, or metadata
               if(hasVal || hasFx || hasMeta){
-                const metaOut = c.meta ? {...c.meta} : undefined;
+                const normalizedMeta = c.meta ? normalizeMetaKeys(c.meta) : null;
+                if(normalizedMeta && normalizedMeta !== c.meta) c.meta = normalizedMeta;
+                const metaOut = normalizedMeta && Object.keys(normalizedMeta).length ? {...normalizedMeta} : undefined;
                 cells.push({
                   x:c.x, y:c.y, z:c.z,
                   value: c.value, // preserve exact value including empty strings
@@ -1050,16 +1109,21 @@ const Store = createStore((set,get)=>{
                 ...a,
                 chunks: Object.fromEntries(Object.entries(a.chunks).map(([k, ch]) => [k, {
                   ...ch,
-                  cells: ch.cells.map(c => ({
-                    x: c.x, y: c.y, z: c.z,
-                    value: c.value,
-                    formula: c.formula,
-                    meta: c.meta ? {
-                      onClick: c.meta.onClick,
-                      noteText: c.meta.noteText,
-                      color: c.meta.color
-                    } : undefined
-                  }))
+                  cells: ch.cells.map(c => {
+                    const metaNorm = c.meta ? normalizeMetaKeys(c.meta) : null;
+                    if(metaNorm && metaNorm !== c.meta) c.meta = metaNorm;
+                    const compressedMeta = metaNorm ? {
+                      ...(metaNorm.on_click ? {on_click: metaNorm.on_click} : {}),
+                      ...(metaNorm.noteText ? {noteText: metaNorm.noteText} : {}),
+                      ...(metaNorm.color ? {color: metaNorm.color} : {})
+                    } : undefined;
+                    return {
+                      x: c.x, y: c.y, z: c.z,
+                      value: c.value,
+                      formula: c.formula,
+                      meta: compressedMeta
+                    };
+                  })
                 }]))
               }]))
             };
@@ -1124,7 +1188,8 @@ const Store = createStore((set,get)=>{
           arrays[a.id].rotationQuat = T.rotationQuat || a.rotationQuat || [0,0,0,1];
           arrays[a.id].rotationSteps = T.rotationSteps || a.rotationSteps || {x:0,y:0,z:0};
           if(a.axesVisible !== undefined) arrays[a.id].axesVisible = !!a.axesVisible;
-          if(a.onSelectHooks)             arrays[a.id].onSelectHooks = a.onSelectHooks;
+          const loadedHooks = a.on_select_hooks || a.onSelectHooks;
+          if(loadedHooks)                arrays[a.id].on_select_hooks = loadedHooks;
           if(a.uiControls)                arrays[a.id].uiControls    = a.uiControls;
           if(a.cameraLock)                arrays[a.id].cameraLock    = a.cameraLock;
           if(a.viewMode)                  arrays[a.id].viewMode      = a.viewMode;
@@ -1133,12 +1198,15 @@ const Store = createStore((set,get)=>{
           
           Object.entries(a.chunks||{}).forEach(([k,ch])=>{
             const C = new Scene.Chunk(arrays[a.id], ch.coord);
-            C.cells = (ch.cells||[]).map(c=>({
-              x:c.x, y:c.y, z:c.z,
-              value:c.value, 
-              formula:c.formula, 
-              meta:c.meta||{}
-            }));
+            C.cells = (ch.cells||[]).map(c=>{
+              const meta = normalizeMetaKeys(c.meta||{});
+              return {
+                x:c.x, y:c.y, z:c.z,
+                value:c.value,
+                formula:c.formula,
+                meta
+              };
+            });
             // Rebuild cellMap for O(1) access
             C.cellMap = new Map();
             C.cells.forEach(cell => C.cellMap.set(`${cell.x},${cell.y},${cell.z}`, cell));
@@ -1386,7 +1454,10 @@ const Store = createStore((set,get)=>{
         let cell = ch.cells.find(c=>c.x===0&&c.y===2&&c.z===0);
         if(!cell){ ch.cells.push({x:0,y:2,z:0,value:'',formula:null,meta:{}}); cell = ch.cells[ch.cells.length-1]; }
         // Set meta directly with proper formula prefix
-        cell.meta = {...(cell.meta||{}), noteText:'Click Me!', onClick:'=STARTINTROEXPERIENCE()'};
+        const introMeta = normalizeMetaKeys(cell.meta||{});
+        introMeta.noteText = 'Click Me!';
+        introMeta.on_click = '=STARTINTROEXPERIENCE()';
+        cell.meta = introMeta;
         console.log('A3 meta set:', cell.meta);
       }catch(e){ console.warn('Direct A3 setup failed', e); }
       
@@ -1429,7 +1500,7 @@ const Store = createStore((set,get)=>{
 
       UI.renderSheet();
         console.log('Sheet rendered');
-        // Ensure intro note and wiring after DOM paints; re-render sheet to bind onClick eagerly
+      // Ensure intro note and wiring after DOM paints; re-render sheet to bind on_click eagerly
         requestAnimationFrame(()=>{ requestAnimationFrame(()=>{ 
           try{ UI.ensureIntroNote?.(); }catch{}
           try{ UI.renderSheet?.(); }catch{}
@@ -1828,7 +1899,7 @@ const Actions = {
         Actions.setSelection(arrId, {x:0,y:0,z:0});
       }
     }catch{}
-    // Apply any pending meta queued for this array (e.g., late onClick/note bindings)
+    // Apply any pending meta queued for this array (e.g., late on_click/note bindings)
     try{
       const St=Store.getState();
       if(Array.isArray(St.pendingMeta) && St.pendingMeta.length){
@@ -1837,7 +1908,8 @@ const Actions = {
           if(item?.target?.arrId===arrId){
             try{
               const t=item.target; const prior=Formula.getCell({arrId:arrId,x:t.x,y:t.y,z:t.z})||{};
-              Write.set(ptx, arrId, {x:t.x,y:t.y,z:t.z}, { value: prior.value??'', formula: prior.formula??null, meta:{...(prior.meta||{}), ...(item.meta||{})} });
+              const mergedMeta = normalizeMetaKeys({...(prior.meta||{}), ...(item.meta||{})});
+              Write.set(ptx, arrId, {x:t.x,y:t.y,z:t.z}, { value: prior.value??'', formula: prior.formula??null, meta:mergedMeta });
             }catch(e){ remain.push(item); }
           } else { remain.push(item); }
         });
@@ -2156,7 +2228,7 @@ const Actions = {
     // ---- ON_SELECT dispatch (no-stamp, single tx, recursion-guard) ----
     try {
       const arr=Store.getState().arrays[arrayId];
-      const hooks=arr?.onSelectHooks||[];
+      const hooks = ensureOnSelectHooks(arr);
       if(!hooks.length) return;
 
       if(Actions._handlingOnSelect) return; // guard against re-entrancy
@@ -4517,12 +4589,20 @@ function __collectMetaTargets(rangeArg, anchor, arr){
 }
 
 function __applyMetaAction(cells, key, action){
-  const tx = Write.start(`meta.${key}`,'Meta binding');
+  const canonicalKey = canonicalMetaKey(key);
+  const tx = Write.start(`meta.${canonicalKey}`,'Meta binding');
   cells.forEach(target=>{
     const existing = Formula.getCell({arrId:target.arrId, x:target.x, y:target.y, z:target.z});
-    const meta = {...(existing.meta||{})};
-    if(action===null){ delete meta[key]; }
-    else { meta[key] = action; }
+    let meta = normalizeMetaKeys(existing.meta||{});
+    const aliases = META_KEY_ALIASES[canonicalKey] || [];
+    if(action===null){
+      delete meta[canonicalKey];
+      aliases.forEach(alias=>delete meta[alias]);
+    }
+    else {
+      meta[canonicalKey] = action;
+      aliases.forEach(alias=>delete meta[alias]);
+    }
     Write.set(tx, target.arrId, {x:target.x,y:target.y,z:target.z}, { value: existing.value, formula: existing.formula, meta });
   });
   Write.commit(tx);
@@ -4532,8 +4612,8 @@ tag('ON_HOLD',['META'],(anchor,arr,ast)=>{
   if(ast.args.length===1 && typeof ast.args[0]==='string'){
     const t=ast.args[0].trim().toLowerCase();
     if(['off','none','false','0'].includes(t)){
-      __applyMetaAction([{arrId:arr.id,x:anchor.x,y:anchor.y,z:anchor.z}], 'onHold', null);
-      Actions.setCell(arr.id, anchor, 'OnHold:OFF', ast.raw, true);
+      __applyMetaAction([{arrId:arr.id,x:anchor.x,y:anchor.y,z:anchor.z}], 'on_hold', null);
+      Actions.setCell(arr.id, anchor, 'on_hold:OFF', ast.raw, true);
       return;
     }
   }
@@ -4543,16 +4623,16 @@ tag('ON_HOLD',['META'],(anchor,arr,ast)=>{
   let action = (typeof raw==='string')? raw : String(Formula.valOf(raw)||'');
   if(action && action[0] !== '=') action = `=${action}`;
   const targets = __collectMetaTargets(rangeArg, anchor, arr);
-  __applyMetaAction(targets, 'onHold', action||null);
-  Actions.setCell(arr.id, anchor, `OnHold:${targets.length}`, ast.raw, true);
+  __applyMetaAction(targets, 'on_hold', action||null);
+  Actions.setCell(arr.id, anchor, `on_hold:${targets.length}`, ast.raw, true);
 });
 
 tag('ON_TOUCH',['META'],(anchor,arr,ast)=>{
   if(ast.args.length===1 && typeof ast.args[0]==='string'){
     const t=ast.args[0].trim().toLowerCase();
     if(['off','none','false','0'].includes(t)){
-      __applyMetaAction([{arrId:arr.id,x:anchor.x,y:anchor.y,z:anchor.z}], 'onTouch', null);
-      Actions.setCell(arr.id, anchor, 'OnTouch:OFF', ast.raw, true);
+      __applyMetaAction([{arrId:arr.id,x:anchor.x,y:anchor.y,z:anchor.z}], 'on_touch', null);
+      Actions.setCell(arr.id, anchor, 'on_touch:OFF', ast.raw, true);
       return;
     }
   }
@@ -4562,16 +4642,16 @@ tag('ON_TOUCH',['META'],(anchor,arr,ast)=>{
   let action = (typeof raw==='string')? raw : String(Formula.valOf(raw)||'');
   if(action && action[0] !== '=') action = `=${action}`;
   const targets = __collectMetaTargets(rangeArg, anchor, arr);
-  __applyMetaAction(targets, 'onTouch', action||null);
-  Actions.setCell(arr.id, anchor, `OnTouch:${targets.length}`, ast.raw, true);
+  __applyMetaAction(targets, 'on_touch', action||null);
+  Actions.setCell(arr.id, anchor, `on_touch:${targets.length}`, ast.raw, true);
 });
 
 tag('ON_LAND',['META'],(anchor,arr,ast)=>{
   if(ast.args.length===1 && typeof ast.args[0]==='string'){
     const t=ast.args[0].trim().toLowerCase();
     if(['off','none','false','0'].includes(t)){
-      __applyMetaAction([{arrId:arr.id,x:anchor.x,y:anchor.y,z:anchor.z}], 'onLand', null);
-      Actions.setCell(arr.id, anchor, 'OnLand:OFF', ast.raw, true);
+      __applyMetaAction([{arrId:arr.id,x:anchor.x,y:anchor.y,z:anchor.z}], 'on_land', null);
+      Actions.setCell(arr.id, anchor, 'on_land:OFF', ast.raw, true);
       return;
     }
   }
@@ -4581,8 +4661,8 @@ tag('ON_LAND',['META'],(anchor,arr,ast)=>{
   let action = (typeof raw==='string')? raw : String(Formula.valOf(raw)||'');
   if(action && action[0] !== '=') action = `=${action}`;
   const targets = __collectMetaTargets(rangeArg, anchor, arr);
-  __applyMetaAction(targets, 'onLand', action||null);
-  Actions.setCell(arr.id, anchor, `OnLand:${targets.length}`, ast.raw, true);
+  __applyMetaAction(targets, 'on_land', action||null);
+  Actions.setCell(arr.id, anchor, `on_land:${targets.length}`, ast.raw, true);
 });
 
 const ACTION_TICK_MS = 1000/60;
@@ -4695,7 +4775,10 @@ tag('ONCLICK',['ACTION'],(anchor,arr,ast)=>{
     const idx=ch?.cells.findIndex(c=>c.x===coord.x&&c.y===coord.y&&c.z===coord.z) ?? -1;
     if(idx<0||!ch) return;
     const prev=ch.cells[idx];
-    ch.cells[idx] = {...prev, meta:{...(prev.meta||{}), onClick:actionFormula, onClickBusy:false}};
+    const meta = normalizeMetaKeys(prev.meta||{});
+    meta.on_click = actionFormula;
+    meta.onClickBusy = false;
+    ch.cells[idx] = {...prev, meta};
     UI.renderSheetCell(targetArr, coord.x, coord.y, coord.z);
     try{ ch.markDirty?.(); Scene.renderArray(targetArr); }catch{}
   };
@@ -4727,17 +4810,20 @@ tag('TOAST',['ACTION'],(anchor,arr,ast)=>{
   setTimeout(()=>{ const toast=document.getElementById('toast'); if(toast) toast.style.display='none'; }, duration);
   // Silent: do not stamp anchor
 });
-// ONCLICK_WRAPPER(actionFormulaOrBlock, targetRef?) — helper to add onClick meta easily
+// ONCLICK_WRAPPER(actionFormulaOrBlock, targetRef?) — helper to add on_click meta easily
 tag('ONCLICK_WRAPPER',['ACTION'],(anchor,arr,ast)=>{
   const action = String(valOf(ast.args[0]||''));
   const target = ast.args[1] || anchor;
   const t = (target&&target.kind)? target : anchor;
   const targetArr = Store.getState().arrays[t.arrId || arr.id];
   if(!targetArr) return;
-  // Attach meta.onClick and refresh cell rendering in target array
+  // Attach meta.on_click and refresh cell rendering in target array
   const ch=targetArr.chunks[keyChunk(...Object.values(chunkOf(t.x,t.y,t.z)))]; if(!ch) return;
   const idx=ch.cells.findIndex(c=>c.x===t.x&&c.y===t.y&&c.z===t.z); if(idx<0) return;
-  const prev=ch.cells[idx]; ch.cells[idx] = {...prev, meta:{...(prev.meta||{}), onClick:action}};
+  const prev=ch.cells[idx];
+  const meta = normalizeMetaKeys(prev.meta||{});
+  meta.on_click = action;
+  ch.cells[idx] = {...prev, meta};
   const s=Store.getState().selection; const currentId = s.arrayId ?? (Store.getState().arrays[1]?1:-1);
   if(currentId === (t.arrId||arr.id) && window.UI?.renderSheetCell) window.UI.renderSheetCell(targetArr, t.x, t.y, t.z);
 });
@@ -5867,7 +5953,9 @@ tag('SSR',['GAME','META'],(anchor,arr,ast)=>{
       const enc = btoa(call);
       const txBind = Write.start('ssr.onclick','bind');
       const prev = Formula.getCell({arrId:ctrl.id,x,y,z:0});
-      Write.set(txBind, ctrl.id, {x,y,z:0}, { value: prev?.value ?? (dir==='forward'?'↑':dir==='back'?'↓':dir==='left'?'↺':'↻'), formula: null, meta:{ ...(prev?.meta||{}), onClick:`B64:${enc}` } });
+      const prevMeta = normalizeMetaKeys(prev?.meta||{});
+      prevMeta.on_click = `B64:${enc}`;
+      Write.set(txBind, ctrl.id, {x,y,z:0}, { value: prev?.value ?? (dir==='forward'?'↑':dir==='back'?'↓':dir==='left'?'↺':'↻'), formula: null, meta:prevMeta });
       Write.commit(txBind);
     };
     bind(1,2,'forward');
@@ -5893,7 +5981,11 @@ tag('SSR',['GAME','META'],(anchor,arr,ast)=>{
     // Finalize: mark clickable now and force render/refresh without needing a reload
     try{
       Object.values(ctrl.chunks||{}).forEach(ch=> ch.cells.forEach(c=>{
-        if(c.value){ c.meta = {...(c.meta||{}), onClick: c.meta?.onClick || ''}; }
+        if(c.value){
+          const meta = normalizeMetaKeys(c.meta||{});
+          meta.on_click = meta.on_click || '';
+          c.meta = meta;
+        }
       }));
     }catch{}
     Scene.renderArray(board); Scene.renderArray(ctrl);
@@ -6065,8 +6157,8 @@ tag('ON_SELECT',['META'],(anchor,arr,ast)=>{
   if(ast.args.length===1 && typeof ast.args[0]==='string'){
     const t=String(ast.args[0]||'').toLowerCase();
     if(t==='off'||t==='none'||t==='0'||t==='false'){
-      arr.onSelectHooks = (arr.onSelectHooks||[]).filter(h=>!(h.anchor.x===anchor.x && h.anchor.y===anchor.y && h.anchor.z===anchor.z));
-      Actions.setCell(arr.id, anchor, 'OnSelect:OFF', ast.raw, true);
+      arr.on_select_hooks = ensureOnSelectHooks(arr).filter(h=>!(h.anchor.x===anchor.x && h.anchor.y===anchor.y && h.anchor.z===anchor.z));
+      Actions.setCell(arr.id, anchor, 'on_select:OFF', ast.raw, true);
       return;
     }
   }
@@ -6088,10 +6180,10 @@ tag('ON_SELECT',['META'],(anchor,arr,ast)=>{
     cells.add(`${anchor.x},${anchor.y},${anchor.z}`); // default self
   }
 
-  arr.onSelectHooks = arr.onSelectHooks || [];
   // replace any existing hook at this anchor
-  arr.onSelectHooks = arr.onSelectHooks.filter(h=>!(h.anchor.x===anchor.x && h.anchor.y===anchor.y && h.anchor.z===anchor.z));
-  arr.onSelectHooks.push({ anchor:{x:anchor.x,y:anchor.y,z:anchor.z}, cells, action });
+  const hooks = ensureOnSelectHooks(arr).filter(h=>!(h.anchor.x===anchor.x && h.anchor.y===anchor.y && h.anchor.z===anchor.z));
+  hooks.push({ anchor:{x:anchor.x,y:anchor.y,z:anchor.z}, cells, action });
+  arr.on_select_hooks = hooks;
 
   // Silent registration; do not stamp the cell
 });
@@ -6499,11 +6591,15 @@ tag('REMOVE',["ACTION"], (anchor,arr,ast)=> Fn['DELETE'].impl(anchor,arr,ast));
 
 // CONNECT(ref1, ref2) => creates a visual line that acts as a zipline
 tag('CONNECT',['SCENE', 'ACTION'],(anchor,arr,ast)=>{
-  const ref1 = ast.args[0];
-  const ref2 = ast.args[1];
+  const normalizeRef = (ref)=>{
+    if(!ref || ref.kind !== 'ref') return null;
+    return { ...ref, arrId: ref.arrId ?? arr.id };
+  };
+  const ref1 = normalizeRef(ast.args[0]);
+  const ref2 = normalizeRef(ast.args[1]);
 
   // Validate inputs
-  if(!ref1 || ref1.kind !== 'ref' || !ref2 || ref2.kind !== 'ref'){
+  if(!ref1 || !ref2){
     Actions.setCell(arr.id, anchor, '!ERR:Requires 2 cell refs', ast.raw, true);
     Scene.removeConnection(anchor); // Clean up any old line
     return;
@@ -7093,6 +7189,7 @@ const Scene = (()=>{
   const connections = new Map(); // aKey(anchor) -> { line, start, end, ... }
   let depGroup=null, depVis=false; // dependency graph overlay
   let ziplineState = { active: false, line: null, direction: new THREE.Vector3(), progress: 0 };
+  let wasGroundedLastFrame = false;
   let cachedPlayerPos = new THREE.Vector3(0, 0, 0); // Cache to avoid Rapier aliasing issues - initialize with valid coords
   let lastTouchKey = null;
   let lastLandKey = null;
@@ -7100,6 +7197,7 @@ const Scene = (()=>{
   function resetContactCache(){
     lastTouchKey = null;
     lastLandKey = null;
+    wasGroundedLastFrame = false;
   }
 
   const FancyDefaults = {
@@ -10644,18 +10742,21 @@ const Scene = (()=>{
         // --- START: ZIPLINE LOGIC ---        
         if(ziplineState.active){
           ziplineState.progress += 0.008; // Zipline speed
+          ziplineState.progress = Math.min(ziplineState.progress, 1);
           const newPos = new THREE.Vector3().lerpVectors(ziplineState.start, ziplineState.end, ziplineState.progress);
           playerBody.setNextKinematicTranslation(newPos.x, newPos.y - 0.5, newPos.z);
+          wasGroundedLastFrame = false;
 
           if(ziplineState.progress >= 1){
             ziplineState.active = false; // Detach at the end
+            wasGroundedLastFrame = false;
           }
         } else {
           // Zipline attachment detection using cached position
           if(connections.size > 0) {
             const playerPos = cachedPlayerPos.clone();
             playerPos.y += 0.5; // Adjust for character controller center
-            
+
             // Zipline attachment detection
             for(const [key, con] of connections.entries()){
               const line = new THREE.Line3(con.start, con.end);
@@ -10664,19 +10765,24 @@ const Scene = (()=>{
               const distance = playerPos.distanceTo(closestPoint);
 
               if(distance < 0.75){ // Attachment radius
+                const drop = con.start.y - con.end.y;
+                if(Math.abs(drop) < 0.05) continue; // Skip nearly flat lines
                 ziplineState.active = true;
-                // Ziplines always go downhill. If level, based on entry.
-                if(con.start.y > con.end.y){
+                if(drop > 0){
                   ziplineState.start = con.start.clone();
                   ziplineState.end = con.end.clone();
                 } else {
                   ziplineState.start = con.end.clone();
                   ziplineState.end = con.start.clone();
                 }
-                // Project player onto the line to find starting progress
                 const lineDir = new THREE.Vector3().subVectors(ziplineState.end, ziplineState.start);
+                const lengthSq = lineDir.lengthSq();
+                if(lengthSq < 1e-6){ ziplineState.active = false; continue; }
+                ziplineState.direction = lineDir.clone().normalize();
                 const playerDir = new THREE.Vector3().subVectors(playerPos, ziplineState.start);
-                ziplineState.progress = playerDir.dot(lineDir) / lineDir.lengthSq();
+                ziplineState.progress = THREE.MathUtils.clamp(playerDir.dot(lineDir) / lengthSq, 0, 1);
+                playerBody.setLinvel({x:0,y:0,z:0}, true);
+                wasGroundedLastFrame = false;
                 break; // Attach to the first one found
               }
             }
@@ -10790,13 +10896,14 @@ const Scene = (()=>{
               cachedPlayerPos.set(physicsSpawnPos.x, physicsSpawnPos.y, physicsSpawnPos.z);
               jumpVelocity = 0;
               landingSquashTime = 0;
+              wasGroundedLastFrame = false;
+              lastLandKey = null;
             } else {
               // Sync jumpVelocity with actual physics velocity for animation
               const vel = playerBody.linvel();
               jumpVelocity = vel.y * 2; // Scale for animation sensitivity
               
               // Detect landing for squash animation using raycast
-              const wasAirborne = (jumpVelocity < -2);
               // Raycast downward to detect ground/platforms
               let nowGrounded = false;
               if(RAPIER && rapierWorld && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)){
@@ -10809,11 +10916,15 @@ const Scene = (()=>{
                   // Silently ignore raycast errors
                 }
               }
-              if(wasAirborne && nowGrounded && landingSquashTime === 0){
+              if(!wasGroundedLastFrame && nowGrounded && landingSquashTime === 0){
                 landingSquashTime = 1; // Trigger landing squash
                 console.log('[PHYSICS] Landing detected!');
                 triggerLandHandler();
               }
+              if(!nowGrounded){
+                lastLandKey = null;
+              }
+              wasGroundedLastFrame = nowGrounded;
             }
           }catch(e){
             console.warn('Jump sync failed:', e);
@@ -11386,7 +11497,7 @@ const Scene = (()=>{
     let hasAction = false;
     try{
       const c2d = UI.getCell(arr.id, {x:cell.x,y:cell.y,z:cell.z});
-      let actionRaw = String(c2d?.meta?.onClick||'').trim();
+      let actionRaw = String(getMetaAction(c2d?.meta, 'on_click')||'').trim();
       if(actionRaw){
         hasAction = true;
         if(actionRaw.startsWith('B64:')){
@@ -12804,6 +12915,7 @@ const Scene = (()=>{
     }
     // --- END: ZIPLINE DETACHMENT ---
 
+    wasGroundedLastFrame = false;
     if(RAPIER && rapierWorld && playerBody){
       try {
         // Check if grounded using raycast for proper platformer support
@@ -13824,7 +13936,7 @@ const Scene = (()=>{
       if(key===lastTouchKey) return;
       lastTouchKey = key;
       const cell = Formula.getCell({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z});
-      const action = cell?.meta?.onTouch;
+      const action = getMetaAction(cell?.meta, 'on_touch');
       if(action){ executeActionFormula({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z}, action, 'touch'); }
     }catch(err){ console.warn('touch handler failed', err); }
   }
@@ -13842,7 +13954,7 @@ const Scene = (()=>{
       if(key===lastLandKey) return;
       lastLandKey = key;
       const cell = Formula.getCell({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z});
-      const action = cell?.meta?.onLand;
+      const action = getMetaAction(cell?.meta, 'on_land');
       if(action){ executeActionFormula({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z}, action, 'land'); }
     }catch(err){ console.warn('land handler failed', err); }
   }
@@ -13850,12 +13962,14 @@ const Scene = (()=>{
   function addConnection(anchor, ref1, ref2){
     removeConnection(anchor); // Clear any existing line from this anchor
 
-    const arr1 = Store.getState().arrays[ref1.arrId];
-    const arr2 = Store.getState().arrays[ref2.arrId];
+    const r1 = { ...ref1, arrId: ref1.arrId ?? anchor.arrId };
+    const r2 = { ...ref2, arrId: ref2.arrId ?? anchor.arrId };
+    const arr1 = Store.getState().arrays[r1.arrId];
+    const arr2 = Store.getState().arrays[r2.arrId];
     if(!arr1 || !arr2) return;
 
-    const start = worldPos(arr1, ref1.x, ref1.y, ref1.z);
-    const end = worldPos(arr2, ref2.x, ref2.y, ref2.z);
+    const start = worldPos(arr1, r1.x, r1.y, r1.z);
+    const end = worldPos(arr2, r2.x, r2.y, r2.z);
 
     const points = [start, end];
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
@@ -13864,7 +13978,7 @@ const Scene = (()=>{
     line.renderOrder = 100;
 
     scene.add(line);
-    connections.set(aKey(anchor), { line, start, end, anchor, ref1, ref2 });
+    connections.set(aKey(anchor), { line, start, end, anchor: {...anchor}, ref1: r1, ref2: r2 });
   }
 
   function createArraySnapshot(arr) {
@@ -15115,7 +15229,7 @@ const UI = (()=>{
       {name:'STORE_ARRAY',tags:'PURE',syntax:'=STORE_ARRAY(source[, "Name"])',params:'source: range (A1α:C3α), dimensions (w,h,d), or inline values (1,2,3) · Name: optional template name',desc:'Captures data as a reusable template. Dimensions collect from anchor area, ranges from specified cells, inline values as list.'},
       {name:'CAST',tags:'SCENE',syntax:'=CAST(direction[, data])',params:'direction: "UP"|"DOWN"|"FORWARD"|"BACK"|"LEFT"|"RIGHT" · data: optional payload',desc:'Spawns a moving voxel packet in the specified direction (physics integration pending).'},
       {name:'ON_COLLIDE',tags:'SCENE',syntax:'=ON_COLLIDE(handler)',params:'handler: formula to execute when hit by CAST packet',desc:'Sets collision response handler for incoming voxel packets.'},
-      {name:'CHIME',tags:'AUDIO',syntax:'=CHIME(note[, octave[, duration]])',params:'note: A–G with optional # or b · octave: integer (default 4) · duration: optional seconds',desc:'Plays a musical chime. Triggerable from formulas, DO(), onClick(), or onSelect() for interactive instruments.'},
+      {name:'CHIME',tags:'AUDIO',syntax:'=CHIME(note[, octave[, duration]])',params:'note: A–G with optional # or b · octave: integer (default 4) · duration: optional seconds',desc:'Plays a musical chime. Triggerable from formulas, DO(), on_click(), or on_select() for interactive instruments.'},
       {name:'FUNCTION_UI',tags:'META',syntax:'=FUNCTION_UI([port[, filter[, page[, perPage]]]])',params:'port: "east"|"west"|"north"|"south" · filter: substring filter · page: page number · perPage: functions per page',desc:'Creates diegetic function browser. Rows use ON_SELECT hooks: ▶ inserts to focus and toasts; 📋 copies call and toasts.'},
       {name:'INVENTORY',tags:'META',syntax:'=INVENTORY([port[, title]])',params:'port: dock position · title: inventory name',desc:'Creates interactive inventory with +/- quantity buttons and ▶ use buttons.'},
       {name:'2D_PLATFORMER',tags:'META',syntax:'=2D_PLATFORMER([port])',params:'port: dock position for controller',desc:'Creates controller (ON_SELECT joystick) and screen; center button spawns screen via ON_SELECT.'},
@@ -15507,12 +15621,12 @@ const UI = (()=>{
 
     const runHold = ()=>{
       const fresh = UI.getCell?.(anchorRef.arrId, {x:anchorRef.x, y:anchorRef.y, z:anchorRef.z});
-      const raw = fresh?.meta?.onHold ?? initialAction;
+      const raw = getMetaAction(fresh?.meta, 'on_hold') ?? initialAction;
       const normalized = normalizeActionFormula(raw||'');
       if(!normalized) return false;
       try{
         executeActionFormula(anchorRef, raw, 'hold');
-      }catch(err){ console.warn('onHold failed', err); return false; }
+      }catch(err){ console.warn('on_hold failed', err); return false; }
       return true;
     };
 
@@ -15563,7 +15677,7 @@ const UI = (()=>{
       let action='';
       try{
         const fresh = UI.getCell?.(anchorRef.arrId, {x,y,z});
-        if(fresh?.meta?.onClick) action = fresh.meta.onClick;
+        action = getMetaAction(fresh?.meta, 'on_click') || action;
       }catch{}
       if(!action){
         try{ if(!window.__INTRO_FIRED) action = '=STARTINTROEXPERIENCE()'; }catch{}
@@ -15584,7 +15698,7 @@ const UI = (()=>{
           }
         }catch{}
       }catch(err){
-        console.warn('onClick failed', err);
+        console.warn('on_click failed', err);
       }finally{
         td.classList.remove('pending');
       }
@@ -15666,9 +15780,9 @@ const UI = (()=>{
       if(!td.querySelector('.note-tooltip')) td.style.position='';
     }
 
-    td.classList.toggle('clickable', !!data?.meta?.onClick);
+    td.classList.toggle('clickable', !!getMetaAction(data?.meta, 'on_click'));
 
-    bindHoldAction(td, arr, anchorRef, data?.meta?.onHold);
+    bindHoldAction(td, arr, anchorRef, getMetaAction(data?.meta, 'on_hold'));
     bindClickAction(td, arr, anchorRef);
 
     if(data?.meta?.generated){
@@ -16434,28 +16548,28 @@ const UI = (()=>{
         cell = ch1?.cells?.find?.(c=>c.x===coord.x&&c.y===coord.y&&c.z===coord.z);
       }
       if(!cell){ console.warn('ensureIntroNote: creation failed'); return; }
-      // Always set NOTE metadata and onClick to ensure visibility and binding
+      // Always set NOTE metadata and on_click to ensure visibility and binding
       const tx = Write.start('intro.note','Ensure A3 NOTE');
       try{
-        Write.set(tx, arr.id, coord, { 
-          value: cell.value ?? '', 
-          formula: cell.formula ?? null, 
-          meta: { 
-            ...(cell.meta||{}), 
-            noteText: 'Click Me!', 
-            onClick: (cell.meta && cell.meta.onClick) ? cell.meta.onClick : '=STARTINTROEXPERIENCE()'
-          } 
+        const meta = normalizeMetaKeys(cell.meta||{});
+        const existingAction = getMetaAction(meta, 'on_click');
+        meta.noteText = 'Click Me!';
+        meta.on_click = existingAction || '=STARTINTROEXPERIENCE()';
+        Write.set(tx, arr.id, coord, {
+          value: cell.value ?? '',
+          formula: cell.formula ?? null,
+          meta
         });
       }catch(e){
         // If array 1 is not yet available at write-time, queue for later
         const S=Store.getState();
         const pending=[...(S.pendingMeta||[])];
-        pending.push({kind:'note', target:{arrId:1,x:coord.x,y:coord.y,z:coord.z}, meta:{noteText:'Click Me!', onClick:'=STARTINTROEXPERIENCE()'}});
+        pending.push({kind:'note', target:{arrId:1,x:coord.x,y:coord.y,z:coord.z}, meta:{noteText:'Click Me!', on_click:'=STARTINTROEXPERIENCE()'}});
         Store.setState({pendingMeta:pending});
       }
       Write.commit(tx);
       console.log('ensureIntroNote: meta enforced at A3 or queued');
-      // Re-render sheet to bind tooltip and onClick reliably
+      // Re-render sheet to bind tooltip and on_click reliably
       try{ UI.renderSheet?.(); }catch{}
     }catch(err){ console.warn('ensureIntroNote failed', err); }
   }
