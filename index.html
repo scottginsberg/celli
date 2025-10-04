@@ -988,6 +988,9 @@ const Store = createStore((set,get)=>{
     // Docking system
     dockGroups: new Map(), // groupId -> {mode:'parent'|'all', members:number[], parentId:number}
     dockGroupsByAnchor: new Map(), // anchorKey -> groupId
+    // Avatar + physics camera preferences
+    avatarPhysics:{ enabled:true, jumpCount:1, runMultiplier:1, momentumMode:0 },
+    physicsCamera:{ mode:'free', distance:10, allowRotation:false },
     // Track active 3D_ROTATE applications and suppressions for revert logic
     activeRotations: new Map(), // anchorKey -> {targetId, ids:number[], pivot:{arrId,x,y,z}, steps:{sx,sy,sz}}
     suppress3DRotateRevert: new Set(), // Set<anchorKey>
@@ -1069,10 +1072,10 @@ const Store = createStore((set,get)=>{
         });
         
         // Save comprehensive state including dependencies and global state
-        const serializable = { 
+        const serializable = {
           version: '1.1',
           timestamp: Date.now(),
-          arrays, 
+          arrays,
           nextArrayId: s.nextArrayId,
           globalState: Object.fromEntries(s.globalState.entries()),
           selection: s.selection,
@@ -1083,6 +1086,8 @@ const Store = createStore((set,get)=>{
             showAxes: s.scene.showAxes,
             arrowMapDepth: s.scene.arrowMapDepth
           },
+          avatarPhysics: s.avatarPhysics,
+          physicsCamera: s.physicsCamera,
           camera: (Scene && Scene.captureCamera) ? Scene.captureCamera() : undefined,
           gridPhase: s.gridPhase,
           docks: {
@@ -1291,6 +1296,8 @@ const Store = createStore((set,get)=>{
           selection: data.selection||get().selection,
           ui: restoredUi,
           scene: restoredScene,
+          avatarPhysics: data.avatarPhysics ? {...get().avatarPhysics, ...data.avatarPhysics} : get().avatarPhysics,
+          physicsCamera: data.physicsCamera ? {...get().physicsCamera, ...data.physicsCamera} : get().physicsCamera,
           interactions: {...get().interactions, ...(data.interactions||{})},
           namedBlocks: new Map(Object.entries(data.namedBlocks||{})),
           namedMacros: new Map(Object.entries(data.namedMacros||{})),
@@ -1340,6 +1347,12 @@ const Store = createStore((set,get)=>{
 
         // Rebuild visuals and restore UI state
         Scene.reconcileAllArrays();
+        try{
+          const camCfg = Store.getState().physicsCamera;
+          if(camCfg && Scene.setPhysicsCamera){
+            Scene.setPhysicsCamera(camCfg.mode, camCfg.distance, camCfg.allowRotation);
+          }
+        }catch{}
         // Apply saved rotations and offsets explicitly
         try{
           Object.values(Store.getState().arrays).forEach(A=>{
@@ -2329,6 +2342,80 @@ const ALWAYS = new Set([
 ]);
 const Fn = {}; // name -> {tags:[...], impl(anchor, arr, ast)}
 const tag = (name,tags,impl)=>{ Fn[name]={tags:new Set(tags),impl}; };
+function ensureTransaction(tx, origin='auto', reason='Formula mutation'){
+  if(tx) return { tx, owned:false };
+  return { tx: Write.start(origin, reason), owned:true };
+}
+function finalizeTransaction(info){
+  if(info && info.owned && info.tx){
+    Write.commit(info.tx);
+  }
+}
+function collectTargetCells(arg, anchor){
+  const out = [];
+  if(arg && arg.kind === 'range'){
+    arg.cells.forEach(cell=>{
+      out.push({
+        arrId: cell.arrId ?? anchor.arrId,
+        x: cell.x,
+        y: cell.y,
+        z: cell.z
+      });
+    });
+  } else if(arg && arg.kind === 'ref'){
+    out.push({
+      arrId: arg.arrId ?? anchor.arrId,
+      x: arg.x,
+      y: arg.y,
+      z: arg.z
+    });
+  } else if(anchor){
+    out.push({
+      arrId: anchor.arrId,
+      x: anchor.x,
+      y: anchor.y,
+      z: anchor.z
+    });
+  }
+  return out;
+}
+function mutateCellMeta(tx, target, updater){
+  if(!target) return;
+  const coord = {x: target.x, y: target.y, z: target.z};
+  const arrId = target.arrId;
+  const existing = Formula.getCell({arrId, ...coord}) || { value:'', formula:null, meta:{} };
+  const baseMeta = {...(existing.meta || {})};
+  const nextMeta = normalizeMetaKeys(updater ? updater(baseMeta, existing) || baseMeta : baseMeta) || {};
+  Write.set(tx, arrId, coord, {
+    value: existing.value,
+    formula: existing.formula,
+    meta: nextMeta
+  });
+}
+function parseVectorArg(arg){
+  if(!arg) return null;
+  const raw = Formula.valOf(arg);
+  if(Array.isArray(raw)){
+    const nums = raw.map(v=> Number(v));
+    if(nums.length >= 3 && nums.every(n=> Number.isFinite(n))){
+      return { x: nums[0], y: nums[1], z: nums[2] };
+    }
+  }
+  if(typeof raw === 'string'){
+    const vecMatch = raw.match(/@\s*\[\s*([\-0-9.]+)\s*,\s*([\-0-9.]+)\s*,\s*([\-0-9.]+)\s*(?:,\s*[\-0-9.]+\s*)?\]/);
+    if(vecMatch){
+      const [ , sx, sy, sz ] = vecMatch;
+      const vx = parseFloat(sx), vy = parseFloat(sy), vz = parseFloat(sz);
+      if([vx,vy,vz].every(n=> Number.isFinite(n))){
+        return { x: vx, y: vy, z: vz };
+      }
+    }
+  }
+  if(typeof raw === 'object' && raw && Number.isFinite(raw.x) && Number.isFinite(raw.y) && Number.isFinite(raw.z)){
+    return { x: Number(raw.x), y: Number(raw.y), z: Number(raw.z) };
+  }
+  return null;
+}
 // helper: policy check with proper tag filtering
 function isAllowed(arr, fnName){
   if(ALWAYS.has(fnName)) return true;
@@ -5399,6 +5486,148 @@ tag('GETCOLOR',["PURE"], (anchor, arr, ast) => {
   return (cell && cell.meta && cell.meta.color) ? cell.meta.color : '#3b82f6';
 });
 
+// PIVOT(range) – flag cells as hinge pivots for grouped rigid bodies
+tag('PIVOT',["PHYSICS"], (anchor, arr, ast, tx) => {
+  const cells = collectTargetCells(ast.args[0], anchor);
+  const info = ensureTransaction(tx, 'physics.pivot', 'Mark physics pivots');
+  cells.forEach(target => {
+    mutateCellMeta(info.tx, target, meta => ({ ...meta, physicsPivot: true }));
+  });
+  finalizeTransaction(info);
+  try{
+    const affected = new Set(cells.map(c=>c.arrId));
+    affected.forEach(id=>{ const targetArr = Store.getState().arrays[id]; if(targetArr) Scene.debounceColliderRebuild?.(targetArr); });
+  }catch{}
+});
+
+// GROUP(range, id) – assign cells to shared rigid body groups
+tag('GROUP',["PHYSICS"], (anchor, arr, ast, tx) => {
+  const cells = collectTargetCells(ast.args[0], anchor);
+  const rawId = ast.args[1] !== undefined ? Formula.valOf(ast.args[1]) : undefined;
+  const normalized = rawId == null ? '' : String(rawId).trim();
+  const info = ensureTransaction(tx, 'physics.group', 'Assign physics group');
+  cells.forEach(target => {
+    mutateCellMeta(info.tx, target, meta => {
+      const next = { ...meta };
+      if(!normalized){ delete next.physicsGroupId; }
+      else next.physicsGroupId = normalized;
+      return next;
+    });
+  });
+  finalizeTransaction(info);
+  try{
+    const affected = new Set(cells.map(c=>c.arrId));
+    affected.forEach(id=>{ const targetArr = Store.getState().arrays[id]; if(targetArr) Scene.debounceColliderRebuild?.(targetArr); });
+  }catch{}
+});
+
+// LIMIT(range, state[, duration]) – encode temporary physics bounds
+tag('LIMIT',["PHYSICS"], (anchor, arr, ast, tx) => {
+  const cells = collectTargetCells(ast.args[0], anchor);
+  const stateRaw = ast.args[1] !== undefined ? Formula.valOf(ast.args[1]) : 1;
+  const durationRaw = ast.args[2] !== undefined ? Formula.valOf(ast.args[2]) : null;
+  const stateNorm = typeof stateRaw === 'string' ? stateRaw.trim().toLowerCase() : stateRaw;
+  const enabled = stateNorm === 'enable' || stateNorm === 'enabled' || stateNorm === 'on' || stateNorm === '1' || stateNorm === 1 || stateNorm === true;
+  const info = ensureTransaction(tx, 'physics.limit', 'Apply physics limit');
+  const duration = durationRaw == null ? null : Math.max(0, Math.round(Number(durationRaw) || 0));
+  cells.forEach(target => {
+    mutateCellMeta(info.tx, target, meta => {
+      const next = { ...meta };
+      next.physicsLimit = {
+        state: enabled ? 'enable' : 'disable',
+        duration,
+        requestedAt: Date.now()
+      };
+      return next;
+    });
+  });
+  finalizeTransaction(info);
+});
+
+// CELL_PHYS(enabled[, jumpCount[, gravityVec[, boundByArrayFloor]]]) – per-array physics configuration
+tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
+  const enabled = !!Formula.valOf(ast.args[0] ?? 0);
+  const jumpCountArg = ast.args[1];
+  const gravityArg = ast.args[2];
+  const floorArg = ast.args[3];
+  const jumpCount = jumpCountArg !== undefined ? Math.max(0, Math.round(Number(Formula.valOf(jumpCountArg)) || 0)) : undefined;
+  const gravityVec = parseVectorArg(gravityArg);
+  const boundByFloor = floorArg !== undefined ? !!Formula.valOf(floorArg) : undefined;
+
+  arr.params = arr.params || {};
+  arr.params.physics = arr.params.physics || { enabled:false };
+  arr.params.physics.enabled = enabled;
+  if(jumpCount !== undefined) arr.params.physics.jumpCount = jumpCount;
+  if(gravityVec) arr.params.physics.gravity = gravityVec;
+  if(boundByFloor !== undefined) arr.params.physics.boundByArrayFloor = boundByFloor;
+
+  if(enabled){
+    try{ Scene.debounceColliderRebuild(arr); }catch{}
+  }
+
+  const stamp = enabled ? '⚙️ Physics ON' : '⚙️ Physics OFF';
+  Actions.setCell(arr.id, anchor, stamp, ast.raw, true);
+});
+
+// CELLI_PHYS(enabled[, jumpCount[, runMultiplier[, momentumMode]]]) – avatar controller wrapper
+tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
+  const enabled = !!Formula.valOf(ast.args[0] ?? 1);
+  const jumpCountArg = ast.args[1];
+  const runArg = ast.args[2];
+  const momentumArg = ast.args[3];
+  const updates = {};
+  updates.enabled = enabled;
+  if(jumpCountArg !== undefined){
+    const jc = Math.max(0, Math.round(Number(Formula.valOf(jumpCountArg)) || 0));
+    updates.jumpCount = jc;
+  }
+  if(runArg !== undefined){
+    let rm = Number(Formula.valOf(runArg));
+    if(!Number.isFinite(rm)) rm = 1;
+    updates.runMultiplier = Math.max(0.1, rm);
+  }
+  if(momentumArg !== undefined){
+    const mm = Math.round(Number(Formula.valOf(momentumArg)) || 0);
+    updates.momentumMode = mm === 1 ? 1 : 0;
+  }
+
+  Store.setState(state => ({
+    avatarPhysics: { ...state.avatarPhysics, ...updates }
+  }));
+
+  if(!enabled && Store.getState().scene.physics){
+    try{ Scene.togglePhysicsMode(); }catch{}
+  }
+
+  const stamp = enabled ? '🤸 Avatar' : '🚶 Classic';
+  Actions.setCell(arr.id, anchor, stamp, ast.raw, true);
+});
+
+// PHYS_CAMERA(mode, distance?, allowRotation=0) – configure physics-friendly camera rigs
+tag('PHYS_CAMERA',["SCENE","CAMERA"], (anchor, arr, ast) => {
+  const modeRaw = String(Formula.valOf(ast.args[0] ?? 'free') || 'free').toLowerCase();
+  const distanceRaw = ast.args[1] !== undefined ? Number(Formula.valOf(ast.args[1])) : NaN;
+  const allowRotation = !!Formula.valOf(ast.args[2] ?? 0);
+  const distance = Number.isFinite(distanceRaw) ? Math.max(2, distanceRaw) : undefined;
+
+  Store.setState(state => ({
+    physicsCamera: {
+      mode: modeRaw || 'free',
+      distance: distance !== undefined ? distance : state.physicsCamera.distance,
+      allowRotation
+    }
+  }));
+
+  try{
+    const cfg = Store.getState().physicsCamera;
+    if(cfg && Scene.setPhysicsCamera){
+      Scene.setPhysicsCamera(cfg.mode, cfg.distance, cfg.allowRotation);
+    }
+  }catch{}
+
+  Actions.setCell(arr.id, anchor, `📷 ${modeRaw.toUpperCase()}`, ast.raw, true);
+});
+
 // EVENT BUS FUNCTIONS
 tag('ON_EVENT',['META'],(anchor,arr,ast)=>{
   const eventName = String(valOf(ast.args[0]) || '');
@@ -6589,7 +6818,7 @@ tag('DELETE',["ACTION"], (anchor,arr,ast)=>{
 tag('DEL',["ACTION"], (anchor,arr,ast)=> Fn['DELETE'].impl(anchor,arr,ast));
 tag('REMOVE',["ACTION"], (anchor,arr,ast)=> Fn['DELETE'].impl(anchor,arr,ast));
 
-// CONNECT(ref1, ref2) => creates a visual line that acts as a zipline
+// CONNECT(ref1, ref2[, style[, dimensionMode]]) => creates traversal connectors
 tag('CONNECT',['SCENE', 'ACTION'],(anchor,arr,ast)=>{
   const normalizeRef = (ref)=>{
     if(!ref || ref.kind !== 'ref') return null;
@@ -6605,9 +6834,29 @@ tag('CONNECT',['SCENE', 'ACTION'],(anchor,arr,ast)=>{
     return;
   }
 
+  let style = '';
+  let dimensionMode = 'line';
+  if(ast.args[2] !== undefined){
+    const raw = Formula.valOf(ast.args[2]);
+    if(raw != null){
+      const text = String(raw).trim();
+      if(['line','platform','zipline','grind'].includes(text.toLowerCase())){
+        dimensionMode = text.toLowerCase();
+      } else {
+        style = text;
+      }
+    }
+  }
+  if(ast.args[3] !== undefined){
+    const modeRaw = String(Formula.valOf(ast.args[3]) || '').trim().toLowerCase();
+    if(modeRaw) dimensionMode = modeRaw;
+  }
+
   // Pass to the Scene module to handle rendering and physics state
-  Scene.addConnection(anchor, ref1, ref2);
-  Actions.setCell(arr.id, anchor, '🔗 Connected', ast.raw, true);
+  Scene.addConnection(anchor, ref1, ref2, { style, dimensionMode });
+  const statusParts = ['🔗', dimensionMode.toUpperCase()];
+  if(style) statusParts.push(`(${style})`);
+  Actions.setCell(arr.id, anchor, statusParts.join(' '), ast.raw, true);
 });
 
 // GOAL(conditionRef) => register a goal condition
@@ -7183,12 +7432,13 @@ const Boot = {
 };
 const Scene = (()=>{
   let scene, camera, renderer, controls, grid, axesHelper;
-  let rapierWorld=null, controller=null, playerBody=null, playerCollider=null;
+let rapierWorld=null, controller=null, playerBody=null, playerCollider=null, staticPhysicsBody=null;
   const chunkMeshes=new Map(); // legacy chunk meshes (still used for some visuals)
   const layerMeshes=new Map(); // `${arr.id}:${z}` -> {mesh, capacity, used, index2cell}
   const connections = new Map(); // aKey(anchor) -> { line, start, end, ... }
   let depGroup=null, depVis=false; // dependency graph overlay
-  let ziplineState = { active: false, line: null, direction: new THREE.Vector3(), progress: 0 };
+let ziplineState = { active: false, line: null, direction: new THREE.Vector3(), progress: 0, velocity: 0, length: 1, accel: 0.002, start: new THREE.Vector3(), end: new THREE.Vector3() };
+let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   let wasGroundedLastFrame = false;
   let cachedPlayerPos = new THREE.Vector3(0, 0, 0); // Cache to avoid Rapier aliasing issues - initialize with valid coords
   let lastTouchKey = null;
@@ -8534,6 +8784,12 @@ const Scene = (()=>{
       if(RAP_READY){
         await RAPIER.init();
         rapierWorld=new RAPIER.World({x:0,y:-20,z:0}); // Stronger gravity for faster falling
+        try{
+          staticPhysicsBody = rapierWorld.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+        }catch(e){
+          console.warn('[PHYSICS] Failed creating static world body', e);
+          staticPhysicsBody = null;
+        }
         console.log('[PHYSICS] Rapier world initialized (physics disabled by default)');
         document.getElementById('physChip').textContent='Physics: OFF';
       } else {
@@ -10178,11 +10434,58 @@ const Scene = (()=>{
     controls.target.set(px,py,pz);
     camera.position.set(px+6, py+4, pz+8);
   }
+  function setPhysicsCamera(mode='free', distance, allowRotation=false){
+    const next = {
+      mode: (mode || physicsCameraConfig.mode || 'free').toLowerCase(),
+      distance: Number.isFinite(distance) ? Math.max(2, distance) : (Number.isFinite(physicsCameraConfig.distance) ? physicsCameraConfig.distance : 10),
+      allowRotation: !!allowRotation
+    };
+    physicsCameraConfig = next;
+    if(!camera || !controls) return physicsCameraConfig;
+    const target = controls.target ? controls.target.clone() : new THREE.Vector3(0,0,0);
+    const dist = physicsCameraConfig.distance || 10;
+    const modeKey = physicsCameraConfig.mode;
+    if(modeKey === '2d' || modeKey === 'locked' || modeKey === 'side'){
+      camera.position.set(target.x + dist, target.y + dist * 0.35, target.z);
+      controls.enableRotate = physicsCameraConfig.allowRotation;
+      controls.enablePan = true;
+    } else if(modeKey === 'iso' || modeKey === 'isometric'){
+      const diag = dist / Math.sqrt(3);
+      camera.position.set(target.x + diag, target.y + diag, target.z + diag);
+      controls.enableRotate = physicsCameraConfig.allowRotation;
+      controls.enablePan = true;
+    } else {
+      camera.position.set(target.x + dist * 0.4, target.y + dist * 0.45, target.z + dist);
+      controls.enableRotate = true;
+      controls.enablePan = true;
+    }
+    if(!physicsCameraConfig.allowRotation && controls){
+      controls.enableRotate = false;
+    }
+    controls.update?.();
+    needsRender = true;
+    return physicsCameraConfig;
+  }
   /* ---- Physics: merged colliders per connected run ---- */
   function clearColliders(arr){
-    if(!rapierWorld||!arr._colliders) return;
+    if(!rapierWorld) return;
+    arr._colliders = arr._colliders || [];
+    arr._rigidBodies = arr._rigidBodies || [];
+    arr._joints = arr._joints || [];
+
+    arr._joints.forEach(h=>{ try{ rapierWorld.removeImpulseJoint(h, true); }catch{} });
+    arr._joints.length = 0;
+
     arr._colliders.forEach(h=>{ try{ rapierWorld.removeCollider(h,true); }catch{} });
     arr._colliders.length=0;
+
+    arr._rigidBodies.forEach(h=>{
+      try{
+        const body = rapierWorld.getRigidBody(h);
+        if(body){ rapierWorld.removeRigidBody(body); }
+      }catch{}
+    });
+    arr._rigidBodies.length = 0;
   }
 
   function debounceColliderRebuild(arr){
@@ -10199,63 +10502,208 @@ const Scene = (()=>{
   }
   function rebuildCollidersForArray(arr){
     if(!rapierWorld) return;
-    // Only build colliders if physics is actually enabled
     if(!Store.getState().scene.physics) return;
-    
+
+    arr._colliders = arr._colliders || [];
+    arr._rigidBodies = arr._rigidBodies || [];
+    arr._joints = arr._joints || [];
+
     clearColliders(arr);
 
-    const occ = new Map(); // key -> 1 if filled (has value/formula OR has defined color)
-    let solidCount = 0;
+    const staticOcc = new Map();
+    const grouped = new Map(); // id -> {cells:Map,key->cell,pivots:[]}
+    let staticSolidCount = 0;
+    let groupedSolidCount = 0;
+
     Object.values(arr.chunks).forEach(ch=>{
-      ch.cells.forEach(c=>{ 
+      ch.cells.forEach(c=>{
+        const meta = c.meta || {};
         const hasValue = (c.value!=='' && c.value!==null && c.value!==undefined);
-        const hasFormula = !!(c.formula);
-        const hasColor = !!(c.meta && c.meta.color);
-        if(hasValue || hasFormula || hasColor){ 
-          occ.set(`${c.x},${c.y},${c.z}`,1);
-          solidCount++;
+        const hasFormula = !!c.formula;
+        const hasColor = !!meta.color;
+        const isSolid = hasValue || hasFormula || hasColor;
+        if(!isSolid) return;
+        const rawGroup = meta.physicsGroupId;
+        const groupId = (rawGroup===undefined||rawGroup===null||rawGroup==='') ? null : String(rawGroup);
+        if(groupId){
+          let info = grouped.get(groupId);
+          if(!info){
+            info = { cells:new Map(), pivots:[] };
+            grouped.set(groupId, info);
+          }
+          const key = `${c.x},${c.y},${c.z}`;
+          if(!info.cells.has(key)){
+            info.cells.set(key, {x:c.x,y:c.y,z:c.z,meta});
+            groupedSolidCount++;
+          }
+          if(meta.physicsPivot){
+            info.pivots.push({x:c.x,y:c.y,z:c.z});
+          }
+        } else {
+          staticOcc.set(`${c.x},${c.y},${c.z}`, {x:c.x,y:c.y,z:c.z,meta});
+          staticSolidCount++;
         }
       });
     });
-    console.log(`[PHYSICS] Building colliders for array #${arr.id}: ${solidCount} solid cells (value/formula/color)`);
 
-    const visited=new Set();
-    const inBounds=(x,y,z)=> x>=0&&y>=0&&z>=0&&x<arr.size.x&&y<arr.size.y&&z<arr.size.z;
-    const isSolid=(x,y,z)=> occ.has(`${x},${y},${z}`);
+    console.log(`[PHYSICS] Building colliders for array #${arr.id}: ${staticSolidCount} static, ${groupedSolidCount} grouped cells`);
 
-    for(let z=0; z<arr.size.z; z++)
-      for(let y=0; y<arr.size.y; y++)
+    const buildBoxesFromKeys = (keyStrings)=>{
+      const keySet = new Set(keyStrings);
+      const visited = new Set();
+      const boxes = [];
+      const keyOf = (x,y,z)=>`${x},${y},${z}`;
+      const has = (x,y,z)=> keySet.has(keyOf(x,y,z));
+      for(const key of keyStrings){
+        if(visited.has(key)) continue;
+        const parts = key.split(',').map(n=>+n);
+        let [x,y,z] = parts;
+        let x2=x;
+        while(has(x2+1,y,z) && !visited.has(keyOf(x2+1,y,z))) x2++;
+        let y2=y;
+        outerY: while(true){
+          const ny=y2+1;
+          if(!has(x,ny,z)) break;
+          for(let xi=x; xi<=x2; xi++){
+            if(!has(xi,ny,z) || visited.has(keyOf(xi,ny,z))) break outerY;
+          }
+          y2=ny;
+        }
+        let z2=z;
+        outerZ: while(true){
+          const nz=z2+1;
+          for(let yi=y; yi<=y2; yi++){
+            for(let xi=x; xi<=x2; xi++){
+              if(!has(xi,yi,nz) || visited.has(keyOf(xi,yi,nz))) break outerZ;
+            }
+          }
+          if(!has(x,y,nz)) break;
+          z2=nz;
+        }
+        for(let zz=z; zz<=z2; zz++)
+          for(let yy=y; yy<=y2; yy++)
+            for(let xx=x; xx<=x2; xx++)
+              visited.add(keyOf(xx,yy,zz));
+        boxes.push({x1:x,y1:y,z1:z,x2,y2,z2});
+      }
+      return boxes;
+    };
+
+    const staticVisited=new Set();
+    const staticHas=(x,y,z)=> staticOcc.has(`${x},${y},${z}`);
+    for(let z=0; z<arr.size.z; z++){
+      for(let y=0; y<arr.size.y; y++){
         for(let x=0; x<arr.size.x; x++){
-          const k=`${x},${y},${z}`; if(!isSolid(x,y,z) || visited.has(k)) continue;
-
-          // grow run in X
-          let x2=x; while(x2+1<arr.size.x && isSolid(x2+1,y,z) && !visited.has(`${x2+1},${y},${z}`)) x2++;
-          // try to grow Y
+          const key=`${x},${y},${z}`;
+          if(!staticHas(x,y,z) || staticVisited.has(key)) continue;
+          let x2=x; while(staticHas(x2+1,y,z) && !staticVisited.has(`${x2+1},${y},${z}`)) x2++;
           let y2=y;
-          outerY: while(y2+1<arr.size.y){
-            for(let xi=x; xi<=x2; xi++){ if(!isSolid(xi,y2+1,z) || visited.has(`${xi},${y2+1},${z}`)) break outerY; }
-            y2++;
+          outerStaticY: while(true){
+            const ny=y2+1;
+            for(let xi=x; xi<=x2; xi++){
+              if(!staticHas(xi,ny,z) || staticVisited.has(`${xi},${ny},${z}`)) break outerStaticY;
+            }
+            y2=ny;
           }
-          // try to grow Z
           let z2=z;
-          outerZ: while(z2+1<arr.size.z){
-            for(let yi=y; yi<=y2; yi++) for(let xi=x; xi<=x2; xi++){ if(!isSolid(xi,yi,z2+1) || visited.has(`${xi},${yi},${z2+1}`)) break outerZ; }
-            z2++;
+          outerStaticZ: while(true){
+            const nz=z2+1;
+            for(let yi=y; yi<=y2; yi++){
+              for(let xi=x; xi<=x2; xi++){
+                if(!staticHas(xi,yi,nz) || staticVisited.has(`${xi},${yi},${nz}`)) break outerStaticZ;
+              }
+            }
+            z2=nz;
           }
+          for(let zz=z; zz<=z2; zz++)
+            for(let yy=y; yy<=y2; yy++)
+              for(let xx=x; xx<=x2; xx++)
+                staticVisited.add(`${xx},${yy},${zz}`);
 
-          // mark visited
-          for(let zz=z; zz<=z2; zz++) for(let yy=y; yy<=y2; yy++) for(let xx=x; xx<=x2; xx++) visited.add(`${xx},${yy},${zz}`);
-
-          // build collider (single merged AABB)
           const hx=(x2-x+1)/2, hy=(y2-y+1)/2, hz=(z2-z+1)/2;
           const center=worldPos(arr, x+hx-.5, y+hy-.5, z+hz-.5);
           const col=RAPIER.ColliderDesc.cuboid(hx*0.9, hy*0.9, hz*0.9).setTranslation(center.x,center.y,center.z);
-          col.setRestitution(0.0); // No bounce for stable platforming
-          col.setFriction(0.7); // Good friction for player grip
-          const handle=rapierWorld.createCollider(col); 
+          col.setRestitution(0.0);
+          col.setFriction(0.7);
+          const handle=rapierWorld.createCollider(col);
           arr._colliders.push(handle);
-          console.log(`[PHYSICS] Created collider for array #${arr.id} at (${center.x.toFixed(1)},${center.y.toFixed(1)},${center.z.toFixed(1)}) size (${hx.toFixed(1)},${hy.toFixed(1)},${hz.toFixed(1)})`);
         }
+      }
+    }
+
+    grouped.forEach((info, groupId)=>{
+      if(info.cells.size === 0) return;
+      const keyStrings = Array.from(info.cells.keys());
+      const boxes = buildBoxesFromKeys(keyStrings);
+      if(boxes.length===0) return;
+
+      let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+      info.cells.forEach(cell=>{
+        const center = worldPos(arr, cell.x, cell.y, cell.z);
+        minX = Math.min(minX, center.x-0.5);
+        minY = Math.min(minY, center.y-0.5);
+        minZ = Math.min(minZ, center.z-0.5);
+        maxX = Math.max(maxX, center.x+0.5);
+        maxY = Math.max(maxY, center.y+0.5);
+        maxZ = Math.max(maxZ, center.z+0.5);
+      });
+
+      const origin = new THREE.Vector3(
+        (minX+maxX)/2,
+        (minY+maxY)/2,
+        (minZ+maxZ)/2
+      );
+
+      let body=null;
+      try{
+        const rbDesc = RAPIER.RigidBodyDesc.dynamic();
+        rbDesc.setTranslation(origin.x, origin.y, origin.z);
+        rbDesc.setLinearDamping(0.8);
+        rbDesc.setAngularDamping(1.2);
+        body = rapierWorld.createRigidBody(rbDesc);
+        arr._rigidBodies.push(body.handle);
+      }catch(e){
+        console.warn('[PHYSICS] Failed to create rigid body for group', groupId, e);
+        return;
+      }
+
+      boxes.forEach(box=>{
+        const hx=(box.x2-box.x1+1)/2;
+        const hy=(box.y2-box.y1+1)/2;
+        const hz=(box.z2-box.z1+1)/2;
+        const center=worldPos(arr, box.x1+hx-.5, box.y1+hy-.5, box.z1+hz-.5);
+        const rel = {x:center.x-origin.x, y:center.y-origin.y, z:center.z-origin.z};
+        try{
+          const desc = RAPIER.ColliderDesc.cuboid(hx*0.9, hy*0.9, hz*0.9).setTranslation(rel.x, rel.y, rel.z);
+          desc.setRestitution(0.0);
+          desc.setFriction(0.7);
+          const handle = rapierWorld.createCollider(desc, body);
+          arr._colliders.push(handle);
+        }catch(e){
+          console.warn('[PHYSICS] Failed to attach collider for group', groupId, e);
+        }
+      });
+
+      if(staticPhysicsBody && info.pivots.length && RAPIER?.JointData?.revolute){
+        info.pivots.forEach(pivot=>{
+          try{
+            const pivotWorld = worldPos(arr, pivot.x, pivot.y, pivot.z);
+            const localAnchor = {
+              x: pivotWorld.x - origin.x,
+              y: pivotWorld.y - origin.y,
+              z: pivotWorld.z - origin.z
+            };
+            const worldAnchor = {x:pivotWorld.x, y:pivotWorld.y, z:pivotWorld.z};
+            const axis = {x:0,y:1,z:0};
+            const joint = RAPIER.JointData.revolute(localAnchor, worldAnchor, axis);
+            const handle = rapierWorld.createImpulseJoint(joint, body, staticPhysicsBody, true);
+            arr._joints.push(handle);
+          }catch(e){
+            console.warn('[PHYSICS] Failed to create hinge for group', groupId, e);
+          }
+        });
+      }
+    });
   }
   // Procedural animation system for timed translations/preview
   const proceduralAnims = [];
@@ -10741,14 +11189,21 @@ const Scene = (()=>{
         
         // --- START: ZIPLINE LOGIC ---        
         if(ziplineState.active){
-          ziplineState.progress += 0.008; // Zipline speed
-          ziplineState.progress = Math.min(ziplineState.progress, 1);
+          const maxSpeed = ziplineState.maxSpeed || 0.06;
+          ziplineState.velocity = Math.min(maxSpeed, ziplineState.velocity + (ziplineState.accel || 0.002));
+          const delta = ziplineState.velocity / Math.max(0.001, ziplineState.length || 1);
+          ziplineState.progress = Math.min(1, ziplineState.progress + delta);
           const newPos = new THREE.Vector3().lerpVectors(ziplineState.start, ziplineState.end, ziplineState.progress);
-          playerBody.setNextKinematicTranslation(newPos.x, newPos.y - 0.5, newPos.z);
+          if(typeof playerBody.setNextKinematicTranslation === 'function'){
+            playerBody.setNextKinematicTranslation(newPos.x, newPos.y - 0.5, newPos.z);
+          } else {
+            playerBody.setTranslation({x:newPos.x, y:newPos.y - 0.5, z:newPos.z}, true);
+          }
           wasGroundedLastFrame = false;
 
           if(ziplineState.progress >= 1){
             ziplineState.active = false; // Detach at the end
+            ziplineState.velocity = 0;
             wasGroundedLastFrame = false;
           }
         } else {
@@ -10759,26 +11214,35 @@ const Scene = (()=>{
 
             // Zipline attachment detection
             for(const [key, con] of connections.entries()){
+              if(con.mode !== 'zipline') continue;
               const line = new THREE.Line3(con.start, con.end);
               const closestPoint = new THREE.Vector3();
               line.closestPointToPoint(playerPos, true, closestPoint);
               const distance = playerPos.distanceTo(closestPoint);
 
               if(distance < 0.75){ // Attachment radius
-                const drop = con.start.y - con.end.y;
-                if(Math.abs(drop) < 0.05) continue; // Skip nearly flat lines
+                const start = con.start;
+                const end = con.end;
+                const lineLength = con.length || line.distance();
+                const drop = start.y - end.y;
+                if(Math.abs(drop) < 0.05 && lineLength < 0.5) continue; // Skip nearly flat/short lines
                 ziplineState.active = true;
                 if(drop > 0){
-                  ziplineState.start = con.start.clone();
-                  ziplineState.end = con.end.clone();
+                  ziplineState.start = start.clone();
+                  ziplineState.end = end.clone();
                 } else {
-                  ziplineState.start = con.end.clone();
-                  ziplineState.end = con.start.clone();
+                  ziplineState.start = end.clone();
+                  ziplineState.end = start.clone();
                 }
                 const lineDir = new THREE.Vector3().subVectors(ziplineState.end, ziplineState.start);
                 const lengthSq = lineDir.lengthSq();
                 if(lengthSq < 1e-6){ ziplineState.active = false; continue; }
+                ziplineState.length = lineLength || Math.sqrt(lengthSq);
                 ziplineState.direction = lineDir.clone().normalize();
+                const slope = Math.max(0, (ziplineState.start.y - ziplineState.end.y) / Math.max(0.001, ziplineState.length));
+                ziplineState.accel = 0.0015 + slope * 0.0015;
+                ziplineState.maxSpeed = 0.045 + slope * 0.02;
+                ziplineState.velocity = Math.max(0.008, ziplineState.accel * 2);
                 const playerDir = new THREE.Vector3().subVectors(playerPos, ziplineState.start);
                 ziplineState.progress = THREE.MathUtils.clamp(playerDir.dot(lineDir) / lengthSq, 0, 1);
                 playerBody.setLinvel({x:0,y:0,z:0}, true);
@@ -10850,30 +11314,40 @@ const Scene = (()=>{
                 right = new THREE.Vector3(Math.cos(mouseYaw), 0, -Math.sin(mouseYaw));
               } else {
                 // Movement relative to camera
-                dir = new THREE.Vector3(); 
-                camera.getWorldDirection(dir); 
-                dir.y = 0; 
+                dir = new THREE.Vector3();
+                camera.getWorldDirection(dir);
+                dir.y = 0;
                 dir.normalize();
                 right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0,1,0)).normalize();
               }
-              
-              const force = 3.5; // Moderate force for good platformer feel
-              
+
+              const avatarCfg = Store.getState().avatarPhysics || {};
+              const runMult = Math.max(0.1, Number(avatarCfg.runMultiplier || 1));
+              const momentumMode = (avatarCfg.momentumMode|0) === 1 ? 1 : 0;
+              const baseForce = momentumMode ? 2.6 : 3.5;
+              const force = baseForce * runMult;
+
               let fx = 0, fz = 0;
               fx += dir.x*(input.f-input.b) + right.x*(input.r-input.l);
               fz += dir.z*(input.f-input.b) + right.z*(input.r-input.l);
-              
+
               // Apply impulse for responsive control
               const impulse = {x: fx * force, y: 0, z: fz * force};
               playerBody.applyImpulse(impulse, true);
-              
+
               // Limit horizontal velocity to prevent runaway speed
               const vel = playerBody.linvel();
-              const maxSpeed = 4.0; // Reasonable platformer speed
+              const baseMax = momentumMode ? 6.0 : 4.0;
+              const maxSpeed = baseMax * runMult;
               const horizSpeed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
               if(horizSpeed > maxSpeed){
                 const scale = maxSpeed / horizSpeed;
                 playerBody.setLinvel({x: vel.x * scale, y: vel.y, z: vel.z * scale}, true);
+              }
+              if(momentumMode === 0){
+                playerBody.setLinearDamping(5.0);
+              } else {
+                playerBody.setLinearDamping(1.5);
               }
             } catch(e) {
               console.warn('Physics movement failed:', e);
@@ -10940,6 +11414,7 @@ const Scene = (()=>{
             if(playerBody){
               const translation = playerBody.translation();
               cachedPlayerPos.set(translation.x, translation.y, translation.z);
+              applyArrayFloorClamp(playerBody);
             }
 
             triggerTouchHandlers();
@@ -11655,23 +12130,38 @@ const Scene = (()=>{
     // Update connection lines that involve this array
     if(!skipConn){
     connections.forEach((connection, key) => {
-      const { ref1, ref2, line } = connection;
+      const { ref1, ref2, visual } = connection;
       if(ref1.arrId === arr.id || ref2.arrId === arr.id) {
-        // Recalculate endpoints
         const arr1 = Store.getState().arrays[ref1.arrId];
         const arr2 = Store.getState().arrays[ref2.arrId];
-        if(arr1 && arr2) {
-          const start = worldPos(arr1, ref1.x, ref1.y, ref1.z);
-          const end = worldPos(arr2, ref2.x, ref2.y, ref2.z);
-          
-          // Update line geometry
-          const points = [start, end];
-          line.geometry.dispose();
-          line.geometry = new THREE.BufferGeometry().setFromPoints(points);
-          
-          // Update stored positions
-          connection.start = start;
-          connection.end = end;
+        if(!arr1 || !arr2 || !visual) return;
+
+        const start = worldPos(arr1, ref1.x, ref1.y, ref1.z);
+        const end = worldPos(arr2, ref2.x, ref2.y, ref2.z);
+        const dir = new THREE.Vector3().subVectors(end, start);
+        const length = Math.max(0.0001, dir.length());
+        const center = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+        const dirNorm = length > 0.0001 ? dir.clone().divideScalar(length) : new THREE.Vector3(1,0,0);
+
+        connection.start = start;
+        connection.end = end;
+        connection.length = length;
+
+        if(connection.mode === 'platform' || connection.mode === 'grind'){
+          const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1,0,0), dirNorm.clone());
+          visual.position.copy(center);
+          visual.quaternion.copy(quat);
+          visual.scale.set(length, 1, 1);
+        } else if(connection.mode === 'zipline'){
+          const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), dirNorm.clone());
+          visual.position.copy(center);
+          visual.quaternion.copy(quat);
+          visual.scale.set(1, length, 1);
+        } else {
+          try{
+            visual.geometry.dispose();
+          }catch{}
+          visual.geometry = new THREE.BufferGeometry().setFromPoints([start, end]);
         }
       }
     });
@@ -12901,14 +13391,66 @@ const Scene = (()=>{
   }
   // Jump physics
   let jumpVelocity=0;
+  let jumpBudget={max:1, remaining:1, source:'avatar'};
   let physicsSpawnPos = null; // Store spawn position for respawn on fall
   let landingSquashTime = 0; // Track landing squash animation
   let anticipationSquashTime = 0; // Track jump anticipation squash
+
+  function computeJumpBudget(){
+    const avatarCfg = Store.getState().avatarPhysics || {};
+    let max = Math.max(1, Math.round(Number(avatarCfg.jumpCount ?? 1)) || 1);
+    let source = 'avatar';
+    try{
+      const sel = Store.getState().selection;
+      if(sel?.arrayId){
+        const arr = Store.getState().arrays[sel.arrayId];
+        const arrJump = arr?.params?.physics?.jumpCount;
+        if(Number.isFinite(arrJump) && arrJump > 0){
+          max = Math.max(1, Math.round(arrJump));
+          source = `array:${arr.id}`;
+        }
+      }
+    }catch{}
+    return {max, source};
+  }
+  function resetJumpBudget(){
+    const base = computeJumpBudget();
+    jumpBudget = { ...base, remaining: base.max };
+  }
+  function consumeJump(){
+    if(jumpBudget.remaining > 0){
+      jumpBudget.remaining -= 1;
+    }
+  }
+  function applyArrayFloorClamp(body){
+    try{
+      const sel = Store.getState().selection;
+      if(!sel?.arrayId) return;
+      const arr = Store.getState().arrays[sel.arrayId];
+      if(!arr?.params?.physics?.boundByArrayFloor) return;
+      if(!body) return;
+      const floorCenter = worldPos(arr, 0, arr.size.y - 1, 0);
+      const floorY = floorCenter.y - 0.5;
+      const translation = body.translation();
+      if(!Number.isFinite(translation.y)) return;
+      if(translation.y < floorY){
+        body.setTranslation({x: translation.x, y: floorY, z: translation.z}, true);
+        const vel = body.linvel();
+        if(vel.y < 0){
+          body.setLinvel({x: vel.x, y: 0, z: vel.z}, true);
+        }
+        cachedPlayerPos.set(translation.x, floorY, translation.z);
+      }
+    }catch(e){
+      console.warn('Floor clamp failed', e);
+    }
+  }
   
   function handleJump(){
     // --- START: ZIPLINE DETACHMENT ---
     if(ziplineState.active){
       ziplineState.active = false;
+      ziplineState.velocity = 0;
       jumpVelocity = 4; // Give a small hop off the line
       console.log('[PHYSICS] Detached from zipline');
       return;
@@ -12939,18 +13481,26 @@ const Scene = (()=>{
         console.log(`[PHYSICS] Jump check - grounded=${grounded}, rayHit=${hit !== null}, y=${translation.y.toFixed(2)}, vel.y=${vel.y.toFixed(2)}`);
         
         if(grounded){
-          // Trigger anticipation squash before jump
+          if(jumpBudget.remaining <= 0){
+            return;
+          }
+          consumeJump();
           anticipationSquashTime = 1;
-          // Delay actual jump for anticipation animation (about 3-4 frames at 60fps)
           setTimeout(() => {
             if(playerBody && rapierWorld){
               const currentVel = playerBody.linvel();
               playerBody.setLinvel({x: currentVel.x, y: 8.0, z: currentVel.z}, true);
-              jumpVelocity = 8; // Track for animation
-              anticipationSquashTime = 0; // Reset anticipation
+              jumpVelocity = 8;
+              anticipationSquashTime = 0;
               console.log('[PHYSICS] Jump velocity set! vel.y=8.0');
             }
-          }, 50); // 50ms delay for anticipation
+          }, 50);
+        } else if(jumpBudget.remaining > 0){
+          consumeJump();
+          const currentVel = playerBody.linvel();
+          playerBody.setLinvel({x: currentVel.x, y: 8.0, z: currentVel.z}, true);
+          jumpVelocity = 8;
+          anticipationSquashTime = 0;
         }
       } catch(e) {
         console.warn('Jump failed:', e);
@@ -13916,9 +14466,15 @@ const Scene = (()=>{
     const key = aKey(anchor);
     if(connections.has(key)){
       const connection = connections.get(key);
-      scene.remove(connection.line);
-      connection.line.geometry.dispose();
-      connection.line.material.dispose();
+      if(connection.visual){
+        scene.remove(connection.visual);
+        try{ connection.visual.geometry?.dispose?.(); }catch{}
+        try{
+          const mat = connection.visual.material;
+          if(Array.isArray(mat)) mat.forEach(m=>m?.dispose?.());
+          else mat?.dispose?.();
+        }catch{}
+      }
       connections.delete(key);
     }
   }
@@ -13953,13 +14509,14 @@ const Scene = (()=>{
       const key = `${arr.id}:${coord.x},${coord.y},${coord.z}`;
       if(key===lastLandKey) return;
       lastLandKey = key;
+      resetJumpBudget();
       const cell = Formula.getCell({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z});
       const action = getMetaAction(cell?.meta, 'on_land');
       if(action){ executeActionFormula({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z}, action, 'land'); }
     }catch(err){ console.warn('land handler failed', err); }
   }
 
-  function addConnection(anchor, ref1, ref2){
+  function addConnection(anchor, ref1, ref2, options={}){
     removeConnection(anchor); // Clear any existing line from this anchor
 
     const r1 = { ...ref1, arrId: ref1.arrId ?? anchor.arrId };
@@ -13971,14 +14528,64 @@ const Scene = (()=>{
     const start = worldPos(arr1, r1.x, r1.y, r1.z);
     const end = worldPos(arr2, r2.x, r2.y, r2.z);
 
-    const points = [start, end];
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const material = new THREE.LineBasicMaterial({ color: COLORS.grab, linewidth: 2 });
-    const line = new THREE.Line(geometry, material);
-    line.renderOrder = 100;
+    const style = options.style ? String(options.style).toLowerCase() : '';
+    const mode = (options.dimensionMode || 'line').toLowerCase();
+    const dir = new THREE.Vector3().subVectors(end, start);
+    const length = Math.max(0.0001, dir.length());
+    const dirNorm = length > 0.0001 ? dir.clone().divideScalar(length) : new THREE.Vector3(1,0,0);
+    const center = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+    const colorMap = {
+      warn: 0xf97316,
+      danger: 0xef4444,
+      safe: 0x22c55e,
+      info: 0x38bdf8
+    };
+    const color = colorMap[style] || COLORS.grab;
+    let visual;
 
-    scene.add(line);
-    connections.set(aKey(anchor), { line, start, end, anchor: {...anchor}, ref1: r1, ref2: r2 });
+    if(mode === 'platform' || mode === 'grind'){
+      const thickness = mode === 'grind' ? 0.18 : 0.2;
+      const width = mode === 'grind' ? 0.35 : 1.1;
+      const geo = new THREE.BoxGeometry(1, thickness, width);
+      const mat = new THREE.MeshStandardMaterial({ color, metalness:0.15, roughness:0.55 });
+      visual = new THREE.Mesh(geo, mat);
+      visual.castShadow = true;
+      visual.receiveShadow = true;
+      const axis = new THREE.Vector3(1,0,0);
+      const quat = new THREE.Quaternion().setFromUnitVectors(axis, dirNorm.clone());
+      visual.quaternion.copy(quat);
+      visual.position.copy(center);
+      visual.scale.set(length, 1, 1);
+    } else if(mode === 'zipline'){
+      const geo = new THREE.CylinderGeometry(0.05, 0.05, 1, 10);
+      const mat = new THREE.MeshBasicMaterial({ color });
+      visual = new THREE.Mesh(geo, mat);
+      const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), dirNorm.clone());
+      visual.quaternion.copy(quat);
+      visual.position.copy(center);
+      visual.scale.set(1, length, 1);
+    } else {
+      const geometry = new THREE.BufferGeometry().setFromPoints([start, end]);
+      const material = new THREE.LineBasicMaterial({ color, linewidth: 2 });
+      visual = new THREE.Line(geometry, material);
+      visual.renderOrder = 100;
+    }
+
+    visual.frustumCulled = false;
+    scene.add(visual);
+    connections.set(aKey(anchor), {
+      visual,
+      line: visual,
+      start,
+      end,
+      anchor: {...anchor},
+      ref1: r1,
+      ref2: r2,
+      mode,
+      style,
+      length,
+      color
+    });
   }
 
   function createArraySnapshot(arr) {
@@ -14137,17 +14744,26 @@ const Scene = (()=>{
     const current = Store.getState().scene.physics;
     const next = !current;
     console.log(`[PHYSICS MODE TOGGLE] Current: ${current}, Next: ${next}`);
-    Store.setState(s=>({scene:{...s.scene, physics:next}})); 
+    const avatarCfg = Store.getState().avatarPhysics || {};
+    if(next && avatarCfg.enabled === false){
+      showToast?.('Avatar physics disabled by CELLI_PHYS');
+      Store.setState(s=>({scene:{...s.scene, physics:false}}));
+      document.getElementById('physChip').textContent='Physics: OFF';
+      return;
+    }
+    Store.setState(s=>({scene:{...s.scene, physics:next}}));
     
     if(next){
       // On enable: create player body and spawn at current selected cell
       if(RAPIER && rapierWorld && !playerBody){
         try{
+          const avatarCfg = Store.getState().avatarPhysics || {};
+          const momentumMode = (avatarCfg.momentumMode|0) === 1 ? 1 : 0;
           const rb=RAPIER.RigidBodyDesc.dynamic();
           rb.setTranslation(0, 0.7, 0);
           rb.lockRotations(true, true);
           rb.setCanSleep(false);
-          rb.setLinearDamping(5.0);
+          rb.setLinearDamping(momentumMode === 1 ? 1.5 : 5.0);
           rb.setAngularDamping(1.0);
           rb.setCcdEnabled(true);
           playerBody=rapierWorld.createRigidBody(rb);
@@ -14177,6 +14793,7 @@ const Scene = (()=>{
         // No selection, spawn at default position
         spawnPlayerAt(spawnPos.x, spawnPos.y, spawnPos.z);
       }
+      resetJumpBudget();
       // Position camera to show Celli from a good platformer angle
       if(camera && controls){
         // Target Celli's position (slightly above ground)
@@ -14189,6 +14806,7 @@ const Scene = (()=>{
         controls.update();
         console.log(`[PHYSICS] Camera positioned at (${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)}) targeting (${targetPos.x.toFixed(2)}, ${targetPos.y.toFixed(2)}, ${targetPos.z.toFixed(2)})`);
       }
+      try{ setPhysicsCamera(physicsCameraConfig.mode, physicsCameraConfig.distance, physicsCameraConfig.allowRotation); }catch{}
       // Build colliders for all arrays
       Object.values(Store.getState().arrays).forEach(a=>debounceColliderRebuild(a));
       // Initialize mouse look angles from current camera
@@ -14214,6 +14832,8 @@ const Scene = (()=>{
           console.warn('[PHYSICS] Failed to destroy player body:', e);
         }
       }
+      ziplineState.active = false;
+      ziplineState.velocity = 0;
       try{
         if(document.pointerLockElement){
           document.exitPointerLock();
@@ -14231,7 +14851,7 @@ const Scene = (()=>{
     }
   }
 
-  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, resetContactCache};
+  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsCamera, resetContactCache};
 })();
 
 /* ===========================
@@ -15183,6 +15803,11 @@ const UI = (()=>{
       {name:'ON_HOLD',tags:'META INTERACTION',syntax:'=ON_HOLD([target], action)',params:'target: optional ref/range (default SELF()) · action: formula string executed while the pointer is held',desc:'Binds a 2D pointer hold handler that fires continuously for the pressed cell.'},
       {name:'ON_TOUCH',tags:'META INTERACTION',syntax:'=ON_TOUCH([target], action)',params:'target: optional ref/range (default SELF()) · action: formula string triggered on player contact',desc:'Registers a physics touch trigger that runs when the avatar collides with the cell.'},
       {name:'ON_LAND',tags:'META INTERACTION',syntax:'=ON_LAND([target], action)',params:'target: optional ref/range (default SELF()) · action: formula string triggered on landing',desc:'Fires the action the first frame the avatar lands on top of the cell.'},
+      {name:'PIVOT',tags:'PHYSICS',syntax:'=PIVOT(targetRange)',params:'targetRange: ref/range containing pivot cells',desc:'Marks hinge pivot cells used when generating grouped rigid bodies. Persists to meta.physicsPivot for Rapier bootstrap.'},
+      {name:'GROUP',tags:'PHYSICS',syntax:'=GROUP(targetRange, groupId)',params:'targetRange: ref/range to consolidate · groupId: numeric/string id',desc:'Assigns cells to a shared rigid body via meta.physicsGroupId so collider builds merge tiles.'},
+      {name:'CELL_PHYS',tags:'PHYSICS',syntax:'=CELL_PHYS(enabled[, jumpCount[, gravityVec[, boundByArrayFloor]]])',params:'enabled: 0/1 · jumpCount: optional int · gravityVec: optional @[x,y,z] · boundByArrayFloor: 0/1 clamp',desc:'Enables per-array physics hydration with grouped bodies, pivots, and optional floor clamping.'},
+      {name:'CELLI_PHYS',tags:'PHYSICS AVATAR',syntax:'=CELLI_PHYS(enabled[, jumpCount[, runMultiplier[, momentumMode]]])',params:'enabled: 0/1 · jumpCount: default 1 · runMultiplier: movement speed scalar · momentumMode: 0 precise, 1 momentum heavy',desc:'Avatar physics controller wrapper configuring enable state, jump budget, sprint scaling, and momentum style.'},
+      {name:'LIMIT',tags:'PHYSICS',syntax:'=LIMIT(targetRange, state[, duration])',params:'targetRange: ref/range · state: "enable"|"disable" or 0/1 · duration: optional ticks',desc:'Applies temporary physics bounds that can be timed with DELAY or ON_LAND handlers for scripted platforms.'},
       {name:'FORMULA_TEXT',tags:'PURE',syntax:'=FORMULA_TEXT([ref])',params:'optional ref; default anchor',desc:'Returns the stored formula text from a cell instead of its value.'},
       {name:'SEARCH',tags:'DATA',syntax:'=SEARCH(findText, withinText[, start])',params:'findText: substring to locate · withinText: text to search · start: optional 1-based index',desc:'Excel-style case-insensitive search that returns the 1-based position of the substring or errors if not found.'},
       {name:'PRIORITY',tags:'META',syntax:'=PRIORITY(rangeOrRef, level[, mode[, sortJson]]])',params:'level: int · mode: "value"|"coord" · sortJson e.g. {"x":"asc","y":"desc"}',desc:'Registers a priority queue and sort hints for later conflict resolution.'},
@@ -15201,11 +15826,15 @@ const UI = (()=>{
       {name:'CREATE',tags:'ACTION',syntax:'=CREATE(x,y,z[, "Name"[,"Id"]])',params:'dimensions (ints), optional nickname, optional explicit ID',desc:'Spawns a new array (respecting optional explicit id).'},
       {name:'EXPORT',tags:'ACTION IO',syntax:'=EXPORT([RangeOrArray])',params:'optional target; default host array',desc:'Serializes as ToyboxPack JSON (size, cells, policy, names).'},
       {name:'IMPORT',tags:'ACTION IO',syntax:'=IMPORT(json)',params:'stringified ToyboxPack',desc:'Instantiates array(s) from a pack.'},
-      {name:'EMBED',tags:'ACTION EMBED',syntax:'=EMBED(source[, "Nickname"])',params:'source: array id/range/pack · optional nickname',desc:'Embeds a shrunken snapshot instance inside the anchor cell.'},
+      {name:'EMBED',tags:'ACTION EMBED',syntax:'=EMBED(source[, "Nickname"])',params:'source: array id/range/pack · optional nickname',desc:'Embeds stored arrays or ranges inside a single cell, preserving colors, sprites, and metadata while scaling to the storage footprint.'},
+      {name:'SCREEN',tags:'ACTION EMBED DISPLAY',syntax:'=SCREEN(arrayRef[, layer[, options]])',params:'arrayRef: stored array id/ref · layer: optional index · options: {palette,scale,refresh}',desc:'Generates pixel-aligned displays from array layers with palette overrides, scaling, and animation refresh control.'},
       {name:'UNPACK',tags:'ACTION EMBED',syntax:'=UNPACK(embeddedRef[, mode])',params:'embeddedRef: cell with embed or pack · mode: "ABSOLUTE"|"RELATIVE"',desc:'Materializes embedded content via primitives.'},
       {name:'ENTER',tags:'ACTION EMBED',syntax:'=ENTER(embeddedRef)',params:'cell containing embed',desc:'Moves focus into the embedded array pocket; parent appears as upscaled room skin.'},
       {name:'PHYSICS',tags:'ACTION',syntax:'=PHYSICS(1|0)',params:'0/1',desc:'Toggles platforming/physics mode in the scene.'},
+      {name:'CONNECT',tags:'SCENE TRAVERSAL',syntax:'=CONNECT(fromRef, toRef[, style[, dimensionMode]])',params:'fromRef/toRef: refs · style: optional label · dimensionMode: optional "line"|"platform"|"zipline"|"grind"',desc:'Links cells with traversal connectors, spawning beams by default or geometry/physics for dimension modes.'},
       {name:'HIGHLIGHT',tags:'SCENE',syntax:'=HIGHLIGHT(mode[, scope[, style]])',params:'mode: "dynamic"|"static" · scope: "cell"|"face" · style: "wireframe"|"solid"|"glow"',desc:'Controls selection highlighting. Dynamic adapts to camera angle, face highlights just the camera-facing side.'},
+      {name:'CUBE',tags:'SCENE VOXEL',syntax:'=CUBE(front, back, left, right, top, bottom[, options])',params:'faces: values or colors per face · options: {emissive,opacity}',desc:'Assigns per-face sprites/colors to a voxel and syncs with face-aware highlighting.'},
+      {name:'SCALE',tags:'SCENE VOXEL',syntax:'=SCALE(factor)',params:'factor: integer ≥1',desc:'Expands voxel mesh coverage (2→2×2×2, 3→4×4×4, etc.) and adjusts collision/selection volumes.'},
       {name:'LIGHT',tags:'SCENE',syntax:'=LIGHT(state[, targetCell[, lumens]])',params:'state: TRUE/FALSE or 1/0 · targetCell: optional cell reference (0 keeps point light) · lumens: brightness in lumens (default 800)',desc:'Creates a light at the calling cell using its color. Optionally aim at another cell for a spotlight. Lights follow array transforms.'},
       {name:'TIMED_TRANSLATION',tags:'SCENE',syntax:'=TIMED_TRANSLATION(state[, ticks[, reverse]])',params:'state: 0/1 enable · ticks: duration · reverse: 0/1 bidirectional',desc:'Sets animation preview state; shows green prism motion previews.'},
       {name:'HIDE',tags:'SCENE',syntax:'=HIDE(target, mode[, scope])',params:'target: ref/range/array · mode: 0=show,1=hide · scope: "contents"|"voxel"|"array"',desc:'Hides cell contents, voxels themselves, ranges, or entire arrays with axes/2D visibility.'},
@@ -15220,6 +15849,7 @@ const UI = (()=>{
       {name:'CA',tags:'PURE',syntax:'=CA("life",steps,"Y",layer)',params:'type: "life" · steps: int · axis: X/Y/Z · index: layer number',desc:'Conway Game of Life on a 2D slice.'},
       {name:'OCCLUDE',tags:'SCENE',syntax:'=OCCLUDE(mode[, style[, intensity]])',params:'mode: "auto"|"array"|"cell"|"off" · style: "translucent"|"solid"|"wireframe" · intensity: 0.0-1.0',desc:'Controls occlusion behavior. Auto=relative to camera, array=whole array face, cell=per-cell blocking.'},
       {name:'CAMERA_LOCK',tags:'SCENE',syntax:'=CAMERA_LOCK(axis[, angle])',params:'axis: "X"|"Y"|"Z"|"" (free) · angle: degrees for fixed view',desc:'Constrains camera movement to specific axis or angle for puzzle control.'},
+      {name:'PHYS_CAMERA',tags:'SCENE CAMERA',syntax:'=PHYS_CAMERA(mode[, distance[, allowRotation]])',params:'mode: "2d"|"iso"|"free" · distance: optional camera distance · allowRotation: 0/1 yaw unlock for 2D/iso',desc:'Configures physics-aware camera schemes and aligns gravity/movement to the chosen mode.'},
       {name:'VIEW_MODE',tags:'SCENE',syntax:'=VIEW_MODE(mode[, distance])',params:'mode: "3d"|"2d"|"ortho"|"isometric" · distance: camera distance',desc:'Changes camera projection and positioning for different viewing modes.'},
       {name:'SANDBOX',tags:'META',syntax:'=SANDBOX()',params:'—',desc:'Creates Sandbox array (#2) if not exists and centers camera on it.'},
       {name:'UI_CONTROL',tags:'META',syntax:'=UI_CONTROL(type, state)',params:'type: "insert_buttons"|"function_drawer" · state: 0/1',desc:'Controls which UI elements are visible when this array is focused.'},
