@@ -1898,6 +1898,20 @@ const Actions = {
       Store.setState({ dockGroups: ng });
     }catch{}
 
+    // Clean up any embedded meshes tied to this array
+    try{
+      const map = __cloneEmbeddedMap(Store.getState().embeddedMeshes);
+      let changed=false;
+      map.forEach((rec, key)=>{
+        if(rec?.hostArrId===arrId || rec?.sourceArrId===arrId){
+          __disposeEmbeddedRecord(rec);
+          map.delete(key);
+          changed=true;
+        }
+      });
+      if(changed) Store.setState({ embeddedMeshes: map });
+    }catch{}
+
     // Remove from array registry
     const arrays = { ...S.arrays };
     delete arrays[arrId];
@@ -2135,6 +2149,7 @@ const Actions = {
   setSelection:(arrayId, focus, anchor=null, interactionSource='3d')=>{
     Store.setState(s=>({ selection:{arrayId, focus, anchor:anchor||focus, range:null}, ui:{...s.ui, zLayer:focus.z, lastInteraction:interactionSource} }));
     Scene.updateFocus(Store.getState().selection);
+    Scene.resetContactCache?.();
     UI.updateFocusChip();
     UI.renderSheet();
 
@@ -4356,6 +4371,98 @@ tag('LT',['PURE'],(anchor,arr,ast)=>{ const valOf=Formula.valOf; const [a,b]=ast
 tag('LTE',['PURE'],(anchor,arr,ast)=>{ const valOf=Formula.valOf; const [a,b]=ast.args.map(valOf).map(Number); Actions.setCell(arr.id,anchor,(a<=b)?1:0,ast.raw,true); });
 tag('CLAMP',['PURE'],(anchor,arr,ast)=>{ const valOf=Formula.valOf; const x=+valOf(ast.args[0])||0, mn=(+valOf(ast.args[1])||0), mx=(+valOf(ast.args[2])||0); Actions.setCell(arr.id,anchor, Math.min(mx,Math.max(mn,x)), ast.raw,true); });
 
+const __dirMap = {
+  north:{dx:0,dy:-1,dz:0}, south:{dx:0,dy:1,dz:0},
+  east:{dx:1,dy:0,dz:0}, west:{dx:-1,dy:0,dz:0},
+  front:{dx:0,dy:0,dz:-1}, back:{dx:0,dy:0,dz:1}
+};
+function __parseDirectionToken(token){
+  if(token===undefined||token===null) return null;
+  const str=String(token).trim();
+  if(!str) return null;
+  const lower=str.toLowerCase();
+  if(__dirMap[lower]) return __dirMap[lower];
+  switch(str.toUpperCase()){
+    case 'N': case '-Y': return __dirMap.north;
+    case 'S': case '+Y': case 'Y': return __dirMap.south;
+    case 'E': case '+X': case 'X': return __dirMap.east;
+    case 'W': case '-X': return __dirMap.west;
+    case 'F': case 'FRONT': case '-Z': return __dirMap.front;
+    case 'B': case 'BACK': case '+Z': case 'Z': return __dirMap.back;
+    default: return null;
+  }
+}
+
+tag('ADJACENT',['PURE'],(anchor,arr,ast)=>{
+  const values=[];
+  const dirs=[];
+  const addTokens=(val)=>{
+    if(val==null) return;
+    if(Array.isArray(val)) return val.forEach(addTokens);
+    String(val).split(/[\s,]+/).filter(Boolean).forEach(tok=>{
+      const parsed=__parseDirectionToken(tok);
+      if(parsed) dirs.push(parsed);
+    });
+  };
+  if(ast.args.length){ ast.args.forEach(arg=> addTokens(Formula.valOf(arg))); }
+  if(!dirs.length){ dirs.push(__dirMap.north,__dirMap.south,__dirMap.east,__dirMap.west,__dirMap.front,__dirMap.back); }
+  dirs.forEach(vec=>{
+    const coord={x:anchor.x+vec.dx,y:anchor.y+vec.dy,z:anchor.z+vec.dz};
+    values.push(Formula.getCellValue({arrId:anchor.arrId||arr.id, ...coord}));
+  });
+  if(values.length===0) return '';
+  return values.length===1 ? values[0] : values;
+});
+
+tag('DETECT',['PURE'],(anchor,arr,ast)=>{
+  const lookup=Formula.valOf(ast.args[0]);
+  const target=String(lookup??'');
+  const maxRange=ast.args[1]!==undefined ? Math.max(1, Math.abs((+Formula.valOf(ast.args[1])|0))) : Math.max(arr.size?.x||1, arr.size?.y||1, arr.size?.z||1);
+  const dirs=[
+    {axis:'X',dx:1,dy:0,dz:0},
+    {axis:'X',dx:-1,dy:0,dz:0},
+    {axis:'Y',dx:0,dy:1,dz:0},
+    {axis:'Y',dx:0,dy:-1,dz:0},
+    {axis:'Z',dx:0,dy:0,dz:1},
+    {axis:'Z',dx:0,dy:0,dz:-1}
+  ];
+  const bounds={x:arr.size?.x??0,y:arr.size?.y??0,z:arr.size?.z??0};
+  for(const dir of dirs){
+    for(let step=1; step<=maxRange; step++){
+      const x=anchor.x+dir.dx*step;
+      const y=anchor.y+dir.dy*step;
+      const z=anchor.z+dir.dz*step;
+      if(x<0||y<0||z<0||x>=bounds.x||y>=bounds.y||z>=bounds.z) break;
+      const val=Formula.getCellValue({arrId:anchor.arrId||arr.id,x,y,z});
+      if(String(val)===target){
+        const sign=(dir.dx+dir.dy+dir.dz)>0?step:-step;
+        return `${dir.axis}:${sign}`;
+      }
+    }
+  }
+  return '';
+});
+
+tag('ISNUMBER',['PURE'],(anchor,arr,ast)=>{
+  const value = ast.args.length ? Formula.valOf(ast.args[0]) : '';
+  let isNum=false;
+  if(typeof value==='number'){ isNum=Number.isFinite(value); }
+  else if(typeof value==='string'){ const trimmed=value.trim(); if(trimmed){ const num=Number(trimmed); isNum=Number.isFinite(num); } }
+  else if(value!=null){ const num=Number(value); isNum=Number.isFinite(num); }
+  return isNum?1:0;
+});
+
+tag('SEARCH',['PURE'],(anchor,arr,ast)=>{
+  const find=String(Formula.valOf(ast.args[0]??''));
+  const within=String(Formula.valOf(ast.args[1]??''));
+  const startRaw=ast.args[2]!==undefined ? (+Formula.valOf(ast.args[2])|0) : 1;
+  const start=Math.max(1,startRaw);
+  if(start>within.length) throw new Error('SEARCH:OUT_OF_RANGE');
+  const idx=within.toLowerCase().indexOf(find.toLowerCase(),start-1);
+  if(idx===-1) throw new Error('SEARCH:NOT_FOUND');
+  return idx+1;
+});
+
 // WRITE HELPERS
 tag('SET',['ACTION'],(anchor,arr,ast,tx)=>{ 
   if(!tx) throw new Error('SET requires an active transaction');
@@ -4398,6 +4505,117 @@ tag('DISPLAY_AS',['ACTION'],(anchor,arr,ast)=>{
   Scene.updateValueSprite(arr, t.x, t.y, t.z, ch.cells[idx]);
   // silent: do not stamp anchor
 });
+
+function __collectMetaTargets(rangeArg, anchor, arr){
+  if(rangeArg && rangeArg.kind==='range'){
+    return rangeArg.cells.map(c=>({arrId:c.arrId??arr.id, x:c.x, y:c.y, z:c.z}));
+  }
+  if(rangeArg && rangeArg.kind==='ref'){
+    return [{arrId:rangeArg.arrId??arr.id, x:rangeArg.x, y:rangeArg.y, z:rangeArg.z}];
+  }
+  return [{arrId:arr.id, x:anchor.x, y:anchor.y, z:anchor.z}];
+}
+
+function __applyMetaAction(cells, key, action){
+  const tx = Write.start(`meta.${key}`,'Meta binding');
+  cells.forEach(target=>{
+    const existing = Formula.getCell({arrId:target.arrId, x:target.x, y:target.y, z:target.z});
+    const meta = {...(existing.meta||{})};
+    if(action===null){ delete meta[key]; }
+    else { meta[key] = action; }
+    Write.set(tx, target.arrId, {x:target.x,y:target.y,z:target.z}, { value: existing.value, formula: existing.formula, meta });
+  });
+  Write.commit(tx);
+}
+
+tag('ON_HOLD',['META'],(anchor,arr,ast)=>{
+  if(ast.args.length===1 && typeof ast.args[0]==='string'){
+    const t=ast.args[0].trim().toLowerCase();
+    if(['off','none','false','0'].includes(t)){
+      __applyMetaAction([{arrId:arr.id,x:anchor.x,y:anchor.y,z:anchor.z}], 'onHold', null);
+      Actions.setCell(arr.id, anchor, 'OnHold:OFF', ast.raw, true);
+      return;
+    }
+  }
+  let rangeArg=null, actionArgIndex=0;
+  if(ast.args.length>=2){ rangeArg=ast.args[0]; actionArgIndex=1; }
+  const raw = ast.args[actionArgIndex];
+  let action = (typeof raw==='string')? raw : String(Formula.valOf(raw)||'');
+  if(action && action[0] !== '=') action = `=${action}`;
+  const targets = __collectMetaTargets(rangeArg, anchor, arr);
+  __applyMetaAction(targets, 'onHold', action||null);
+  Actions.setCell(arr.id, anchor, `OnHold:${targets.length}`, ast.raw, true);
+});
+
+tag('ON_TOUCH',['META'],(anchor,arr,ast)=>{
+  if(ast.args.length===1 && typeof ast.args[0]==='string'){
+    const t=ast.args[0].trim().toLowerCase();
+    if(['off','none','false','0'].includes(t)){
+      __applyMetaAction([{arrId:arr.id,x:anchor.x,y:anchor.y,z:anchor.z}], 'onTouch', null);
+      Actions.setCell(arr.id, anchor, 'OnTouch:OFF', ast.raw, true);
+      return;
+    }
+  }
+  let rangeArg=null, actionIdx=0;
+  if(ast.args.length>=2){ rangeArg=ast.args[0]; actionIdx=1; }
+  const raw = ast.args[actionIdx];
+  let action = (typeof raw==='string')? raw : String(Formula.valOf(raw)||'');
+  if(action && action[0] !== '=') action = `=${action}`;
+  const targets = __collectMetaTargets(rangeArg, anchor, arr);
+  __applyMetaAction(targets, 'onTouch', action||null);
+  Actions.setCell(arr.id, anchor, `OnTouch:${targets.length}`, ast.raw, true);
+});
+
+tag('ON_LAND',['META'],(anchor,arr,ast)=>{
+  if(ast.args.length===1 && typeof ast.args[0]==='string'){
+    const t=ast.args[0].trim().toLowerCase();
+    if(['off','none','false','0'].includes(t)){
+      __applyMetaAction([{arrId:arr.id,x:anchor.x,y:anchor.y,z:anchor.z}], 'onLand', null);
+      Actions.setCell(arr.id, anchor, 'OnLand:OFF', ast.raw, true);
+      return;
+    }
+  }
+  let rangeArg=null, actionIdx=0;
+  if(ast.args.length>=2){ rangeArg=ast.args[0]; actionIdx=1; }
+  const raw = ast.args[actionIdx];
+  let action = (typeof raw==='string')? raw : String(Formula.valOf(raw)||'');
+  if(action && action[0] !== '=') action = `=${action}`;
+  const targets = __collectMetaTargets(rangeArg, anchor, arr);
+  __applyMetaAction(targets, 'onLand', action||null);
+  Actions.setCell(arr.id, anchor, `OnLand:${targets.length}`, ast.raw, true);
+});
+
+const ACTION_TICK_MS = 1000/60;
+function normalizeActionFormula(raw){
+  let formula = String(raw==null?'':raw).trim();
+  if(!formula) return '';
+  if(formula.startsWith('B64:')){
+    try{ formula = atob(formula.slice(4)); }catch{}
+  } else {
+    const colon = formula.indexOf(':');
+    if(colon>0 && /^\d+$/.test(formula.slice(0,colon))){
+      const enc=formula.slice(colon+1);
+      try{ formula = atob(enc); }catch{}
+    }
+  }
+  formula = String(formula||'').trim();
+  if(!formula) return '';
+  if(!formula.startsWith('=')) formula = `=${formula}`;
+  return formula;
+}
+
+function executeActionFormula(anchor, action, label){
+  const formula = normalizeActionFormula(action);
+  if(!formula) return;
+  const tx = Write.start(`meta.${label||'action'}`, `${label||'action'} handler`);
+  try{
+    Formula.runOnceAt(anchor, formula, tx);
+    Write.commit(tx);
+  }catch(err){
+    console.warn(`${label||'Action'} execution failed`, err);
+    try{ Write.rollback(tx); }catch{}
+  }
+}
 // ONCLICK([targetRefOrRange], actionFormulaOrBlock) — bind click to execute nested action(s)
 tag('ONCLICK',['ACTION'],(anchor,arr,ast)=>{
   const parseRawArgs=(raw)=>{
@@ -4819,6 +5037,192 @@ tag('FORMULIZE',["ACTION"],(anchor,arr,ast)=>{
     Actions.setCell(arr.id, anchor, out, ast.raw, true);
   }catch(e){
     Actions.setCell(arr.id, anchor, `!ERR:${e.message}`, ast.raw, true);
+  }
+});
+
+function __cloneEmbeddedMap(existing){
+  if(existing instanceof Map) return new Map(existing);
+  if(!existing) return new Map();
+  try{ return new Map(existing); }
+  catch(_){ try{ return new Map(Object.entries(existing)); }catch(__){ return new Map(); } }
+}
+
+function __getEmbeddedRecord(key){
+  const existing = Store.getState().embeddedMeshes;
+  if(existing instanceof Map) return existing.get(key) || null;
+  if(!existing) return null;
+  try{ return new Map(existing).get(key) || null; }
+  catch(_){ try{ return new Map(Object.entries(existing)).get(key) || null; }catch(__){ return null; } }
+}
+
+function __setEmbeddedRecord(key, record){
+  Store.setState(s=>{
+    const map = __cloneEmbeddedMap(s.embeddedMeshes);
+    if(record){ map.set(key, record); }
+    else { map.delete(key); }
+    return { embeddedMeshes: map };
+  });
+}
+
+function __disposeEmbeddedRecord(record){
+  if(!record) return;
+  try{
+    const mesh = record.mesh;
+    if(mesh){
+      mesh.parent?.remove(mesh);
+      mesh.traverse?.(node=>{
+        if(node.isMesh){
+          node.geometry?.dispose?.();
+          node.material?.dispose?.();
+        }
+      });
+    }
+  }catch{}
+}
+
+tag('EMBED',['ACTION'],(anchor,arr,ast)=>{
+  const sourceArg = ast.args[0];
+  if(!sourceArg){ Actions.setCell(arr.id, anchor, '!ERR:EMBED:NO_SOURCE', ast.raw, true); return; }
+  const nickname = ast.args[1]!==undefined ? String(Formula.valOf(ast.args[1])||'') : '';
+  const state = Store.getState();
+  let targetArr=null;
+  if(sourceArg && sourceArg.kind==='ref'){
+    targetArr = state.arrays[sourceArg.arrId];
+  } else if(sourceArg && sourceArg.kind==='range'){
+    const first = sourceArg.cells && sourceArg.cells[0];
+    if(first) targetArr = state.arrays[first.arrId];
+  } else {
+    const raw = Formula.valOf(sourceArg);
+    if(typeof raw==='string'){
+      const parsed = parseAlt(raw) || parseA1g(raw, arr.id);
+      if(parsed) targetArr = state.arrays[parsed.arrId];
+      if(!targetArr){
+        const id = +raw; if(Number.isFinite(id)) targetArr = state.arrays[id];
+      }
+    } else {
+      const id = +raw; if(Number.isFinite(id)) targetArr = state.arrays[id];
+    }
+  }
+  if(!targetArr){ Actions.setCell(arr.id, anchor, '!ERR:EMBED:NOT_FOUND', ast.raw, true); return; }
+  try{
+    const scene = Scene.getScene?.();
+    if(!scene){ Actions.setCell(arr.id, anchor, '!ERR:EMBED:NO_SCENE', ast.raw, true); return; }
+    const snapshot = Scene.createArraySnapshot?.(targetArr);
+    if(!snapshot){ Actions.setCell(arr.id, anchor, '!ERR:EMBED:EMPTY', ast.raw, true); return; }
+    snapshot.scale.setScalar(0.28);
+    const anchorRef = {arrId:arr.id, x:anchor.x, y:anchor.y, z:anchor.z};
+    const key = aKey(anchorRef);
+    const prior = __getEmbeddedRecord(key);
+    if(prior) __disposeEmbeddedRecord(prior);
+
+    const parentFrame = arr._frame;
+    if(parentFrame){
+      const local = Scene.localPos?.(arr, anchor.x, anchor.y, anchor.z) || new THREE.Vector3();
+      snapshot.position.copy(local);
+      snapshot.position.y += 0.6;
+      parentFrame.add(snapshot);
+    } else {
+      const pos = Scene.cellWorldPos(arr, anchor.x, anchor.y, anchor.z);
+      snapshot.position.copy(pos);
+      snapshot.position.y += 0.6;
+      scene.add(snapshot);
+    }
+    snapshot.name = `Embed:${targetArr.id}`;
+    snapshot.userData = {...(snapshot.userData||{}), embedFor:key, sourceArrId:targetArr.id};
+
+    __setEmbeddedRecord(key, {
+      mesh: snapshot,
+      sourceArrId: targetArr.id,
+      hostArrId: arr.id,
+      anchor: {x:anchor.x, y:anchor.y, z:anchor.z},
+      name: nickname||'',
+      createdAt: Date.now()
+    });
+
+    const label = nickname || `Embed:${targetArr.id}`;
+    Actions.setCell(arr.id, anchor, label, ast.raw, true);
+  }catch(e){ Actions.setCell(arr.id, anchor, `!ERR:${e.message}`, ast.raw, true); }
+});
+
+tag('UNPACK',['ACTION'],(anchor,arr,ast)=>{
+  const refArg = ast.args[0];
+  let target = null;
+  if(refArg && refArg.kind==='ref'){ target = {arrId:refArg.arrId,x:refArg.x,y:refArg.y,z:refArg.z}; }
+  else if(typeof refArg==='string'){ const parsed = parseAlt(refArg)||parseA1g(refArg,arr.id); if(parsed) target=parsed; }
+  else if(refArg!==undefined){
+    const parsed = parseAlt(String(Formula.valOf(refArg)||'')) || null;
+    if(parsed) target=parsed;
+  }
+  const anchorRef = target ? target : {arrId:arr.id, x:anchor.x, y:anchor.y, z:anchor.z};
+  const key = aKey(anchorRef);
+  const rec = __getEmbeddedRecord(key);
+  if(!rec){ Actions.setCell(arr.id, anchor, '!ERR:UNPACK:NOT_FOUND', ast.raw, true); return; }
+  const sourceArr = Store.getState().arrays[rec.sourceArrId];
+  if(!sourceArr){
+    __disposeEmbeddedRecord(rec);
+    __setEmbeddedRecord(key, null);
+    Actions.setCell(arr.id, anchor, '!ERR:UNPACK:NO_SOURCE', ast.raw, true);
+    return;
+  }
+  try{
+    const baseName = rec.name || sourceArr.name || `Embed ${sourceArr.id}`;
+    const cloneName = `${baseName} Copy`;
+    const newArr = Actions.createArray({ name: cloneName, size:{...sourceArr.size} });
+    const tx = Write.start('embed.unpack','UNPACK build');
+    try{
+      Object.values(sourceArr.chunks||{}).forEach(ch=>{
+        (ch.cells||[]).forEach(cell=>{
+          Write.set(tx, newArr.id, {x:cell.x,y:cell.y,z:cell.z}, {
+            value: cell.value,
+            formula: cell.formula,
+            meta: cell.meta ? {...cell.meta} : undefined
+          });
+        });
+      });
+      Write.commit(tx);
+    }catch(err){
+      try{ Write.rollback(tx); }catch{}
+      throw err;
+    }
+
+    __disposeEmbeddedRecord(rec);
+    __setEmbeddedRecord(key, null);
+
+    try{
+      const hostArr = Store.getState().arrays[rec.hostArrId] || arr;
+      const pad = Math.max(1.5, Math.ceil(Math.max(newArr.size.x||1, newArr.size.z||1)/2));
+      const offset = hostArr ? Scene.dockOffsetFor?.(hostArr, 'east', pad) : null;
+      if(offset) Scene.setArrayOffset?.(newArr, offset);
+    }catch{}
+
+    Actions.setSelection(newArr.id, {x:0,y:0,z:0});
+    Actions.setCell(arr.id, anchor, `Unpack:${newArr.id}`, ast.raw, true);
+  }catch(e){
+    Actions.setCell(arr.id, anchor, `!ERR:UNPACK:${e.message}`, ast.raw, true);
+  }
+});
+
+tag('ENTER',['ACTION'],(anchor,arr,ast)=>{
+  const refArg = ast.args[0];
+  let target = null;
+  if(refArg && refArg.kind==='ref'){ target = {arrId:refArg.arrId,x:refArg.x,y:refArg.y,z:refArg.z}; }
+  else if(typeof refArg==='string'){ const parsed = parseAlt(refArg)||parseA1g(refArg,arr.id); if(parsed) target=parsed; }
+  else if(refArg!==undefined){
+    const parsed = parseAlt(String(Formula.valOf(refArg)||'')) || null;
+    if(parsed) target=parsed;
+  }
+  const anchorRef = target ? target : {arrId:arr.id, x:anchor.x, y:anchor.y, z:anchor.z};
+  const key = aKey(anchorRef);
+  const rec = __getEmbeddedRecord(key);
+  if(rec && Store.getState().arrays[rec.sourceArrId]){
+    const targetArr = Store.getState().arrays[rec.sourceArrId];
+    Actions.setSelection(rec.sourceArrId, {x:0,y:0,z:0});
+    try{ Scene.centerOnArray?.(targetArr); }catch{}
+    try{ Store.setState(s=>({ worldState:{ ...(s.worldState||{}), parentArr: arr.id, childArr: rec.sourceArrId } })); }catch{}
+    Actions.setCell(arr.id, anchor, `Enter:${targetArr.name||rec.sourceArrId}`, ast.raw, true);
+  } else {
+    if(rec){ __disposeEmbeddedRecord(rec); __setEmbeddedRecord(key, null); }
+    Actions.setCell(arr.id, anchor, '!ERR:ENTER:NOT_FOUND', ast.raw, true);
   }
 });
 // COMBINE(0|1): toggle global gobbling interactions
@@ -5978,6 +6382,39 @@ tag('DO',['ACTION'],(anchor,arr,ast,tx)=>{
   // silent: do not stamp the cell
 });
 
+tag('DELAY',['ACTION'],(anchor,arr,ast)=>{
+  const ticks = Math.max(0, (+Formula.valOf(ast.args[0]??0)|0));
+  const raw = ast.args[1];
+  let action = (typeof raw==='string')? raw : String(Formula.valOf(raw)||'');
+  if(!action){ Actions.setCell(arr.id, anchor, '!ERR:DELAY:NO_ACTION', ast.raw, true); return; }
+  const ms = ticks * ACTION_TICK_MS;
+  const target = {arrId:anchor.arrId||arr.id, x:anchor.x, y:anchor.y, z:anchor.z};
+  setTimeout(()=> executeActionFormula(target, action, 'delay'), ms);
+  Actions.setCell(arr.id, anchor, `Delay:${ticks}`, ast.raw, true);
+});
+
+tag('REPEAT',['ACTION'],(anchor,arr,ast)=>{
+  const raw = ast.args[0];
+  let action = (typeof raw==='string')? raw : String(Formula.valOf(raw)||'');
+  if(!action){ Actions.setCell(arr.id, anchor, '!ERR:REPEAT:NO_ACTION', ast.raw, true); return; }
+  let count = ast.args[1]!==undefined ? (+Formula.valOf(ast.args[1])|0) : 1;
+  if(count === 0){ console.warn('REPEAT infinite mode not supported outside continuous triggers; defaulting to 1'); count = 1; }
+  const intervalTicks = ast.args[2]!==undefined ? Math.max(1, (+Formula.valOf(ast.args[2])|0)) : 1;
+  const target = {arrId:anchor.arrId||arr.id, x:anchor.x, y:anchor.y, z:anchor.z};
+  const run = ()=> executeActionFormula(target, action, 'repeat');
+  run();
+  let remaining = count-1;
+  if(remaining>0){
+    const intervalMs = intervalTicks * ACTION_TICK_MS;
+    const id = setInterval(()=>{
+      run();
+      remaining--;
+      if(remaining<=0) clearInterval(id);
+    }, intervalMs);
+  }
+  Actions.setCell(arr.id, anchor, `Repeat:${count}`, ast.raw, true);
+});
+
 // EXEC_AT(x, y, z, arrId, formulaText) or EXEC_AT(ref, formulaText)
 // Executes the provided formula text at the target anchor without stamping current cell
 tag('EXEC_AT',["ACTION"],(anchor,arr,ast,tx)=>{
@@ -6657,6 +7094,13 @@ const Scene = (()=>{
   let depGroup=null, depVis=false; // dependency graph overlay
   let ziplineState = { active: false, line: null, direction: new THREE.Vector3(), progress: 0 };
   let cachedPlayerPos = new THREE.Vector3(0, 0, 0); // Cache to avoid Rapier aliasing issues - initialize with valid coords
+  let lastTouchKey = null;
+  let lastLandKey = null;
+
+  function resetContactCache(){
+    lastTouchKey = null;
+    lastLandKey = null;
+  }
 
   const FancyDefaults = {
     hdri: true,
@@ -8049,6 +8493,22 @@ const Scene = (()=>{
       (Y - 1 - y) - Y/2 + .5,
       (Z - 1 - z) - Z/2 + .5
     );
+  }
+  function withinBounds(arr, coord){
+    return coord.x>=0 && coord.y>=0 && coord.z>=0 && coord.x<arr.size.x && coord.y<arr.size.y && coord.z<arr.size.z;
+  }
+  function worldToCellCoord(arr, world){
+    const vec = world.clone ? world.clone() : new THREE.Vector3(world.x, world.y, world.z);
+    if(arr._frame){ arr._frame.worldToLocal(vec); }
+    else {
+      const off = arr.offset||{x:0,y:0,z:0};
+      vec.x -= off.x; vec.y -= off.y; vec.z -= off.z;
+    }
+    const X=arr.size.x,Y=arr.size.y,Z=arr.size.z;
+    const x = Math.round(vec.x + X/2 - 0.5);
+    const y = Math.round((Y/2 - 0.5) - vec.y);
+    const z = Math.round((Z/2 - 0.5) - vec.z);
+    return {x,y,z};
   }
   // GPU-first two-pass materials with local clipping planes
   function makeCellMaterials(){
@@ -10352,6 +10812,7 @@ const Scene = (()=>{
               if(wasAirborne && nowGrounded && landingSquashTime === 0){
                 landingSquashTime = 1; // Trigger landing squash
                 console.log('[PHYSICS] Landing detected!');
+                triggerLandHandler();
               }
             }
           }catch(e){
@@ -10369,7 +10830,9 @@ const Scene = (()=>{
               const translation = playerBody.translation();
               cachedPlayerPos.set(translation.x, translation.y, translation.z);
             }
-            
+
+            triggerTouchHandlers();
+
             // Follow camera using updated position
             if(mouseLookEnabled){
               // First-person / third-person platformer camera with mouse look
@@ -13348,6 +13811,42 @@ const Scene = (()=>{
     }
   }
 
+  function triggerTouchHandlers(){
+    try{
+      const sel = Store.getState().selection;
+      if(!sel?.arrayId) return;
+      const arr = Store.getState().arrays[sel.arrayId];
+      if(!arr) return;
+      const world = new THREE.Vector3(cachedPlayerPos.x, cachedPlayerPos.y, cachedPlayerPos.z);
+      const coord = worldToCellCoord(arr, world);
+      if(!withinBounds(arr, coord)){ lastTouchKey=null; return; }
+      const key = `${arr.id}:${coord.x},${coord.y},${coord.z}`;
+      if(key===lastTouchKey) return;
+      lastTouchKey = key;
+      const cell = Formula.getCell({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z});
+      const action = cell?.meta?.onTouch;
+      if(action){ executeActionFormula({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z}, action, 'touch'); }
+    }catch(err){ console.warn('touch handler failed', err); }
+  }
+
+  function triggerLandHandler(){
+    try{
+      const sel = Store.getState().selection;
+      if(!sel?.arrayId) return;
+      const arr = Store.getState().arrays[sel.arrayId];
+      if(!arr) return;
+      const world = new THREE.Vector3(cachedPlayerPos.x, cachedPlayerPos.y - 0.6, cachedPlayerPos.z);
+      const coord = worldToCellCoord(arr, world);
+      if(!withinBounds(arr, coord)){ lastLandKey=null; return; }
+      const key = `${arr.id}:${coord.x},${coord.y},${coord.z}`;
+      if(key===lastLandKey) return;
+      lastLandKey = key;
+      const cell = Formula.getCell({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z});
+      const action = cell?.meta?.onLand;
+      if(action){ executeActionFormula({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z}, action, 'land'); }
+    }catch(err){ console.warn('land handler failed', err); }
+  }
+
   function addConnection(anchor, ref1, ref2){
     removeConnection(anchor); // Clear any existing line from this anchor
 
@@ -13618,7 +14117,7 @@ const Scene = (()=>{
     }
   }
 
-  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode};
+  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, resetContactCache};
 })();
 
 /* ===========================
@@ -14548,6 +15047,8 @@ const UI = (()=>{
       {name:'TRANSPOSE',tags:'DATA',syntax:'=TRANSPOSE(input, planeFlag[, reverse])',params:'input: block · planeFlag: 0=X↔Y,1=X↔Z,2=Y↔Z · reverse: 0/1',desc:'Swaps axes of a block and writes result at the anchor.'},
       {name:'SHIFT',tags:'DATA',syntax:'=SHIFT(input, dx[, dy[, dz]])',params:'input: block · dx,dy,dz: integer offsets',desc:'Writes input shifted by (dx,dy,dz).'},
       {name:'OFFSET',tags:'NAVIGATION',syntax:'=OFFSET([baseRef], dx[, dy[, dz]])',params:'baseRef: optional reference cell (default: anchor) · dx,dy,dz: relative offsets',desc:'Excel-style OFFSET: retrieves value from relative position without writing.'},
+      {name:'ADJACENT',tags:'NAVIGATION DATA',syntax:'=ADJACENT([directions...])',params:'directions: optional tokens like N,S,E,W,F,B,X,-Y or arrays/ranges',desc:'Returns value(s) from neighboring cells; defaults to all six faces when omitted.'},
+      {name:'DETECT',tags:'NAVIGATION',syntax:'=DETECT(value[, maxRange])',params:'value: text/number to find · maxRange: optional search radius',desc:'Scans outward along axes for the first matching value and returns a direction string such as "X:2".'},
       {name:'BLIT',tags:'DATA',syntax:'=BLIT(src, dst[, mode])',params:'src: block · dst: top-left-front ref (B2α) or @[x,y,z] · mode: "copy"|"add"|"max"|"min"',desc:'Fast block write to a destination.'},
       {name:'STORE_ARRAY',tags:'DATA',syntax:'=STORE_ARRAY(source[, "Name"])',params:'source: range (A1α:C3α), dimensions (w,h,d), or inline values (1,2,3) · Name: optional template name',desc:'Captures data as a reusable template. Dimensions collect from anchor area, ranges from specified cells, inline values as list.'},
       {name:'IF',tags:'LOGIC',syntax:'=IF(condition, then[, else])',params:'condition: comparisons with refs/values · then/else: value or call',desc:'Branching evaluation with proper dependency capture.'},
@@ -14563,8 +15064,13 @@ const UI = (()=>{
       {name:'ALT_ADDRESS',tags:'PURE',syntax:'=ALT_ADDRESS([ref])',params:'optional ref',desc:'Returns numeric @[x,y,z,arrId].'},
       {name:'SET_SELECT',tags:'NAVIGATION',syntax:'=SET_SELECT(ref)',params:'target ref',desc:'Force-jump selection to target cell.'},
       {name:'IS_SELECTED',tags:'INTERACTION',syntax:'=IS_SELECTED([ref])',params:'ref optional; default SELF()',desc:'1 if the ref is the focused cell; else 0.'},
+      {name:'ISNUMBER',tags:'LOGIC',syntax:'=ISNUMBER(value)',params:'value: cell or expression to test',desc:'Returns 1 if the value can be interpreted as a finite number, otherwise 0.'},
       {name:'ON_SELECT',tags:'INTERACTION',syntax:'=ON_SELECT([rangeOrRef], actionFormula)',params:'range/ref optional (default SELF()) · actionFormula is a string formula executed at this cell when selection hits range',desc:'Registers per-cell hooks. Use DO() to chain actions; avoids writing into the focused cell.'},
+      {name:'ON_HOLD',tags:'META INTERACTION',syntax:'=ON_HOLD([target], action)',params:'target: optional ref/range (default SELF()) · action: formula string executed while the pointer is held',desc:'Binds a 2D pointer hold handler that fires continuously for the pressed cell.'},
+      {name:'ON_TOUCH',tags:'META INTERACTION',syntax:'=ON_TOUCH([target], action)',params:'target: optional ref/range (default SELF()) · action: formula string triggered on player contact',desc:'Registers a physics touch trigger that runs when the avatar collides with the cell.'},
+      {name:'ON_LAND',tags:'META INTERACTION',syntax:'=ON_LAND([target], action)',params:'target: optional ref/range (default SELF()) · action: formula string triggered on landing',desc:'Fires the action the first frame the avatar lands on top of the cell.'},
       {name:'FORMULA_TEXT',tags:'PURE',syntax:'=FORMULA_TEXT([ref])',params:'optional ref; default anchor',desc:'Returns the stored formula text from a cell instead of its value.'},
+      {name:'SEARCH',tags:'DATA',syntax:'=SEARCH(findText, withinText[, start])',params:'findText: substring to locate · withinText: text to search · start: optional 1-based index',desc:'Excel-style case-insensitive search that returns the 1-based position of the substring or errors if not found.'},
       {name:'PRIORITY',tags:'META',syntax:'=PRIORITY(rangeOrRef, level[, mode[, sortJson]]])',params:'level: int · mode: "value"|"coord" · sortJson e.g. {"x":"asc","y":"desc"}',desc:'Registers a priority queue and sort hints for later conflict resolution.'},
       {name:'SET_SELECT',tags:'NAVIGATION',syntax:'=SET_SELECT(ref)',params:'target ref',desc:'Force-jump selection to target cell.'},
       {name:'COPY',tags:'ACTION IO',syntax:'=COPY(text)',params:'string text',desc:'Writes text to clipboard and shows a success toast.'},
@@ -14595,7 +15101,8 @@ const UI = (()=>{
       {name:'PROBE',tags:'PURE DEBUG',syntax:'=PROBE([ref])',params:'optional ref',desc:'Writes a short why-explanation (source + 1-hop deps).'},
       {name:'TICK',tags:'PURE',syntax:'=TICK()',params:'—',desc:'Returns global tick counter.'},
       {name:'REGISTER',tags:'PURE',syntax:'=REGISTER(signalRef)',params:'ref',desc:'One-tick delay element (previous tick value).'},
-      {name:'DELAY',tags:'PURE',syntax:'=DELAY(signalRef, n)',params:'ref, n≥0',desc:'N-tick delay line.'},
+      {name:'DELAY',tags:'ACTION',syntax:'=DELAY(ticks, action)',params:'ticks: 60-fps ticks to wait · action: formula string or "=..."',desc:'Schedules an action to run after the given number of ticks without stamping the caller.'},
+      {name:'REPEAT',tags:'ACTION',syntax:'=REPEAT(action[, count[, intervalTicks]])',params:'action: formula string · count: executions (0=loop in continuous triggers) · intervalTicks: spacing in ticks',desc:'Runs the action immediately and repeats it count-1 additional times at the requested cadence.'},
       {name:'CA',tags:'PURE',syntax:'=CA("life",steps,"Y",layer)',params:'type: "life" · steps: int · axis: X/Y/Z · index: layer number',desc:'Conway Game of Life on a 2D slice.'},
       {name:'OCCLUDE',tags:'SCENE',syntax:'=OCCLUDE(mode[, style[, intensity]])',params:'mode: "auto"|"array"|"cell"|"off" · style: "translucent"|"solid"|"wireframe" · intensity: 0.0-1.0',desc:'Controls occlusion behavior. Auto=relative to camera, array=whole array face, cell=per-cell blocking.'},
       {name:'CAMERA_LOCK',tags:'SCENE',syntax:'=CAMERA_LOCK(axis[, angle])',params:'axis: "X"|"Y"|"Z"|"" (free) · angle: degrees for fixed view',desc:'Constrains camera movement to specific axis or angle for puzzle control.'},
@@ -14985,6 +15492,195 @@ const UI = (()=>{
     if(insertCol) insertCol.style.display = insertAllowed ? 'inline-block' : 'none';
     if(insertLayer) insertLayer.style.display = insertAllowed ? 'inline-block' : 'none';
   }
+  function bindHoldAction(td, arr, anchorRef, initialAction){
+    if(td._holdCleanup){ try{ td._holdCleanup(); }catch{} }
+    td._holdCleanup = null;
+    td.classList.remove('holdable');
+
+    const hasAction = !!normalizeActionFormula(initialAction||'');
+    if(!hasAction) return;
+
+    td.classList.add('holdable');
+    let active=false;
+    let timer=null;
+    let pointerId=null;
+
+    const runHold = ()=>{
+      const fresh = UI.getCell?.(anchorRef.arrId, {x:anchorRef.x, y:anchorRef.y, z:anchorRef.z});
+      const raw = fresh?.meta?.onHold ?? initialAction;
+      const normalized = normalizeActionFormula(raw||'');
+      if(!normalized) return false;
+      try{
+        executeActionFormula(anchorRef, raw, 'hold');
+      }catch(err){ console.warn('onHold failed', err); return false; }
+      return true;
+    };
+
+    const stopHold = ()=>{
+      if(timer){ clearInterval(timer); timer=null; }
+      if(active){ td.classList.remove('pending'); active=false; }
+      pointerId=null;
+    };
+
+    const handleCancel = ()=>{ stopHold(); };
+    const handlePointerUp = (e)=>{
+      if(pointerId!=null && e && e.pointerId!=null && e.pointerId!==pointerId) return;
+      stopHold();
+    };
+    const handlePointerDown = (e)=>{
+      if(e.button!=null && e.button!==0 && e.pointerType!=='touch') return;
+      if(active) return;
+      if(e.pointerType==='touch'){ e.preventDefault(); }
+      if(!runHold()) return;
+      active=true;
+      pointerId = e.pointerId;
+      td.classList.add('pending');
+      try{ td.setPointerCapture?.(e.pointerId); }catch{}
+      timer = setInterval(()=>{ if(!runHold()) stopHold(); }, ACTION_TICK_MS);
+    };
+
+    td.addEventListener('pointerdown', handlePointerDown);
+    td.addEventListener('pointerup', handlePointerUp);
+    td.addEventListener('pointerleave', handleCancel);
+    td.addEventListener('pointercancel', handleCancel);
+    td.addEventListener('lostpointercapture', handleCancel);
+
+    td._holdCleanup = ()=>{
+      stopHold();
+      td.removeEventListener('pointerdown', handlePointerDown);
+      td.removeEventListener('pointerup', handlePointerUp);
+      td.removeEventListener('pointerleave', handleCancel);
+      td.removeEventListener('pointercancel', handleCancel);
+      td.removeEventListener('lostpointercapture', handleCancel);
+    };
+  }
+
+  function bindClickAction(td, arr, anchorRef){
+    const {x,y,z} = anchorRef;
+    const key = `${anchorRef.arrId}:${x},${y},${z}`;
+
+    const runClick = ()=>{
+      let action='';
+      try{
+        const fresh = UI.getCell?.(anchorRef.arrId, {x,y,z});
+        if(fresh?.meta?.onClick) action = fresh.meta.onClick;
+      }catch{}
+      if(!action){
+        try{ if(!window.__INTRO_FIRED) action = '=STARTINTROEXPERIENCE()'; }catch{}
+      }
+      const normalized = normalizeActionFormula(action||'');
+      if(!normalized) return;
+      try{
+        td.classList.add('pending');
+        executeActionFormula(anchorRef, action, 'click');
+        try{
+          UI.debugIntroState?.('onclick-commit');
+          const didHide = window.UI?.hideIntroOverlay?.();
+          if(didHide){
+            try{ window.__INTRO_FIRED = true; }catch{}
+            window.UI?.triggerIntroCollapse?.();
+          } else {
+            UI.kickIntroSequence?.('onclick-fallback');
+          }
+        }catch{}
+      }catch(err){
+        console.warn('onClick failed', err);
+      }finally{
+        td.classList.remove('pending');
+      }
+    };
+
+    td.onclick = (e)=>{
+      Actions.setSelection(arr.id,{x,y,z}, null, '2d');
+      window.__awaiting2DClick = false;
+      if(!window.__sheetClickTimers) window.__sheetClickTimers = new Map();
+      if(window.__sheetClickTimers.has(key)){
+        try{ clearTimeout(window.__sheetClickTimers.get(key)); }catch{}
+        window.__sheetClickTimers.delete(key);
+        e.preventDefault();
+        e.stopPropagation();
+        setTimeout(()=>{ try{ openEditor(); }catch{} }, 0);
+        return;
+      }
+      const timer = setTimeout(()=>{
+        try{ window.__sheetClickTimers.delete(key); }catch{}
+        runClick();
+      }, 220);
+      window.__sheetClickTimers.set(key, timer);
+    };
+
+    td.ondblclick = (e)=>{
+      e.preventDefault();
+      e.stopPropagation();
+      window.__awaiting2DClick = false;
+      Actions.setSelection(arr.id,{x,y,z}, null, '2d');
+      try{ window.__last2DCell = {arrId:arr.id, x, y, z}; }catch{}
+      try{
+        if(window.__sheetClickTimers?.has?.(key)){
+          clearTimeout(window.__sheetClickTimers.get(key));
+          window.__sheetClickTimers.delete(key);
+        }
+      }catch{}
+      setTimeout(()=>openEditor(),0);
+    };
+  }
+
+  function updateSheetCellDom(td, arr, x, y, z, cell){
+    const data = cell ?? getCell(arr.id,{x,y,z}) ?? {};
+    const anchorRef = {arrId:arr.id, x, y, z};
+    const display = (data?.meta && data.meta.displayText!==undefined) ? data.meta.displayText : (data?.value ?? '');
+
+    td.classList.remove('pending');
+    td.textContent = display;
+    td.title = data?.formula || '';
+
+    if(typeof twemoji !== 'undefined' && td.textContent){
+      try{ twemoji.parse(td, {folder: 'svg', ext: '.svg', className: 'emoji'}); }catch{}
+    }
+
+    const color = data?.meta?.color;
+    if(color){
+      td.style.backgroundColor = color;
+      const hex = String(color||'').replace('#','');
+      const r = parseInt(hex.substring(0,2),16)|0;
+      const g = parseInt(hex.substring(2,4),16)|0;
+      const b = parseInt(hex.substring(4,6),16)|0;
+      const brightness = (r*299 + g*587 + b*114) / 1000;
+      td.style.color = brightness > 128 ? '#1f2937' : '#ffffff';
+    } else {
+      td.style.backgroundColor = '';
+      td.style.color = '';
+    }
+
+    td.querySelector('.note-tooltip')?.remove();
+    const hasNote = data?.meta?.noteText;
+    if(hasNote){
+      const tooltip=document.createElement('div');
+      tooltip.className='note-tooltip note-visible';
+      tooltip.textContent=data.meta.noteText;
+      td.style.position='relative';
+      td.appendChild(tooltip);
+      td.classList.add('intro-cell');
+    } else {
+      td.classList.remove('intro-cell');
+      if(!td.querySelector('.note-tooltip')) td.style.position='';
+    }
+
+    td.classList.toggle('clickable', !!data?.meta?.onClick);
+
+    bindHoldAction(td, arr, anchorRef, data?.meta?.onHold);
+    bindClickAction(td, arr, anchorRef);
+
+    if(data?.meta?.generated){
+      td.setAttribute('data-generated', 'true');
+      if(data.formula){ td.setAttribute('data-anchor','true'); }
+      else { td.removeAttribute('data-anchor'); }
+    } else {
+      td.removeAttribute('data-generated');
+      td.removeAttribute('data-anchor');
+    }
+  }
+
   function renderSheet(){
     // Guard: avoid destroying cells between mousedown and click; allow highlight only
     if(window.__awaiting2DClick){ try{ highlightSheetCell(); }catch{} return; }
@@ -15137,36 +15833,9 @@ const UI = (()=>{
         const td=document.createElement('td'); td.className='cell'; td.dataset.x=c; td.dataset.y=r; td.dataset.z=getZLayer();
         // Apply fixed width with per-column override
         const cw=getColWidth(c); td.style.minWidth=cw+'px'; td.style.width=cw+'px'; td.style.maxWidth=cw+'px';
-        const cell=getCell(arr.id,{x:c,y:r,z:getZLayer()}); 
-        td.textContent=cell?.value??''; 
-        td.title=cell?.formula||'';
-        // Parse emojis with Twemoji
-        if(typeof twemoji !== 'undefined' && td.textContent) {
-          try{ twemoji.parse(td, {folder: 'svg', ext: '.svg', className: 'emoji'}); }catch{}
-        }
-        // START FIX: Add note and onClick rendering to main sheet build
-        const hasNote = cell?.meta?.noteText;
-        if (hasNote) {
-          const tooltip = document.createElement('div');
-          tooltip.className = 'note-tooltip note-visible';
-          tooltip.textContent = cell.meta.noteText;
-          td.style.position = 'relative';
-          td.appendChild(tooltip);
-          td.classList.add('intro-cell');
-        }
-        if (cell?.meta?.onClick) {
-          td.classList.add('clickable');
-        }
-        // END FIX
-        
-        // Add styling data attributes for generated cells
-        if(cell?.meta?.generated) {
-          td.setAttribute('data-generated', 'true');
-          if(cell.formula) {
-            td.setAttribute('data-anchor', 'true');
-          }
-        }
-        td.onmousedown=(e)=>{ 
+        const cell=getCell(arr.id,{x:c,y:r,z:getZLayer()});
+        updateSheetCellDom(td, arr, c, r, getZLayer(), cell);
+        td.onmousedown=(e)=>{
           const wrap = document.querySelector('#sheet .grid-wrap');
           const wasTop = wrap ? wrap.scrollTop : 0;
           const wasLeft = wrap ? wrap.scrollLeft : 0;
@@ -15179,51 +15848,17 @@ const UI = (()=>{
           try{ if(wrap){ wrap.scrollTop = wasTop; wrap.scrollLeft = wasLeft; } }catch{}
           // Do not prevent default, so click/dblclick events still fire
         };
-        td.onmouseenter=(e)=>{ 
-          if(dragStart && e.buttons&1 && dragStart.arrayId===arr.id){ 
+        td.onmouseenter=(e)=>{
+          if(dragStart && e.buttons&1 && dragStart.arrayId===arr.id){
             const wrap = document.querySelector('#sheet .grid-wrap');
             const wasTop = wrap ? wrap.scrollTop : 0;
             const wasLeft = wrap ? wrap.scrollLeft : 0;
             Actions.setSelectionRange(arr.id, {x:dragStart.x,y:dragStart.y,z:dragStart.z}, {x:c,y:r,z:getZLayer()}); 
             // Maintain scroll after range update
             try{ if(wrap){ wrap.scrollTop = wasTop; wrap.scrollLeft = wasLeft; } }catch{}
-          } 
+          }
         };
         td.onmouseup=()=>{ dragStart=null; window.__awaiting2DClick = false; };
-        // Click to run onClick (single click only) and dblclick to edit always
-        td.onclick=(e)=>{
-          // Ensure selection remains
-          Actions.setSelection(arr.id,{x:c,y:r,z:getZLayer()}, null, '2d'); 
-          window.__awaiting2DClick = false;
-          // Click/dblclick disambiguation: schedule single-click, cancel on second click
-          const key = `${arr.id}:${c},${r},${getZLayer()}`;
-          if(window.__sheetClickTimers?.has?.(key)){
-            try{ clearTimeout(window.__sheetClickTimers.get(key)); window.__sheetClickTimers.delete(key);}catch{}
-            e.preventDefault(); e.stopPropagation();
-            setTimeout(()=>{ try{ openEditor(); }catch{} }, 0);
-            return;
-          }
-          if(!window.__sheetClickTimers){ window.__sheetClickTimers = new Map(); }
-          const timerId = setTimeout(()=>{
-            try{ window.__sheetClickTimers.delete(key); }catch{}
-            const clickedCell = getCell(arr.id,{x:c,y:r,z:getZLayer()});
-            let actionRaw = clickedCell?.meta?.onClick ? String(clickedCell.meta.onClick).trim() : '';
-            if(!actionRaw){ try{ if(!window.__INTRO_FIRED) actionRaw = '=STARTINTROEXPERIENCE()'; }catch{} }
-            if(!actionRaw) return;
-            try{
-              let formula = actionRaw;
-              try{ if(!window.__INTRO_FIRED && !formula) formula = '=STARTINTROEXPERIENCE()'; }catch{}
-              if(formula.startsWith('B64:')){ try{ formula = atob(formula.slice(4)); }catch{} }
-              else { const colon=formula.indexOf(':'); if(colon>0 && /^\d+$/.test(formula.slice(0,colon))){ const enc=formula.slice(colon+1); try{ formula = atob(enc); }catch{} } }
-              if(!formula.startsWith('=')) formula = '=' + formula;
-              const tx = Write.start('onclick.click','Click action');
-              Formula.runOnceAt({arrId:arr.id,x:c,y:r,z:getZLayer()}, formula, tx);
-              Write.commit(tx);
-            }catch(err){ console.warn('onclick failed', err); }
-          }, 220);
-          window.__sheetClickTimers.set(key, timerId);
-        };
-        td.ondblclick=(e)=>{ e.preventDefault(); e.stopPropagation(); window.__awaiting2DClick = false; Actions.setSelection(arr.id,{x:c,y:r,z:getZLayer()}, null, '2d'); try{ window.__last2DCell = {arrId:arr.id, x:c, y:r, z:getZLayer()}; }catch{} setTimeout(()=>openEditor(),0); };
         tr.appendChild(td);
       }
       rows.appendChild(tr);
@@ -15263,109 +15898,11 @@ const UI = (()=>{
     // sync 3D focus Z if selection exists
     const s=Store.getState().selection; if(s.arrayId&&s.focus&&s.focus.z!==getZLayer()) Actions.setSelection(s.arrayId,{...s.focus,z:getZLayer()});
   }
-  function renderSheetCell(arr,x,y,z){ 
-    const td=document.querySelector(`td.cell[data-x="${x}"][data-y="${y}"][data-z="${z}"]`); 
-    if(!td) return; 
-    const cell=getCell(arr.id,{x,y,z}); 
-    const disp=(cell?.meta?.displayText!==undefined)?cell.meta.displayText:(cell?.value??''); 
-    td.textContent=disp; 
-    td.title=cell?.formula||'';
-    // Parse emojis with Twemoji
-    if(typeof twemoji !== 'undefined' && td.textContent) {
-      try{ twemoji.parse(td, {folder: 'svg', ext: '.svg', className: 'emoji'}); }catch{}
-    }
-
-    // --- START NEW COLOR LOGIC ---
-    try{
-      const color = cell?.meta?.color;
-      if(color){
-        td.style.backgroundColor = color;
-        const hex = String(color||'').replace('#','');
-        const r = parseInt(hex.substring(0,2),16)|0;
-        const g = parseInt(hex.substring(2,4),16)|0;
-        const b = parseInt(hex.substring(4,6),16)|0;
-        const brightness = (r*299 + g*587 + b*114) / 1000;
-        td.style.color = brightness > 128 ? '#1f2937' : '#ffffff';
-      } else {
-        td.style.backgroundColor = '';
-        td.style.color = '';
-      }
-    }catch{}
-    // --- END NEW COLOR LOGIC ---
-    
-    // Note tooltip (2D-only, simple blue hover card like reference)
-    const hasNote = cell?.meta?.noteText;
-    // remove existing tooltip
-    td.querySelector('.note-tooltip')?.remove();
-    if(hasNote){
-      const tooltip=document.createElement('div');
-      tooltip.className='note-tooltip note-visible';
-      tooltip.textContent=cell.meta.noteText;
-      td.style.position='relative';
-      td.appendChild(tooltip);
-      td.classList.add('intro-cell');
-      console.log('renderSheetCell: tooltip added', {x,y,z,text:cell.meta.noteText});
-      // Intro hack removed; rely on metadata-bound onClick
-    } else {
-      td.classList.remove('intro-cell');
-    }
-    
-    // ONCLICK runtime: attach lightweight handler
-    if(cell?.meta?.onClick){
-      console.log('renderSheetCell: onClick bound', {x,y,z, action: cell.meta.onClick});
-      td.classList.add('clickable');
-      td.onclick = async (e)=>{
-        e.preventDefault(); e.stopPropagation();
-        if(cell.meta.onClickBusy) return;
-        cell.meta.onClickBusy = true; td.classList.add('pending');
-        try{
-          const tx = Write.start('onclick','Click action');
-          const fresh = UI.getCell(arr.id,{x,y,z});
-          const actionRaw = String(fresh?.meta?.onClick||'').trim();
-          let formula = actionRaw || '';
-          // Fallback: if intro hasn't fired yet, force onboarding
-          try{ if(!window.__INTRO_FIRED && !formula) formula = '=STARTINTROEXPERIENCE()'; }catch{}
-          // Accept B64:ENC or ARRID:ENC (defensive for earlier stamps)
-          if(formula.startsWith('B64:')){
-            try{ formula = atob(formula.slice(4)); }catch{}
-          } else {
-            const colon = formula.indexOf(':');
-            if(colon>0 && /^\d+$/.test(formula.slice(0,colon))){
-              const enc = formula.slice(colon+1);
-              try{ formula = atob(enc); }catch{}
-            }
-          }
-          if(!formula.startsWith('=')) formula = `=${formula}`;
-          console.log('onClick: executing', {formula});
-          // Execute without stamping into the cell
-          Formula.runOnceAt({arrId:arr.id,x,y,z}, formula, tx);
-          Write.commit(tx);
-          // Intro: if overlay is visible, collapse and hide now
-          UI.debugIntroState?.('onclick-commit');
-          const didHide = window.UI?.hideIntroOverlay?.();
-          if(didHide){ try{ window.__INTRO_FIRED = true; }catch{} console.log('Intro: collapsed via hideIntroOverlay'); window.UI?.triggerIntroCollapse?.(); UI.debugIntroState?.('onclick-collapsed'); }
-          else { UI.kickIntroSequence?.('onclick-fallback'); }
-        }catch(err){ console.warn('onClick failed', err); }
-        finally{ cell.meta.onClickBusy = false; td.classList.remove('pending'); }
-      };
-    } else {
-      td.onclick = td.onclick || null;
-    }
-    // Always allow double-click to open editor (even if onClick exists)
-    td.ondblclick = (e)=>{ e.preventDefault(); e.stopPropagation(); window.__awaiting2DClick = false; Actions.setSelection(arr.id,{x,y,z}, null, '2d'); try{ window.__last2DCell = {arrId:arr.id, x, y, z}; }catch{} setTimeout(()=>openEditor(),0); };
-    // Add styling data attributes for generated cells
-    if(cell?.meta?.generated) {
-      td.setAttribute('data-generated', 'true');
-      // Check if this is an anchor (has formula)
-      if(cell.formula) {
-        td.setAttribute('data-anchor', 'true');
-      } else {
-        td.removeAttribute('data-anchor');
-      }
-    } else {
-      td.removeAttribute('data-generated');
-      td.removeAttribute('data-anchor');
-    }
+  function renderSheetCell(arr,x,y,z){
+    const td=document.querySelector(`td.cell[data-x="${x}"][data-y="${y}"][data-z="${z}"]`);
+    if(!td) return;
+    const cell=getCell(arr.id,{x,y,z});
+    updateSheetCellDom(td, arr, x, y, z, cell);
   }
   function highlightSheetCell(){ 
     document.querySelectorAll('td.cell.sel').forEach(td=>td.classList.remove('sel'));
