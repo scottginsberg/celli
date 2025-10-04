@@ -2265,8 +2265,8 @@ const Actions = {
   },
 
   setSelectionRange:(arrayId, anchor, focus)=>{
-    const xs=[anchor.x,focus.x].sort((a,b)=>a-b), ys=[anchor.y,focus.y].sort((a,b)=>a-b);
-    const range={x1:xs[0],y1:ys[0],x2:xs[1],y2:ys[1],z:focus.z};
+    const xs=[anchor.x,focus.x].sort((a,b)=>a-b), ys=[anchor.y,focus.y].sort((a,b)=>a-b), zs=[anchor.z,focus.z].sort((a,b)=>a-b);
+    const range={x1:xs[0],y1:ys[0],x2:xs[1],y2:ys[1],z:focus.z,z1:zs[0],z2:zs[1]};
     Store.setState(s=>({ selection:{arrayId, focus, anchor, range}, ui:{...s.ui, zLayer:focus.z} }));
     Scene.updateFocus(Store.getState().selection);
     UI.updateFocusChip();
@@ -10388,13 +10388,38 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     // Camera-facing highlight box (no .abs() calls on Vector3)
     const camDir=new THREE.Vector3(); camera.getWorldDirection(camDir);
     const ax=Math.abs(camDir.x), ay=Math.abs(camDir.y), az=Math.abs(camDir.z);
-    let sx=1.06, sy=1.06, sz=1.06;
-    if(ax>ay && ax>az) sx=0.04; else if(ay>az) sy=0.04; else sz=0.04;
-    const geo=new THREE.BoxGeometry(sx,sy,sz);
+    let dims={x:1.06,y:1.06,z:1.06};
+    let center={...sel.focus};
+    if(sel.range){
+      const {x1,x2,y1,y2}=sel.range;
+      const zStart = sel.range.z1 ?? sel.range.z ?? sel.focus.z;
+      const zEnd = sel.range.z2 ?? sel.range.z ?? sel.focus.z;
+      const countX = (x2 - x1 + 1);
+      const countY = (y2 - y1 + 1);
+      const countZ = (zEnd - zStart + 1);
+      dims={
+        x: countX + 0.06,
+        y: countY + 0.06,
+        z: countZ + 0.06
+      };
+      center={
+        x: x1 + (countX-1)/2,
+        y: y1 + (countY-1)/2,
+        z: zStart + (countZ-1)/2
+      };
+      if(countX===1 && ax>=ay && ax>=az) dims.x=0.06;
+      if(countY===1 && ay>=ax && ay>=az) dims.y=0.06;
+      if(countZ===1 && az>=ax && az>=ay) dims.z=0.06;
+    } else {
+      if(ax>ay && ax>az) dims.x=0.04;
+      else if(ay>az) dims.y=0.04;
+      else dims.z=0.04;
+    }
+    const geo=new THREE.BoxGeometry(dims.x,dims.y,dims.z);
     if(focusMarker.geometry) focusMarker.geometry.dispose?.();
     focusMarker.geometry=geo;
-    
-    focusMarker.visible=true; const p=worldPos(arr,sel.focus.x,sel.focus.y,sel.focus.z);
+
+    focusMarker.visible=true; const p=worldPos(arr,center.x,center.y,center.z);
     focusMarker.position.copy(p);
     updateAvatars(sel);
     // Promote detailed window around selection immediately for performance/fidelity
@@ -11882,6 +11907,35 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
   let dragState=null;
+  let orbitSuspendDepth=0;
+  let orbitPrevState=null;
+  function suspendOrbitControls(){
+    if(!controls) return;
+    if(orbitSuspendDepth===0){
+      orbitPrevState={
+        enabled: controls.enabled,
+        rotate: controls.enableRotate,
+        pan: controls.enablePan,
+        zoom: controls.enableZoom
+      };
+    }
+    orbitSuspendDepth++;
+    controls.enabled=false;
+    controls.enableRotate=false;
+    controls.enablePan=false;
+    if(typeof controls.enableZoom==='boolean') controls.enableZoom=false;
+  }
+  function resumeOrbitControls(){
+    if(!controls || orbitSuspendDepth===0) return;
+    orbitSuspendDepth--;
+    if(orbitSuspendDepth===0 && orbitPrevState){
+      controls.enabled=orbitPrevState.enabled;
+      controls.enableRotate=orbitPrevState.rotate;
+      controls.enablePan=orbitPrevState.pan;
+      if(typeof orbitPrevState.zoom==='boolean') controls.enableZoom=orbitPrevState.zoom;
+      orbitPrevState=null;
+    }
+  }
   function onPick(e){
     if(deleteInteractionLock) return;
     const rect=renderer.domElement.getBoundingClientRect();
@@ -11920,7 +11974,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, hit.point);
       const startPoint = new THREE.Vector3(); ray.ray.intersectPlane(plane,startPoint);
       // lock orbit controls during drag
-      controls.enableRotate=false; controls.enablePan=false; 
+      suspendOrbitControls();
       const onMove=(ev)=>{
         const r=renderer.domElement.getBoundingClientRect();
         const m=new THREE.Vector2(((ev.clientX-r.left)/r.width)*2-1, -((ev.clientY-r.top)/r.height)*2+1);
@@ -11947,13 +12001,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         // Interactive drag: apply immediately and skip wobble to keep 60fps
         setArrayOffset(arr, {x:nx, y:ny, z:nz}, {interactive:true});
       };
-      const onUp=()=>{ controls.enableRotate=true; controls.enablePan=true; window.removeEventListener('pointermove',onMove); window.removeEventListener('pointerup',onUp); try{ const cur=arr.offset||{x:0,y:0,z:0}; const dir={ dx: Math.sign((cur.x||0)-(startOff.x||0)), dy: Math.sign((cur.y||0)-(startOff.y||0)), dz: Math.sign((cur.z||0)-(startOff.z||0)) }; settleAfterDrag(arr, dir); }catch{} };
+      const onUp=()=>{ resumeOrbitControls(); window.removeEventListener('pointermove',onMove); window.removeEventListener('pointerup',onUp); try{ const cur=arr.offset||{x:0,y:0,z:0}; const dir={ dx: Math.sign((cur.x||0)-(startOff.x||0)), dy: Math.sign((cur.y||0)-(startOff.y||0)), dz: Math.sign((cur.z||0)-(startOff.z||0)) }; settleAfterDrag(arr, dir); }catch{} };
       window.addEventListener('pointermove',onMove); window.addEventListener('pointerup',onUp);
       return;
     }
     // nav pad interactions removed (HUD only)
     let arrayId = hit.object.userData.arrayId;
     let arr = Store.getState().arrays[arrayId];
+    if(!arr) return;
     let cell = null; let z = null;
     if(hit.object.userData && hit.object.userData.chunk){
       const chunk = hit.object.userData.chunk;
@@ -12001,11 +12056,19 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }catch{}
 
     // Start drag-select in 3D with playful click feedback (scale pulse)
-    dragState={arrayId:arr.id, start:{x:cell.x,y:cell.y,z:cell.z}};
+    let startLayer=cell.z;
+    try{
+      const viewLayer=Store.getState().ui?.zLayer;
+      if(arr && typeof viewLayer==='number' && Number.isFinite(viewLayer)){
+        const maxZ=Math.max(0,(arr.size?.z||1)-1);
+        startLayer=Math.min(maxZ, Math.max(0, Math.round(viewLayer)));
+      }
+    }catch{}
+    dragState={arrayId:arr.id, start:{x:cell.x,y:cell.y,z:startLayer}};
     Actions.setSelection(arr.id, {x:cell.x,y:cell.y,z:cell.z}, null, '3d');
     try{ pulseCell(arr, cell, z); }catch{}
     // Freeze orbit while dragging
-    controls.enableRotate=false; controls.enablePan=false;
+    suspendOrbitControls();
     
     const onMove=(ev)=>{
       if(!dragState) return;
@@ -12034,7 +12097,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }
       }
     };
-    const onUp=()=>{ dragState=null; controls.enableRotate=true; controls.enablePan=true; window.removeEventListener('pointermove',onMove); window.removeEventListener('pointerup',onUp); };
+    const onUp=()=>{ dragState=null; resumeOrbitControls(); window.removeEventListener('pointermove',onMove); window.removeEventListener('pointerup',onUp); };
     window.addEventListener('pointermove',onMove); window.addEventListener('pointerup',onUp);
   }
   function setArrayOffset(arr, next, opts){
@@ -15293,9 +15356,13 @@ const UI = (()=>{
         const tx = Write.start('ui.colorPicker', 'Apply color to selection');
         const cells = [];
         if (s.range) {
-          for(let y=s.range.y1; y<=s.range.y2; y++){
-            for(let x=s.range.x1; x<=s.range.x2; x++){
-              cells.push({x, y, z:s.range.z});
+          const zStart = s.range.z1 ?? s.range.z;
+          const zEnd = s.range.z2 ?? s.range.z;
+          for(let z=zStart; z<=zEnd; z++){
+            for(let y=s.range.y1; y<=s.range.y2; y++){
+              for(let x=s.range.x1; x<=s.range.x2; x++){
+                cells.push({x, y, z});
+              }
             }
           }
         } else {
@@ -16183,19 +16250,30 @@ const UI = (()=>{
     // Update UI controls based on focused array
     updateUIControls(arr);
     
-    const isMulti = s.range && (s.range.x1!==s.range.x2 || s.range.y1!==s.range.y2);
+    const range = s.range;
+    const zStart = range ? (range.z1 ?? range.z ?? s.focus.z) : s.focus.z;
+    const zEnd = range ? (range.z2 ?? range.z ?? s.focus.z) : s.focus.z;
+    const isMulti = range && (range.x1!==range.x2 || range.y1!==range.y2 || zStart!==zEnd);
     if(isMulti){
-      const count=(s.range.x2-s.range.x1+1)*(s.range.y2-s.range.y1+1);
+      const {x1,x2,y1,y2} = range;
+      const layerCount = (zEnd - zStart + 1);
+      const count=(x2-x1+1)*(y2-y1+1)*layerCount;
       let sum=0,vals=0,min=Infinity,max=-Infinity;
-      for(let y=s.range.y1;y<=s.range.y2;y++){
-        for(let x=s.range.x1;x<=s.range.x2;x++){
-          const c=getCell(s.arrayId,{x,y,z:s.range.z}); const v=+c.value;
-          if(!isNaN(v)){ sum+=v; vals++; min=Math.min(min,v); max=Math.max(max,v); }
+      for(let z=zStart; z<=zEnd; z++){
+        for(let y=y1;y<=y2;y++){
+          for(let x=x1;x<=x2;x++){
+            const c=getCell(s.arrayId,{x,y,z}); const v=+c.value;
+            if(!isNaN(v)){ sum+=v; vals++; min=Math.min(min,v); max=Math.max(max,v); }
+          }
         }
       }
       const avg=vals>0?(sum/vals):0;
-      if(els.focusChip) els.focusChip.textContent = `Range ${count} cells: sum=${sum.toFixed(1)} avg=${avg.toFixed(1)} min=${min===Infinity?'–':min} max=${max===-Infinity?'–':max}`;
-      if(els.inspect) els.inspect.textContent = `Range ${A1(s.range.x1)}${s.range.y1+1}:${A1(s.range.x2)}${s.range.y2+1} Z${greek(s.range.z)}\nCells: ${count}, Values: ${vals}\nSum: ${sum}, Avg: ${avg.toFixed(2)}`;
+      const zLabelStart = typeof zStart==='number'?greek(zStart):'';
+      const zLabelEnd = typeof zEnd==='number'?greek(zEnd):zLabelStart;
+      const rangeLabel = `${A1(x1)}${y1+1}${zLabelStart}:${A1(x2)}${y2+1}${zLabelEnd}`;
+      const layerLabel = layerCount>1?`${layerCount} layers`:`${layerCount} layer`;
+      if(els.focusChip) els.focusChip.textContent = `Range ${count} cells (${layerLabel}): sum=${sum.toFixed(1)} avg=${avg.toFixed(1)} min=${min===Infinity?'–':min} max=${max===-Infinity?'–':max}`;
+      if(els.inspect) els.inspect.textContent = `Range ${rangeLabel}\nCells: ${count}, Values: ${vals}, ${layerLabel}\nSum: ${sum}, Avg: ${avg.toFixed(2)}`;
     } else {
       if(els.focusChip) els.focusChip.textContent = `#${arr.id} · ${arr.name} • ${A1(s.focus.x)}${s.focus.y+1}${greek(s.focus.z)}`;
       if(els.inspect) els.inspect.textContent = `Array #${arr.id} "${arr.name}"\nCell ${A1(s.focus.x)}${s.focus.y+1}${greek(s.focus.z)} @[${s.focus.x+1},${s.focus.y+1},${s.focus.z+1},${arr.id}]\nValue: ${JSON.stringify(cell.value)}\nFormula: ${cell.formula||''}`;
@@ -16652,11 +16730,15 @@ const UI = (()=>{
     document.querySelectorAll('td.cell.sel').forEach(td=>td.classList.remove('sel'));
     const s=Store.getState().selection; if(!s.focus) return; 
     if(s.range){
-      // highlight range
-      for(let y=s.range.y1;y<=s.range.y2;y++){
-        for(let x=s.range.x1;x<=s.range.x2;x++){
-          const td=document.querySelector(`td.cell[data-x="${x}"][data-y="${y}"][data-z="${s.range.z}"]`);
-          if(td) td.classList.add('sel');
+      const zStart = s.range.z1 ?? s.range.z;
+      const zEnd = s.range.z2 ?? s.range.z;
+      const layer = Store.getState().ui.zLayer;
+      if(layer>=zStart && layer<=zEnd){
+        for(let y=s.range.y1;y<=s.range.y2;y++){
+          for(let x=s.range.x1;x<=s.range.x2;x++){
+            const td=document.querySelector(`td.cell[data-x="${x}"][data-y="${y}"][data-z="${layer}"]`);
+            if(td) td.classList.add('sel');
+          }
         }
       }
     } else {
