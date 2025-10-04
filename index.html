@@ -2379,6 +2379,152 @@ function collectTargetCells(arg, anchor){
   }
   return out;
 }
+
+const ARRAY_SCOPE_TOKEN = '__arrayScope';
+function makeArrayScope(mode='host', ids=[]){
+  const uniq = new Set();
+  (ids||[]).forEach(id=>{
+    const n = Number(id);
+    if(Number.isFinite(n)) uniq.add(Math.trunc(n));
+  });
+  return { [ARRAY_SCOPE_TOKEN]: true, mode, ids: Array.from(uniq) };
+}
+function normalizeScopeDescriptor(raw, hostId=null){
+  if(!raw || typeof raw !== 'object') return null;
+  if(raw[ARRAY_SCOPE_TOKEN]){
+    const mode = (raw.mode === 'all' || raw.mode === 'limit') ? raw.mode : 'host';
+    const ids = Array.isArray(raw.ids) ? raw.ids.map(n=>Math.trunc(Number(n)||0)).filter(n=>Number.isFinite(n)) : [];
+    if(mode === 'host' && ids.length === 0 && hostId != null) ids.push(Math.trunc(hostId));
+    return { mode, ids };
+  }
+  if(typeof raw.mode === 'string' && raw.mode.toLowerCase() === 'all'){
+    return { mode:'all', ids:[] };
+  }
+  if(Number.isFinite(raw.arrId)){
+    return { mode:'limit', ids:[Math.trunc(raw.arrId)] };
+  }
+  if(Number.isFinite(raw.id)){
+    return { mode:'limit', ids:[Math.trunc(raw.id)] };
+  }
+  return null;
+}
+function gatherArrayIdsFromValue(value, hostId, idsOut, flags){
+  if(!idsOut) idsOut = new Set();
+  if(!flags) flags = { all:false };
+  if(value == null) return { ids: idsOut, flags };
+  if(typeof value === 'object'){
+    const normalized = normalizeScopeDescriptor(value, hostId);
+    if(normalized){
+      if(normalized.mode === 'all'){ flags.all = true; }
+      normalized.ids.forEach(id=> idsOut.add(id));
+      return { ids: idsOut, flags };
+    }
+    if(Array.isArray(value)){
+      value.forEach(v=>{
+        const res = gatherArrayIdsFromValue(v, hostId, idsOut, flags);
+        idsOut = res.ids; flags = res.flags;
+      });
+      return { ids: idsOut, flags };
+    }
+    if(Number.isFinite(value.arrId)){ idsOut.add(Math.trunc(value.arrId)); }
+    if(Number.isFinite(value.id)){ idsOut.add(Math.trunc(value.id)); }
+    return { ids: idsOut, flags };
+  }
+  if(typeof value === 'string'){
+    const trimmed = value.trim();
+    if(trimmed.toLowerCase() === 'all'){ flags.all = true; return { ids: idsOut, flags }; }
+    const addr = /^@\[(.*)\]$/.exec(trimmed);
+    if(addr){
+      const parts = addr[1].split(',').map(s=>s.trim()).filter(Boolean);
+      if(parts.length >= 4){
+        const arrPart = Number(parts[3]);
+        if(Number.isFinite(arrPart)) idsOut.add(Math.trunc(arrPart));
+      }
+      return { ids: idsOut, flags };
+    }
+    const cleaned = trimmed.replace(/[\[\]\{\}]/g,'');
+    cleaned.split(/[,\s]+/).forEach(part=>{
+      if(!part) return;
+      const n = Number(part);
+      if(Number.isFinite(n)) idsOut.add(Math.trunc(n));
+    });
+    return { ids: idsOut, flags };
+  }
+  if(typeof value === 'number' && Number.isFinite(value)){
+    idsOut.add(Math.trunc(value));
+  }
+  return { ids: idsOut, flags };
+}
+function extractScopeFromArgs(args, anchor, hostId){
+  const ids = new Set();
+  const flags = { all:false };
+  (args||[]).forEach(arg=>{
+    if(!arg) return;
+    if(arg.kind === 'ref'){
+      const id = arg.arrId ?? anchor?.arrId ?? hostId;
+      if(Number.isFinite(id)) ids.add(Math.trunc(id));
+      return;
+    }
+    if(arg.kind === 'range'){
+      arg.cells.forEach(cell=>{
+        const id = cell.arrId ?? anchor?.arrId ?? hostId;
+        if(Number.isFinite(id)) ids.add(Math.trunc(id));
+      });
+      return;
+    }
+    try{
+      const val = Formula.valOf(arg);
+      const res = gatherArrayIdsFromValue(val, hostId, ids, flags);
+      res.ids.forEach(id=> ids.add(id));
+      if(res.flags?.all) flags.all = true;
+    }catch{}
+  });
+  if(flags.all) return { mode:'all', ids:[] };
+  if(ids.size === 0 && Number.isFinite(hostId)) ids.add(Math.trunc(hostId));
+  return { mode:'limit', ids: Array.from(ids) };
+}
+function parseArrayScopeArg(scopeArg, anchor, hostArr){
+  const hostId = hostArr?.id ?? anchor?.arrId ?? null;
+  if(scopeArg == null){
+    const ids = Number.isFinite(hostId) ? [Math.trunc(hostId)] : [];
+    return { mode:'host', ids };
+  }
+  if(scopeArg && typeof scopeArg === 'object' && scopeArg[ARRAY_SCOPE_TOKEN]){
+    return normalizeScopeDescriptor(scopeArg, hostId) || { mode:'host', ids:Number.isFinite(hostId)?[Math.trunc(hostId)]:[] };
+  }
+  if(scopeArg.kind === 'ref' || scopeArg.kind === 'range'){
+    return extractScopeFromArgs([scopeArg], anchor, hostId);
+  }
+  let val;
+  try{ val = Formula.valOf(scopeArg); }catch{}
+  if(val && typeof val === 'object' && val[ARRAY_SCOPE_TOKEN]){
+    return normalizeScopeDescriptor(val, hostId) || { mode:'host', ids:Number.isFinite(hostId)?[Math.trunc(hostId)]:[] };
+  }
+  if(typeof val === 'string' && val.trim().toLowerCase() === 'all'){
+    return { mode:'all', ids:[] };
+  }
+  const res = gatherArrayIdsFromValue(val, hostId);
+  if(res.flags?.all) return { mode:'all', ids:[] };
+  const ids = Array.from(res.ids||[]);
+  if(ids.length === 0 && Number.isFinite(hostId)) ids.push(Math.trunc(hostId));
+  if(ids.length === 1 && ids[0] === Math.trunc(hostId)) return { mode:'host', ids };
+  return ids.length ? { mode:'limit', ids } : { mode:'host', ids:Number.isFinite(hostId)?[Math.trunc(hostId)]:[] };
+}
+function resolveArrayScopeTargets(hostArr, anchor, scopeArg){
+  const scope = parseArrayScopeArg(scopeArg, anchor, hostArr);
+  const arrays = Store.getState().arrays || {};
+  let targets = [];
+  if(scope.mode === 'all'){
+    targets = Object.values(arrays).filter(Boolean);
+  } else if(scope.mode === 'limit'){
+    const uniq = new Set(scope.ids||[]);
+    targets = Array.from(uniq).map(id=>arrays[id]).filter(Boolean);
+  } else {
+    if(hostArr) targets = [hostArr];
+  }
+  if(!targets.length && hostArr) targets = [hostArr];
+  return { scope, targets };
+}
 function mutateCellMeta(tx, target, updater){
   if(!target) return;
   const coord = {x: target.x, y: target.y, z: target.z};
@@ -5523,6 +5669,12 @@ tag('GROUP',["PHYSICS"], (anchor, arr, ast, tx) => {
 
 // LIMIT(range, state[, duration]) – encode temporary physics bounds
 tag('LIMIT',["PHYSICS"], (anchor, arr, ast, tx) => {
+  if(ast.args.length <= 1){
+    const hostId = arr?.id ?? anchor?.arrId ?? null;
+    const scopeDesc = extractScopeFromArgs(ast.args, anchor, hostId);
+    if(scopeDesc.mode === 'all') return makeArrayScope('all');
+    return makeArrayScope('limit', scopeDesc.ids);
+  }
   const cells = collectTargetCells(ast.args[0], anchor);
   const stateRaw = ast.args[1] !== undefined ? Formula.valOf(ast.args[1]) : 1;
   const durationRaw = ast.args[2] !== undefined ? Formula.valOf(ast.args[2]) : null;
@@ -5544,25 +5696,165 @@ tag('LIMIT',["PHYSICS"], (anchor, arr, ast, tx) => {
   finalizeTransaction(info);
 });
 
-// CELL_PHYS(enabled[, jumpCount[, gravityVec[, boundByArrayFloor]]]) – per-array physics configuration
+// ALL() – scope helper targeting every array
+tag('ALL',["SCENE"], () => makeArrayScope('all'));
+
+// CELL_PHYS(enabled[, jumpCount[, gravityVec[, boundByArrayFloor[, respawnRef[, scope]]]]]) – per-array physics configuration
 tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
   const enabled = !!Formula.valOf(ast.args[0] ?? 0);
   const jumpCountArg = ast.args[1];
   const gravityArg = ast.args[2];
   const floorArg = ast.args[3];
+  const respawnArg = ast.args[4];
+  const scopeArg = ast.args[5];
   const jumpCount = jumpCountArg !== undefined ? Math.max(0, Math.round(Number(Formula.valOf(jumpCountArg)) || 0)) : undefined;
   const gravityVec = parseVectorArg(gravityArg);
   const boundByFloor = floorArg !== undefined ? !!Formula.valOf(floorArg) : undefined;
+  const respawnProvided = respawnArg !== undefined;
+  let respawnDescriptor = null;
+  if(respawnProvided){
+    if(respawnArg && typeof respawnArg === 'object' && (respawnArg.kind === 'ref' || respawnArg.kind === 'range')){
+      const ref = respawnArg.kind === 'ref' ? respawnArg : (respawnArg.cells && respawnArg.cells[0]);
+      if(ref) respawnDescriptor = { type:'ref', ref };
+    }
+    if(!respawnDescriptor){
+      let value;
+      try{ value = Formula.valOf(respawnArg); }catch{}
+      respawnDescriptor = { type:'value', value };
+    }
+  }
 
-  arr.params = arr.params || {};
-  arr.params.physics = arr.params.physics || { enabled:false };
-  arr.params.physics.enabled = enabled;
-  if(jumpCount !== undefined) arr.params.physics.jumpCount = jumpCount;
-  if(gravityVec) arr.params.physics.gravity = gravityVec;
-  if(boundByFloor !== undefined) arr.params.physics.boundByArrayFloor = boundByFloor;
+  const { targets } = resolveArrayScopeTargets(arr, anchor, scopeArg);
+  const respawnUpdates = {};
+
+  const resolveRespawn = (targetArr)=>{
+    if(!respawnDescriptor) return null;
+    const arrays = Store.getState().arrays || {};
+    const hostId = targetArr?.id ?? arr?.id ?? anchor?.arrId ?? null;
+    let targetArrId = hostId;
+    let cellCoord = null;
+    let worldOverride = null;
+    if(respawnDescriptor.type === 'ref' && respawnDescriptor.ref){
+      const ref = respawnDescriptor.ref;
+      targetArrId = Number.isFinite(ref.arrId) ? Math.trunc(ref.arrId) : hostId;
+      cellCoord = { x: Math.trunc(ref.x ?? 0), y: Math.trunc(ref.y ?? 0), z: Math.trunc(ref.z ?? 0) };
+    } else if(respawnDescriptor.type === 'value'){
+      const val = respawnDescriptor.value;
+      const normalized = normalizeScopeDescriptor(val, hostId);
+      if(normalized && normalized.mode === 'all'){ return null; }
+      if(val && typeof val === 'object'){
+        if(Number.isFinite(val.arrId)) targetArrId = Math.trunc(val.arrId);
+        else if(Number.isFinite(val.array)) targetArrId = Math.trunc(val.array);
+        if(val.world && Number.isFinite(val.world.x) && Number.isFinite(val.world.y) && Number.isFinite(val.world.z)){
+          worldOverride = { x:Number(val.world.x), y:Number(val.world.y), z:Number(val.world.z) };
+        }
+        if(Number.isFinite(val.x) && Number.isFinite(val.y) && Number.isFinite(val.z)){
+          cellCoord = { x: Math.trunc(val.x), y: Math.trunc(val.y), z: Math.trunc(val.z) };
+        }
+      }
+      if(!cellCoord && Array.isArray(val) && val.length >= 3){
+        cellCoord = {
+          x: Math.trunc(Number(val[0]) || 0),
+          y: Math.trunc(Number(val[1]) || 0),
+          z: Math.trunc(Number(val[2]) || 0)
+        };
+        if(val.length >= 4 && Number.isFinite(Number(val[3]))){
+          targetArrId = Math.trunc(Number(val[3]));
+        }
+      }
+      if(!cellCoord && typeof val === 'string'){
+        const trimmed = val.trim();
+        const addr = /^@\[(.*)\]$/.exec(trimmed);
+        if(addr){
+          const parts = addr[1].split(',').map(s=>s.trim()).filter(Boolean);
+          if(parts.length >= 3){
+            cellCoord = {
+              x: Math.trunc(Number(parts[0]) || 0),
+              y: Math.trunc(Number(parts[1]) || 0),
+              z: Math.trunc(Number(parts[2]) || 0)
+            };
+            if(parts.length >= 4 && Number.isFinite(Number(parts[3]))){
+              targetArrId = Math.trunc(Number(parts[3]));
+            }
+          }
+        } else {
+          const pieces = trimmed.replace(/[\[\]\{\}]/g,'').split(/[,\s]+/).filter(Boolean);
+          if(pieces.length >= 3){
+            cellCoord = {
+              x: Math.trunc(Number(pieces[0]) || 0),
+              y: Math.trunc(Number(pieces[1]) || 0),
+              z: Math.trunc(Number(pieces[2]) || 0)
+            };
+            if(pieces.length >= 4 && Number.isFinite(Number(pieces[3]))){
+              targetArrId = Math.trunc(Number(pieces[3]));
+            }
+          }
+        }
+      }
+    }
+    const arrTarget = arrays[targetArrId] || targetArr || arr;
+    if(worldOverride && arrTarget){
+      return {
+        arrId: arrTarget.id,
+        cell: cellCoord,
+        world: { x: worldOverride.x, y: worldOverride.y, z: worldOverride.z }
+      };
+    }
+    if(!cellCoord || !arrTarget) return null;
+    let pos = null;
+    try{
+      if(Scene.cellWorldPos) pos = Scene.cellWorldPos(arrTarget, cellCoord.x, cellCoord.y, cellCoord.z);
+      if(!pos && Scene.worldPos) pos = Scene.worldPos(arrTarget, cellCoord.x, cellCoord.y, cellCoord.z);
+    }catch{}
+    if(!pos) return null;
+    return {
+      arrId: arrTarget.id,
+      cell: { ...cellCoord },
+      world: { x: pos.x, y: pos.y, z: pos.z }
+    };
+  };
+
+  targets.forEach(targetArr => {
+    if(!targetArr) return;
+    targetArr.params = targetArr.params || {};
+    targetArr.params.physics = targetArr.params.physics || { enabled:false };
+    targetArr.params.physics.enabled = enabled;
+    if(jumpCount !== undefined) targetArr.params.physics.jumpCount = jumpCount;
+    if(gravityVec) targetArr.params.physics.gravity = gravityVec;
+    if(boundByFloor !== undefined) targetArr.params.physics.boundByArrayFloor = boundByFloor;
+    if(respawnProvided){
+      const respawnInfo = resolveRespawn(targetArr);
+      respawnUpdates[targetArr.id] = respawnInfo || null;
+    }
+  });
 
   if(enabled){
-    try{ Scene.debounceColliderRebuild(arr); }catch{}
+    targets.forEach(targetArr=>{ try{ Scene.debounceColliderRebuild(targetArr); }catch{} });
+  }
+
+  const updateRespawns = Object.keys(respawnUpdates).length > 0;
+  if(updateRespawns){
+    Store.setState(state => {
+      const scene = { ...(state.scene || {}) };
+      const existing = { ...(scene.physicsRespawns || {}) };
+      Object.entries(respawnUpdates).forEach(([id, info])=>{
+        if(info){ existing[id] = info; }
+        else delete existing[id];
+      });
+      scene.physicsRespawns = existing;
+      return { scene };
+    });
+    const selArrId = Store.getState().selection?.arrayId;
+    if(selArrId != null && Object.prototype.hasOwnProperty.call(respawnUpdates, selArrId)){
+      const world = respawnUpdates[selArrId]?.world;
+      if(world) try{ Scene.setPhysicsSpawn?.(world); }catch{}
+      else try{ Scene.setPhysicsSpawn?.(null); }catch{}
+    }
+    if(Object.prototype.hasOwnProperty.call(respawnUpdates, arr.id)){
+      const world = respawnUpdates[arr.id]?.world;
+      if(world) try{ Scene.setPhysicsSpawn?.(world); }catch{}
+      else try{ Scene.setPhysicsSpawn?.(null); }catch{}
+    }
   }
 
   const stamp = enabled ? '⚙️ Physics ON' : '⚙️ Physics OFF';
@@ -6497,13 +6789,16 @@ tag('COPY',['IO','ACTION'],(anchor,arr,ast)=>{
   }
 });
 
-// PREVIEW(inArray[, overworld]) — binary toggles for enabling animations
+// PREVIEW(inArray[, overworld[, scope]]) — binary toggles for enabling animations
 // inArray: 1/0 to show per-cell overlays and drive in-array timed plans
 // overworld: 1/0 to enable global (3D) array movement
 tag('PREVIEW',["SCENE"],(anchor,arr,ast)=>{
   try{
     const enableIn = !!Formula.valOf(ast.args[0]||0);
     const enable3D = !!Formula.valOf(ast.args[1]||0);
+    let scopeConfig = null;
+    try{ scopeConfig = parseArrayScopeArg(ast.args[2], anchor, arr); }
+    catch{}
     let T = (typeof Scene!=='undefined' && Scene.ensureTimedState) ? Scene.ensureTimedState(arr) : null;
     if(!T){
       try{
@@ -6541,9 +6836,20 @@ tag('PREVIEW',["SCENE"],(anchor,arr,ast)=>{
       try{ if(typeof Scene!=='undefined' && Scene.maskArrayForPreview) Scene.maskArrayForPreview(arr, false); }catch{}
     }
     const G = (typeof Scene!=='undefined' && Scene.ensureTimed3D) ? Scene.ensureTimed3D() : ((Store.getState().scene.timed3D=Store.getState().scene.timed3D||{configured:false,preview:false}), Store.getState().scene.timed3D);
-    G.preview = enable3D;
+    if(G){
+      if(scopeConfig){
+        G.scope = { mode: scopeConfig.mode, ids: Array.from(scopeConfig.ids||[]) };
+      } else if(!G.scope){
+        try{
+          const fallback = parseArrayScopeArg(null, anchor, arr);
+          G.scope = { mode: fallback.mode, ids: Array.from(fallback.ids||[]) };
+        }catch{}
+      }
+      G.hostId = arr?.id ?? anchor?.arrId ?? null;
+      G.preview = enable3D;
+    }
     // If global preview is being disabled, immediately restore arrays to their captured base transforms
-    if(!enable3D){
+    if(G && !enable3D){
       try{
         const arrays = Object.values(Store.getState().arrays||{});
         arrays.forEach(a=>{
@@ -6582,7 +6888,7 @@ tag('TIMED_TRANSLATION',["SCENE"],(anchor,arr,ast)=>{
   }catch(e){ Actions.setCell(arr.id, anchor, `!ERR:${e.message}`, ast.raw, true); }
 });
 
-// 3D_TIMED_TRANSLATION(ticks, repeat, reverse?, reverseTicks?) — global config
+// 3D_TIMED_TRANSLATION(ticks, repeat, reverse?, reverseTicks?, smooth?, scope?) — global config
 tag('3D_TIMED_TRANSLATION',["SCENE"],(anchor,arr,ast)=>{
   try{
     const ticks = (+Formula.valOf(ast.args[0]||60))|0;
@@ -6590,6 +6896,9 @@ tag('3D_TIMED_TRANSLATION',["SCENE"],(anchor,arr,ast)=>{
     const reverse = !!Formula.valOf(ast.args[2]||0);
     const reverseTicks = (ast.args[3]!==undefined) ? ((+Formula.valOf(ast.args[3])|0) || ticks) : null;
     const smooth = !!((+Formula.valOf(ast.args[4]||0))|0);
+    let scopeConfig;
+    try{ scopeConfig = parseArrayScopeArg(ast.args[5], anchor, arr); }
+    catch{ scopeConfig = parseArrayScopeArg(null, anchor, arr); }
     // Robust ensure timed3D state
     let G = null;
     try{ if(typeof Scene!=='undefined' && Scene.ensureTimed3D) G = Scene.ensureTimed3D(); }catch{}
@@ -6601,6 +6910,10 @@ tag('3D_TIMED_TRANSLATION',["SCENE"],(anchor,arr,ast)=>{
       G = sceneState.timed3D;
     }
     G.configured = true; G.ticks=Math.max(1,ticks|0); G.repeat=repeat; G.reverse=reverse; G.reverseTicks=reverseTicks; G.t=0; G.dir=1; G.smooth = smooth;
+    G.hostId = arr?.id ?? anchor?.arrId ?? null;
+    if(scopeConfig){
+      G.scope = { mode: scopeConfig.mode, ids: Array.from(scopeConfig.ids||[]) };
+    }
     Actions.setCell(arr.id, anchor, `3D_Timed:cfg(${ticks})`, ast.raw, true);
   }catch(e){ Actions.setCell(arr.id, anchor, `!ERR:${e.message}`, ast.raw, true); }
 });
@@ -6836,12 +7149,14 @@ tag('CONNECT',['SCENE', 'ACTION'],(anchor,arr,ast)=>{
 
   let style = '';
   let dimensionMode = 'line';
+  let dimensionExplicit = false;
   if(ast.args[2] !== undefined){
     const raw = Formula.valOf(ast.args[2]);
     if(raw != null){
       const text = String(raw).trim();
       if(['line','platform','zipline','grind'].includes(text.toLowerCase())){
         dimensionMode = text.toLowerCase();
+        dimensionExplicit = true;
       } else {
         style = text;
       }
@@ -6849,11 +7164,14 @@ tag('CONNECT',['SCENE', 'ACTION'],(anchor,arr,ast)=>{
   }
   if(ast.args[3] !== undefined){
     const modeRaw = String(Formula.valOf(ast.args[3]) || '').trim().toLowerCase();
-    if(modeRaw) dimensionMode = modeRaw;
+    if(modeRaw){
+      dimensionMode = modeRaw;
+      dimensionExplicit = true;
+    }
   }
 
   // Pass to the Scene module to handle rendering and physics state
-  Scene.addConnection(anchor, ref1, ref2, { style, dimensionMode });
+  Scene.addConnection(anchor, ref1, ref2, { style, dimensionMode, dimensionExplicit });
   const statusParts = ['🔗', dimensionMode.toUpperCase()];
   if(style) statusParts.push(`(${style})`);
   Actions.setCell(arr.id, anchor, statusParts.join(' '), ast.raw, true);
@@ -7436,6 +7754,12 @@ let rapierWorld=null, controller=null, playerBody=null, playerCollider=null, sta
   const chunkMeshes=new Map(); // legacy chunk meshes (still used for some visuals)
   const layerMeshes=new Map(); // `${arr.id}:${z}` -> {mesh, capacity, used, index2cell}
   const connections = new Map(); // aKey(anchor) -> { line, start, end, ... }
+  const isZiplineConnection = (con)=>{
+    if(!con) return false;
+    if(con.mode === 'zipline') return true;
+    if((!con.dimensionExplicit) && (!con.mode || con.mode === 'line')) return true;
+    return false;
+  };
   let depGroup=null, depVis=false; // dependency graph overlay
 let ziplineState = { active: false, line: null, direction: new THREE.Vector3(), progress: 0, velocity: 0, length: 1, accel: 0.002, start: new THREE.Vector3(), end: new THREE.Vector3() };
 let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
@@ -10913,12 +11237,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const S=Store.getState();
     const sceneState = S.scene || ({});
     if(!sceneState.timed3D){
-      sceneState.timed3D = { configured:false, ticks:60, repeat:false, reverse:false, reverseTicks:null, t:0, dir:1, preview:false, waitStart:0, waitEnd:0, _waitCounter:0 };
+      sceneState.timed3D = { configured:false, ticks:60, repeat:false, reverse:false, reverseTicks:null, t:0, dir:1, preview:false, waitStart:0, waitEnd:0, _waitCounter:0, scope:null, hostId:null };
       Store.setState(s=>({scene:{...s.scene, timed3D: sceneState.timed3D}}));
     } else {
       if(typeof sceneState.timed3D.waitStart!=='number') sceneState.timed3D.waitStart = 0;
       if(typeof sceneState.timed3D.waitEnd!=='number') sceneState.timed3D.waitEnd = 0;
       if(typeof sceneState.timed3D._waitCounter!=='number') sceneState.timed3D._waitCounter = 0;
+      if(!sceneState.timed3D.hasOwnProperty('scope')) sceneState.timed3D.scope = null;
+      if(!sceneState.timed3D.hasOwnProperty('hostId')) sceneState.timed3D.hostId = null;
     }
     return sceneState.timed3D;
   }
@@ -11214,7 +11540,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
             // Zipline attachment detection
             for(const [key, con] of connections.entries()){
-              if(con.mode !== 'zipline') continue;
+              if(!isZiplineConnection(con)) continue;
               const line = new THREE.Line3(con.start, con.end);
               const closestPoint = new THREE.Vector3();
               line.closestPointToPoint(playerPos, true, closestPoint);
@@ -11363,11 +11689,23 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             const p = {x: cachedPlayerPos.x, y: cachedPlayerPos.y, z: cachedPlayerPos.z};
             
             // Check if falling off the world
-            if(p.y < 0 && physicsSpawnPos){
+            let respawnPos = physicsSpawnPos ? { ...physicsSpawnPos } : null;
+            try{
+              const sceneState = Store.getState().scene || {};
+              const respawns = sceneState.physicsRespawns || {};
+              const selArrId = Store.getState().selection?.arrayId;
+              const hostArrId = Number.isFinite(sceneState.timed3D?.hostId) ? Math.trunc(sceneState.timed3D.hostId) : null;
+              if(selArrId != null && respawns[selArrId]?.world){
+                respawnPos = { ...respawns[selArrId].world };
+              } else if(hostArrId != null && respawns[hostArrId]?.world){
+                respawnPos = { ...respawns[hostArrId].world };
+              }
+            }catch{}
+            if(p.y < 0 && respawnPos){
               console.log('[PHYSICS] Fell off world, respawning at spawn point');
-              playerBody.setTranslation(physicsSpawnPos, true);
+              playerBody.setTranslation(respawnPos, true);
               playerBody.setLinvel({x: 0, y: 0, z: 0}, true);
-              cachedPlayerPos.set(physicsSpawnPos.x, physicsSpawnPos.y, physicsSpawnPos.z);
+              cachedPlayerPos.set(respawnPos.x, respawnPos.y, respawnPos.z);
               jumpVelocity = 0;
               landingSquashTime = 0;
               wasGroundedLastFrame = false;
@@ -11545,6 +11883,30 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const arrays = Object.values(Store.getState().arrays||{});
       // Global 3D timed progression (overworld)
       const G = (Store.getState().scene||{}).timed3D;
+      const scopeState = G?.scope;
+      const hostScopeId = (G && Number.isFinite(G.hostId)) ? Math.trunc(G.hostId) : null;
+      const scopeSet = new Set(
+        Array.isArray(scopeState?.ids)
+          ? scopeState.ids
+              .map(n => Number(n))
+              .filter(n => Number.isFinite(n))
+              .map(n => Math.trunc(n))
+          : []
+      );
+      const includeArrayIn3D = (arrId)=>{
+        if(!G) return false;
+        if(scopeState){
+          if(scopeState.mode === 'all') return true;
+          if(scopeState.mode === 'limit') return scopeSet.has(arrId);
+          if(scopeState.mode === 'host'){
+            if(scopeState.ids && scopeState.ids.length){ return scopeState.ids[0] === arrId; }
+            if(hostScopeId != null) return hostScopeId === arrId;
+            return true;
+          }
+        }
+        if(hostScopeId != null) return hostScopeId === arrId;
+        return true;
+      };
       let p3D = 0;
       if(G && G.preview){
         // Default configuration if none provided via 3D_TIMED_TRANSLATION
@@ -11747,9 +12109,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           }
         }
         // If global 3D preview is enabled, apply full-array motion using the same plan and p3D
-          if(G && G.preview && T){
-          if(!T.plan.length){ buildTimedPlanFromArray(arr); }
-          if(!T.plan.length){ continue; }
+        if(G && G.preview && T){
+          if(!includeArrayIn3D(arr.id)){
+            // Skip global preview application for arrays outside scope
+          } else {
+            if(!T.plan.length){ buildTimedPlanFromArray(arr); }
+            if(!T.plan.length){ continue; }
           if(!T.baseOffset){
             // Reset base to current on first preview frame
             T.baseOffset={...(arr.offset||{x:0,y:0,z:0})};
@@ -11809,14 +12174,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
               .sub(newRotPivot);
             setArrayOffset(arr, {x:newOffset.x, y:newOffset.y, z:newOffset.z}, {interactive:true});
             try{ arr._frame.quaternion.copy(newQuat); }catch{}
-          // Minimal transpose preview: slight XY swap tilt to indicate operation
-          if(hasTranspose){
-            try{
-              if(!arr._frame) Scene.renderArray(arr);
-              // apply a gentle XY tilt oscillation based on p3D
-              const tilt = 0.20 * Math.sin(p3D*Math.PI);
-              arr._frame.rotation.set(tilt, arr._frame.rotation.y, -tilt);
-            }catch{}
+            // Minimal transpose preview: slight XY swap tilt to indicate operation
+            if(hasTranspose){
+              try{
+                if(!arr._frame) Scene.renderArray(arr);
+                // apply a gentle XY tilt oscillation based on p3D
+                const tilt = 0.20 * Math.sin(p3D*Math.PI);
+                arr._frame.rotation.set(tilt, arr._frame.rotation.y, -tilt);
+              }catch{}
+            }
           }
         } else if(G && !G.preview && T){
           // Non-preview: arrays should already be at their one-time end state from 3D_TRANSLATE/3D_ROTATE.
@@ -13396,6 +13762,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   let landingSquashTime = 0; // Track landing squash animation
   let anticipationSquashTime = 0; // Track jump anticipation squash
 
+  function setPhysicsSpawn(pos){
+    if(pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) && Number.isFinite(pos.z)){
+      physicsSpawnPos = { x: pos.x, y: pos.y, z: pos.z };
+    } else {
+      physicsSpawnPos = null;
+    }
+  }
+
   function computeJumpBudget(){
     const avatarCfg = Store.getState().avatarPhysics || {};
     let max = Math.max(1, Math.round(Number(avatarCfg.jumpCount ?? 1)) || 1);
@@ -14530,6 +14904,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
     const style = options.style ? String(options.style).toLowerCase() : '';
     const mode = (options.dimensionMode || 'line').toLowerCase();
+    const dimensionExplicit = !!options.dimensionExplicit;
     const dir = new THREE.Vector3().subVectors(end, start);
     const length = Math.max(0.0001, dir.length());
     const dirNorm = length > 0.0001 ? dir.clone().divideScalar(length) : new THREE.Vector3(1,0,0);
@@ -14584,7 +14959,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       mode,
       style,
       length,
-      color
+      color,
+      dimensionExplicit
     });
   }
 
@@ -14851,7 +15227,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
 
-  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsCamera, resetContactCache};
+  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsCamera, resetContactCache, setPhysicsSpawn};
 })();
 
 /* ===========================
@@ -15805,9 +16181,10 @@ const UI = (()=>{
       {name:'ON_LAND',tags:'META INTERACTION',syntax:'=ON_LAND([target], action)',params:'target: optional ref/range (default SELF()) · action: formula string triggered on landing',desc:'Fires the action the first frame the avatar lands on top of the cell.'},
       {name:'PIVOT',tags:'PHYSICS',syntax:'=PIVOT(targetRange)',params:'targetRange: ref/range containing pivot cells',desc:'Marks hinge pivot cells used when generating grouped rigid bodies. Persists to meta.physicsPivot for Rapier bootstrap.'},
       {name:'GROUP',tags:'PHYSICS',syntax:'=GROUP(targetRange, groupId)',params:'targetRange: ref/range to consolidate · groupId: numeric/string id',desc:'Assigns cells to a shared rigid body via meta.physicsGroupId so collider builds merge tiles.'},
-      {name:'CELL_PHYS',tags:'PHYSICS',syntax:'=CELL_PHYS(enabled[, jumpCount[, gravityVec[, boundByArrayFloor]]])',params:'enabled: 0/1 · jumpCount: optional int · gravityVec: optional @[x,y,z] · boundByArrayFloor: 0/1 clamp',desc:'Enables per-array physics hydration with grouped bodies, pivots, and optional floor clamping.'},
+      {name:'CELL_PHYS',tags:'PHYSICS',syntax:'=CELL_PHYS(enabled[, jumpCount[, gravityVec[, boundByArrayFloor[, respawnRef[, scope]]]]])',params:'enabled: 0/1 · jumpCount: optional int · gravityVec: optional @[x,y,z] · boundByArrayFloor: 0/1 clamp · respawnRef: ref/coords (blank to clear) for fall resets · scope: LIMIT()/ALL() descriptor',desc:'Enables per-array physics hydration with grouped bodies, pivots, optional floor clamping, custom respawn targets, and multi-array scopes.'},
       {name:'CELLI_PHYS',tags:'PHYSICS AVATAR',syntax:'=CELLI_PHYS(enabled[, jumpCount[, runMultiplier[, momentumMode]]])',params:'enabled: 0/1 · jumpCount: default 1 · runMultiplier: movement speed scalar · momentumMode: 0 precise, 1 momentum heavy',desc:'Avatar physics controller wrapper configuring enable state, jump budget, sprint scaling, and momentum style.'},
-      {name:'LIMIT',tags:'PHYSICS',syntax:'=LIMIT(targetRange, state[, duration])',params:'targetRange: ref/range · state: "enable"|"disable" or 0/1 · duration: optional ticks',desc:'Applies temporary physics bounds that can be timed with DELAY or ON_LAND handlers for scripted platforms.'},
+      {name:'LIMIT',tags:'PHYSICS',syntax:'=LIMIT(targetRange, state[, duration])',params:'targetRange: ref/range · state: "enable"|"disable" or 0/1 · duration: optional ticks',desc:'Applies temporary physics bounds that can be timed with DELAY or ON_LAND handlers for scripted platforms. When called with only array arguments it returns a scope descriptor for CELL_PHYS/3D_TIMED_TRANSLATION.'},
+      {name:'ALL',tags:'SCENE',syntax:'=ALL()',params:'—',desc:'Returns an array scope descriptor targeting every array; pass to CELL_PHYS, PREVIEW, or 3D_TIMED_TRANSLATION.'},
       {name:'FORMULA_TEXT',tags:'PURE',syntax:'=FORMULA_TEXT([ref])',params:'optional ref; default anchor',desc:'Returns the stored formula text from a cell instead of its value.'},
       {name:'SEARCH',tags:'DATA',syntax:'=SEARCH(findText, withinText[, start])',params:'findText: substring to locate · withinText: text to search · start: optional 1-based index',desc:'Excel-style case-insensitive search that returns the 1-based position of the substring or errors if not found.'},
       {name:'PRIORITY',tags:'META',syntax:'=PRIORITY(rangeOrRef, level[, mode[, sortJson]]])',params:'level: int · mode: "value"|"coord" · sortJson e.g. {"x":"asc","y":"desc"}',desc:'Registers a priority queue and sort hints for later conflict resolution.'},
@@ -15837,6 +16214,7 @@ const UI = (()=>{
       {name:'SCALE',tags:'SCENE VOXEL',syntax:'=SCALE(factor)',params:'factor: integer ≥1',desc:'Expands voxel mesh coverage (2→2×2×2, 3→4×4×4, etc.) and adjusts collision/selection volumes.'},
       {name:'LIGHT',tags:'SCENE',syntax:'=LIGHT(state[, targetCell[, lumens]])',params:'state: TRUE/FALSE or 1/0 · targetCell: optional cell reference (0 keeps point light) · lumens: brightness in lumens (default 800)',desc:'Creates a light at the calling cell using its color. Optionally aim at another cell for a spotlight. Lights follow array transforms.'},
       {name:'TIMED_TRANSLATION',tags:'SCENE',syntax:'=TIMED_TRANSLATION(state[, ticks[, reverse]])',params:'state: 0/1 enable · ticks: duration · reverse: 0/1 bidirectional',desc:'Sets animation preview state; shows green prism motion previews.'},
+      {name:'3D_TIMED_TRANSLATION',tags:'SCENE',syntax:'=3D_TIMED_TRANSLATION(ticks, repeat, reverse?, reverseTicks?, smooth?, scope?)',params:'ticks: cycle length · repeat: 0/1 loop · reverse: 0/1 ping-pong · reverseTicks: optional reverse duration · smooth: 0/1 easing · scope: optional LIMIT()/ALL() descriptor',desc:'Configures overworld timed preview cadence and the array scope it affects.'},
       {name:'HIDE',tags:'SCENE',syntax:'=HIDE(target, mode[, scope])',params:'target: ref/range/array · mode: 0=show,1=hide · scope: "contents"|"voxel"|"array"',desc:'Hides cell contents, voxels themselves, ranges, or entire arrays with axes/2D visibility.'},
       {name:'HYPERLINK',tags:'IO',syntax:'=HYPERLINK(url[, label])',params:'url: string/ref · label: optional display text',desc:'Creates clickable link in cell with metadata.'},
       {name:'GOAL',tags:'PURE DEBUG',syntax:'=GOAL("id", conditionRefOrBool)',params:'string id · boolean or ref',desc:'Registers a goal that shows OK/FAIL; win triggers when all OK.'},
