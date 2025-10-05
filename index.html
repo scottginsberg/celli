@@ -3642,7 +3642,7 @@ const TokenTypes = {
   ILLEGAL: 'ILLEGAL',
   EOF: 'EOF',
   NUMBER: 'NUMBER',
-  STRING: 'STRING', 
+  STRING: 'STRING',
   IDENTIFIER: 'IDENTIFIER',
   CELL_REF: 'CELL_REF',     // A1α, B2β^1
   RANGE_REF: 'RANGE_REF',   // @[0,0,0,1]
@@ -3650,7 +3650,10 @@ const TokenTypes = {
   LPAREN: '(',
   RPAREN: ')',
   COMMA: ',',
-  COLON: ':'
+  COLON: ':',
+  LBRACE: '{',
+  RBRACE: '}',
+  SEMICOLON: ';'
 };
 // Lexer: converts formula text into tokens
 class FormulaLexer {
@@ -3689,8 +3692,21 @@ class FormulaLexer {
       case ')': tok = { type: TokenTypes.RPAREN, value: this.ch }; break;
       case ',': tok = { type: TokenTypes.COMMA, value: this.ch }; break;
       case ':': tok = { type: TokenTypes.COLON, value: this.ch }; break;
+      case '{': tok = { type: TokenTypes.LBRACE, value: this.ch }; break;
+      case '}': tok = { type: TokenTypes.RBRACE, value: this.ch }; break;
+      case ';': tok = { type: TokenTypes.SEMICOLON, value: this.ch }; break;
       case '"':
         tok = { type: TokenTypes.STRING, value: this.readString() };
+        break;
+      case '`':
+        tok = { type: TokenTypes.STRING, value: this.readRawString('`') };
+        break;
+      case '<':
+        if (this.peekSequence('<<<')) {
+          tok = { type: TokenTypes.STRING, value: this.readHeredoc() };
+          return tok;
+        }
+        tok = { type: TokenTypes.ILLEGAL, value: this.ch };
         break;
       case '@':
         tok = { type: TokenTypes.RANGE_REF, value: this.readRangeRef() };
@@ -3775,6 +3791,39 @@ class FormulaLexer {
     return out;
   }
 
+  readRawString(delimiter) {
+    let out = '';
+    while (true) {
+      this.readChar();
+      if (this.ch === null) break;
+      if (this.ch === delimiter) break;
+      out += this.ch;
+    }
+    return out;
+  }
+
+  readHeredoc() {
+    const start = this.position + 3;
+    const end = this.input.indexOf('>>>', start);
+    const value = end === -1 ? this.input.slice(start) : this.input.slice(start, end);
+    const after = end === -1 ? this.input.length : end + 3;
+    if (after >= this.input.length) {
+      this.position = this.input.length;
+      this.readPosition = this.input.length;
+      this.ch = null;
+    } else {
+      this.position = after;
+      this.ch = this.input[this.position];
+      this.readPosition = this.position + 1;
+    }
+    return value;
+  }
+
+  peekSequence(seq) {
+    if (!seq || !seq.length) return false;
+    return this.input.substr(this.position, seq.length) === seq;
+  }
+
   readIdentifier() {
     const position = this.position;
     while (this.isLetter(this.ch) || this.ch === '_') {
@@ -3846,6 +3895,12 @@ class FormulaParser {
     if (this.currentToken.type === TokenTypes.IDENTIFIER && this.peekToken.type === TokenTypes.LPAREN) {
       return this.parseFunctionCall();
     }
+    if (this.currentToken.type === TokenTypes.IDENTIFIER && this.peekToken.type === TokenTypes.LBRACE) {
+      const name = this.currentToken.value.toUpperCase();
+      if (name === 'DO' || name === 'SEQ') {
+        return this.parseFunctionBlockCall(name);
+      }
+    }
     // Otherwise parse primary (numbers, strings, refs, identifiers)
     return this.parsePrimary();
   }
@@ -3873,6 +3928,66 @@ class FormulaParser {
     }
     this.nextToken(); // consume ')'
     return node;
+  }
+
+  parseFunctionBlockCall(name) {
+    const node = {
+      type: 'FunctionCall',
+      name,
+      arguments: [],
+      raw: this.lexer.input,
+      block: true,
+      withOptions: null
+    };
+    this.nextToken(); // consume IDENTIFIER
+    this.nextToken(); // consume '{'
+    node.arguments = this.parseActionBlock();
+    if (this.currentToken.type !== TokenTypes.RBRACE) {
+      this.errors.push(`Expected '}', got ${this.currentToken ? this.currentToken.type : 'EOF'}`);
+    } else {
+      this.nextToken(); // consume '}'
+    }
+    if (this.currentToken && this.currentToken.type === TokenTypes.IDENTIFIER && this.currentToken.value.toUpperCase() === 'WITH') {
+      this.nextToken(); // consume WITH
+      node.withOptions = this.parseWithOptions();
+    }
+    return node;
+  }
+
+  parseActionBlock() {
+    const statements = [];
+    while (this.currentToken && this.currentToken.type !== TokenTypes.RBRACE && this.currentToken.type !== TokenTypes.EOF) {
+      if (this.currentToken.type === TokenTypes.SEMICOLON) {
+        this.nextToken();
+        continue;
+      }
+      const stmt = this.parseExpression();
+      if (stmt) statements.push(stmt);
+      if (this.currentToken && this.currentToken.type === TokenTypes.SEMICOLON) {
+        this.nextToken();
+      }
+    }
+    return statements;
+  }
+
+  parseWithOptions() {
+    const opts = {};
+    while (this.currentToken && this.currentToken.type !== TokenTypes.EOF) {
+      if (this.currentToken.type !== TokenTypes.IDENTIFIER) break;
+      const key = this.currentToken.value;
+      this.nextToken();
+      if (this.currentToken && this.currentToken.type === TokenTypes.COLON) {
+        this.nextToken();
+      }
+      const value = this.parseExpression();
+      if (value !== undefined) opts[key] = value;
+      if (this.currentToken && this.currentToken.type === TokenTypes.COMMA) {
+        this.nextToken();
+        continue;
+      }
+      break;
+    }
+    return opts;
   }
   parseArgumentList() {
     const args = [];
@@ -3971,7 +4086,7 @@ class FormulaParser {
     const G = 'αβγδεζηθικλμνξοπρστυφχψω';
     const z = m[3] ? G.indexOf(m[3]) : this.anchor.z;
     const arrId = m[4] !== undefined ? (+m[4]) : this.anchor.arrId;
-    return { x, y, z, arrId };
+    return { x, y, z, arrId, raw: t };
   }
 
   parseRangeRef(s) {
@@ -3986,7 +4101,93 @@ class FormulaParser {
     const xb = toOneBased(raw[0], cur.x);
     const yb = toOneBased(raw[1], cur.y);
     const zb = toOneBased(raw[2], cur.z);
-    return { x: xb-1, y: yb-1, z: zb-1, arrId: +m[4] };
+    return { x: xb-1, y: yb-1, z: zb-1, arrId: +m[4], raw: String(s).trim() };
+  }
+}
+
+const GREEK_SUFFIXES = 'αβγδεζηθικλμνξοπρστυφχψω';
+
+function columnLabelFromIndex(x) {
+  let n = (Number.isFinite(x) ? x : 0) + 1;
+  if (n <= 0) return 'A';
+  let label = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    label = String.fromCharCode(65 + rem) + label;
+    n = Math.floor((n - 1) / 26);
+  }
+  return label;
+}
+
+function stringifyCellRef(node) {
+  if (!node) return '';
+  if (node.raw) return node.raw;
+  const col = columnLabelFromIndex(node.x ?? 0);
+  const row = ((node.y ?? 0) + 1);
+  const greek = (node.z !== undefined && node.z !== null && node.z >= 0) ? (GREEK_SUFFIXES[node.z] ?? '') : '';
+  const arr = (node.arrId !== undefined && node.arrId !== null) ? `^${node.arrId}` : '';
+  return `${col}${row}${greek}${arr}`;
+}
+
+function stringifyRangeRef(node) {
+  if (!node) return '';
+  if (node.raw) return node.raw;
+  const x = (node.x ?? 0) + 1;
+  const y = (node.y ?? 0) + 1;
+  const z = (node.z ?? 0) + 1;
+  const arr = node.arrId ?? 0;
+  return `@[${x},${y},${z},${arr}]`;
+}
+
+function stringifyRange(node) {
+  if (!node) return '';
+  const start = stringifyCellRef(node.start);
+  const end = stringifyCellRef(node.end);
+  return `${start}:${end}`;
+}
+
+function stringifyAstExpression(node, topLevel = false) {
+  if (!node) return topLevel ? '=' : '';
+  switch (node.type) {
+    case 'FunctionCall': {
+      const args = (node.arguments || []).map(arg => stringifyAstExpression(arg, false));
+      return (topLevel ? '=' : '') + `${node.name}(${args.join(', ')})`;
+    }
+    case 'Number': {
+      const text = Number.isFinite(node.value) ? String(node.value) : '0';
+      return topLevel ? `=${text}` : text;
+    }
+    case 'String': {
+      const escaped = typeof escForStringLiteral === 'function' ? escForStringLiteral(node.value ?? '') : String(node.value ?? '').replace(/"/g, '\\"');
+      const text = `"${escaped}"`;
+      return topLevel ? `=${text}` : text;
+    }
+    case 'CellRef': {
+      const ref = stringifyCellRef(node);
+      return topLevel ? `=${ref}` : ref;
+    }
+    case 'RangeRef': {
+      const ref = stringifyRangeRef(node);
+      return topLevel ? `=${ref}` : ref;
+    }
+    case 'Range': {
+      const text = stringifyRange(node);
+      return topLevel ? `=${text}` : text;
+    }
+    case 'Identifier':
+    case 'Macro': {
+      const text = node.value || '';
+      return topLevel ? `=${text}` : text;
+    }
+    case 'Literal': {
+      const v = node.value;
+      const text = (v === undefined || v === null) ? '""' : String(v);
+      return topLevel ? `=${text}` : text;
+    }
+    default: {
+      const text = String(node.value ?? '');
+      return topLevel ? `=${text}` : text;
+    }
   }
 }
 // Evaluator: walks AST and computes values
@@ -4151,9 +4352,39 @@ const Formula = (()=>{
       }
       
       if(ast.type === 'FunctionCall') {
+        const fnName = ast.name;
+        if((fnName === 'DO' || fnName === 'SEQ') && ast.block) {
+          const blockArgs = (ast.arguments || [])
+            .map(arg => stringifyAstExpression(arg, true))
+            .filter(s => typeof s === 'string' && s.trim().length > 1);
+          const optsRaw = {};
+          if(ast.withOptions) {
+            Object.entries(ast.withOptions).forEach(([k,v]) => {
+              try {
+                const norm = String(k || '').toLowerCase();
+                optsRaw[norm] = evaluator.convertAstToLegacy(v);
+              } catch(e) {
+                console.warn('Failed to convert DO option', k, e);
+              }
+            });
+          }
+          return { fn: fnName, args: blockArgs, raw: text, block: true, blockOptions: optsRaw, _astArgs: ast.arguments };
+        }
+        if(fnName === 'PIPE') {
+          const initialNode = ast.arguments && ast.arguments.length ? ast.arguments[0] : null;
+          const stageNodes = ast.arguments ? ast.arguments.slice(1) : [];
+          const initialExpr = initialNode ? stringifyAstExpression(initialNode, false) : '';
+          const stageExprs = stageNodes.map(arg => stringifyAstExpression(arg, false)).filter(Boolean);
+          return { fn: fnName, args: [], raw: text, pipeInitial: initialExpr, pipeStages: stageExprs, _pipeAstStages: stageNodes };
+        }
+
         // Convert AST to legacy-expected args WITHOUT auto-injecting modes
         let args = ast.arguments.map(arg => evaluator.convertAstToLegacy(arg));
-        return { fn: ast.name, args, raw: text };
+        const legacy = { fn: ast.name, args, raw: text };
+        if(ast.block) legacy.block = true;
+        if(ast.withOptions) legacy.blockOptions = ast.withOptions;
+        legacy._astArgs = ast.arguments;
+        return legacy;
       }
       
       // Fallback for other types
@@ -7608,18 +7839,114 @@ tag('HUSK',["ACTION","BLOCK"],(anchor,arr,ast,tx)=>{
 });
 
 // DO(f1[, f2[, ...]]): sequence multiple sub-formulas in order, return last
-// Each arg should be a string formula (like "=SET(...)").
+// Accepts legacy string arguments or block form (DO{ ... }).
 tag('DO',['ACTION'],(anchor,arr,ast,tx)=>{
-  const ownsTx = !tx;
-  if(ownsTx) tx = Write.start('do.sequence','DO wrapper');
-  for(const a of ast.args){
-    const f = String(Formula.valOf(a)||'');
-    if(f && f[0] === '='){
-      Formula.executeAt(anchor, f, tx);
+  const boolish = (value)=>{
+    if(typeof value === 'boolean') return value;
+    if(typeof value === 'number') return value !== 0;
+    if(typeof value === 'string'){
+      const trimmed = value.trim().toLowerCase();
+      if(trimmed === '' || trimmed === '0' || trimmed === 'false' || trimmed === 'no') return false;
+      return true;
+    }
+    return !!value;
+  };
+
+  const isBlock = !!ast.block;
+  const options = ast.blockOptions || {};
+  const atomicOpt = options.atomic;
+  const errorModeRaw = options['on_error'] ?? options['onerror'] ?? '';
+  const errorMode = String(errorModeRaw || '').trim().toLowerCase();
+  const continueOnError = (errorMode === 'continue' || errorMode === 'next' || errorMode === 'skip');
+
+  const wantsAtomic = tx ? true : (atomicOpt !== undefined ? boolish(atomicOpt) : !isBlock);
+  let innerTx = tx;
+  let ownsTx = false;
+  if(!innerTx && wantsAtomic){
+    innerTx = Write.start('do.sequence','DO wrapper');
+    ownsTx = true;
   }
+
+  const execTx = tx ? tx : (wantsAtomic ? innerTx : null);
+  const steps = Array.isArray(ast.args) ? ast.args : [];
+  let shouldAbort = false;
+
+  for(const step of steps){
+    let formulaText = '';
+    if(typeof step === 'string'){
+      formulaText = step;
+    } else {
+      formulaText = String(Formula.valOf(step) ?? '');
+    }
+    if(!formulaText) continue;
+    if(formulaText[0] !== '=') formulaText = `=${formulaText}`;
+    try{
+      Formula.executeAt(anchor, formulaText, execTx);
+    } catch(e){
+      console.warn('DO step error', e);
+      if(!continueOnError){
+        shouldAbort = true;
+        break;
+      }
+    }
   }
-  if(ownsTx) Write.commit(tx);
+
+  if(ownsTx){
+    if(!shouldAbort){
+      try{ Write.commit(innerTx); }
+      catch(e){ console.warn('Failed to commit DO transaction', e); }
+    }
+  }
   // silent: do not stamp the cell
+});
+
+// SEQ(...) is an alias for DO(...)
+tag('SEQ',['ACTION'],(anchor,arr,ast,tx)=>{
+  const proxyAst = { ...ast, fn: 'DO' };
+  return Fn['DO'].impl(anchor, arr, proxyAst, tx);
+});
+
+// PIPE(value, step1, step2, ...): compose expressions sequentially using '_' placeholder
+tag('PIPE',['ACTION'],(anchor,arr,ast,tx)=>{
+  const initialExpr = typeof ast.pipeInitial === 'string' ? ast.pipeInitial.trim() : '';
+  const stages = Array.isArray(ast.pipeStages) ? [...ast.pipeStages] : [];
+  const composeStage = (stage, prev)=>{
+    if(!stage) return prev;
+    const trimmed = stage.trim();
+    if(!trimmed) return prev;
+    if(/\b_\b/.test(trimmed)){
+      return trimmed.replace(/\b_\b/g, prev);
+    }
+    const idx = trimmed.lastIndexOf(')');
+    if(idx === -1){
+      return `${trimmed}(${prev})`;
+    }
+    const openIdx = trimmed.indexOf('(');
+    if(openIdx === -1 || idx < openIdx){
+      return `${trimmed}(${prev})`;
+    }
+    const beforeArgs = trimmed.slice(0, openIdx + 1);
+    const argsContent = trimmed.slice(openIdx + 1, idx);
+    const after = trimmed.slice(idx);
+    const prefix = argsContent.trim().length ? `${argsContent}, ` : '';
+    return `${beforeArgs}${prefix}${prev}${after}`;
+  };
+
+  let current = initialExpr;
+  if(!current && stages.length){
+    current = stages.shift().trim();
+  }
+  if(!current) return;
+  for(const stage of stages){
+    current = composeStage(stage, current);
+  }
+  if(!current) return;
+  const finalFormula = `=${current}`;
+  try{
+    Formula.runOnceAt(anchor, finalFormula, tx || null);
+  } catch(e){
+    console.warn('PIPE execution error', e);
+  }
 });
 
 tag('DELAY',['ACTION'],(anchor,arr,ast)=>{
@@ -17488,7 +17815,9 @@ const UI = (()=>{
       {name:'PRIORITY',tags:'META',syntax:'=PRIORITY(rangeOrRef, level[, mode[, sortJson]]])',params:'level: int · mode: "value"|"coord" · sortJson e.g. {"x":"asc","y":"desc"}',desc:'Registers a priority queue and sort hints for later conflict resolution.'},
       {name:'SET_SELECT',tags:'NAVIGATION',syntax:'=SET_SELECT(ref)',params:'target ref',desc:'Force-jump selection to target cell.'},
       {name:'COPY',tags:'ACTION IO',syntax:'=COPY(text)',params:'string text',desc:'Writes text to clipboard and shows a success toast.'},
-      {name:'DO',tags:'ACTION',syntax:'=DO(f1[, f2[, ...]])',params:'string formulas like "=SET(...)"',desc:'Runs sub-formulas in order and returns the last.'},
+      {name:'DO',tags:'ACTION',syntax:'=DO(f1[, f2[, ...]]) · or =DO{ stmt1; stmt2; } [WITH ...]',params:'strings like "=SET(...)" or brace blocks · optional WITH atomic/on_error · raw strings via `...` or <<<...>>>',desc:'Runs statements left-to-right, defaulting to per-step execution in blocks (set atomic:1 for one tx).'},
+      {name:'SEQ',tags:'ACTION',syntax:'=SEQ(...)',params:'alias of DO()',desc:'Shorthand alias for DO that accepts the same string or block forms.'},
+      {name:'PIPE',tags:'ACTION',syntax:'=PIPE(value, step1[, step2...])',params:'value: expression · steps: formulas using _ placeholder (or auto-appended as last arg)',desc:'Composes nested formulas by threading the prior expression into each step before running once.'},
       {name:'ALT_ADDRESS',tags:'PURE',syntax:'=ALT_ADDRESS([ref])',params:'optional ref',desc:'Returns numeric @[x,y,z,arrId].'},
       {name:'NAME',tags:'ACTION',syntax:'=NAME("Nickname") · or =NAME("Alias", Range) · or =NAME("FnName", FormulaText)',params:'nickname/alias/function-name · optional range or formula text',desc:'Names arrays (nickname), binds range aliases, or registers a custom formula in Library.'},
       {name:'PARAMETERS',tags:'ACTION',syntax:'=PARAMETERS(key1,val1[, key2,val2...])',params:'string keys paired with values',desc:'Binds parameter values used by custom formulas/prefabs.'},
@@ -18549,7 +18878,9 @@ const UI = (()=>{
       {name:'ADD',tags:'MATH',syntax:'=ADD(a[, b[, ...]])',params:'numbers or blocks (elementwise)',desc:'Sum (elementwise for blocks).'},
       {name:'MUL',tags:'MATH',syntax:'=MUL(a[, b[, ...]])',params:'numbers or blocks',desc:'Product (elementwise).'},
       {name:'CREATE',tags:'ACTION',syntax:'=CREATE(x,y,z[, "Name"[,"Id"]])',params:'dimensions (ints), optional nickname, optional explicit ID',desc:'Spawns a new array (respecting optional explicit id).'},
-      {name:'DO',tags:'ACTION',syntax:'=DO(f1[, f2[, ...]])',params:'string formulas like "=SET(...)"',desc:'Runs sub-formulas in order and returns the last.'},
+      {name:'DO',tags:'ACTION',syntax:'=DO(f1[, f2[, ...]]) · or =DO{ stmt1; stmt2; } [WITH ...]',params:'strings like "=SET(...)" or brace blocks · optional WITH atomic/on_error · raw strings via `...` or <<<...>>>',desc:'Runs statements left-to-right, defaulting to per-step execution in blocks (set atomic:1 for one tx).'},
+      {name:'SEQ',tags:'ACTION',syntax:'=SEQ(...)',params:'alias of DO()',desc:'Shorthand alias for DO that accepts the same string or block forms.'},
+      {name:'PIPE',tags:'ACTION',syntax:'=PIPE(value, step1[, step2...])',params:'value: expression · steps: formulas using _ placeholder (or auto-appended as last arg)',desc:'Composes nested formulas by threading the prior expression into each step before running once.'},
       {name:'SELF',tags:'NAVIGATION',syntax:'=SELF()',params:'—',desc:'Returns absolute @[x,y,z,arrId] of the host cell.'},
       {name:'DELETE',tags:'ACTION',syntax:'=DELETE(...targets)',params:'targets: array ids, refs, or "self"',desc:'Deletes arrays by id or ref; default self.'},
       {name:'COPY',tags:'ACTION IO',syntax:'=COPY(text)',params:'string text',desc:'Writes text to clipboard and shows a success toast.'},
