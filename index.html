@@ -756,6 +756,21 @@ function formulaHasChime(formula){
   }
 }
 
+function warmChimeIfNeeded(formula){
+  if(!formulaHasChime(formula)) return;
+  try{
+    if(typeof ChimeSystem !== 'undefined' && ChimeSystem && typeof ChimeSystem.ensureContext === 'function'){
+      ChimeSystem.ensureContext();
+      return;
+    }
+  }catch(e){ console.warn('Chime warm-up failed', e); }
+  try{
+    if(typeof window !== 'undefined' && window.CelliChimes && typeof window.CelliChimes.ensureContext === 'function'){
+      window.CelliChimes.ensureContext();
+    }
+  }catch{}
+}
+
 const ChimeSystem = (()=>{
   const NOTE_BASE = { C:-9, D:-7, E:-5, F:-4, G:-2, A:0, B:2 };
   let ctx = null;
@@ -4654,7 +4669,8 @@ const Formula = (()=>{
     }
     const cell=ch.cells.find(c=>c.x===anchor.x&&c.y===anchor.y&&c.z===anchor.z) || {value:'',formula:null};
     const src=(cell?.formula)||text||(cell?.value??'');
-    
+    warmChimeIfNeeded(src);
+
     // Try new AST parser first, fallback to legacy
     let ast, useAST = false, astRoot = null;
     try {
@@ -4822,6 +4838,7 @@ const Formula = (()=>{
   // --- runOnceAt: execute a formula at an anchor without stamping ---
   function runOnceAt(anchor, text, tx){
     const arr = Store.getState().arrays[anchor.arrId]; if(!arr) return;
+    if(text){ warmChimeIfNeeded(text); }
     const chKey = keyChunk(...Object.values(chunkOf(anchor.x,anchor.y,anchor.z)));
     let ch = arr.chunks[chKey];
     if(!ch){ Actions.resizeArrayIfNeeded(arr, anchor); ch = arr.chunks[chKey]; if(!ch) return; }
@@ -5691,6 +5708,7 @@ function normalizeActionFormula(raw){
 function executeActionFormula(anchor, action, label){
   const formula = normalizeActionFormula(action);
   if(!formula) return;
+  warmChimeIfNeeded(formula);
   const tx = Write.start(`meta.${label||'action'}`, `${label||'action'} handler`);
   try{
     Formula.runOnceAt(anchor, formula, tx);
@@ -7963,6 +7981,7 @@ tag('DO',['ACTION'],(anchor,arr,ast,tx)=>{
     }
     if(!formulaText) continue;
     if(formulaText[0] !== '=') formulaText = `=${formulaText}`;
+    warmChimeIfNeeded(formulaText);
     try{
       Formula.executeAt(anchor, formulaText, execTx);
     } catch(e){
@@ -8025,6 +8044,7 @@ tag('PIPE',['ACTION'],(anchor,arr,ast,tx)=>{
   }
   if(!current) return;
   const finalFormula = `=${current}`;
+  warmChimeIfNeeded(finalFormula);
   try{
     Formula.runOnceAt(anchor, finalFormula, tx || null);
   } catch(e){
@@ -8037,9 +8057,13 @@ tag('DELAY',['ACTION'],(anchor,arr,ast)=>{
   const raw = ast.args[1];
   let action = (typeof raw==='string')? raw : String(Formula.valOf(raw)||'');
   if(!action){ Actions.setCell(arr.id, anchor, '!ERR:DELAY:NO_ACTION', ast.raw, true); return; }
+  warmChimeIfNeeded(action);
   const ms = ticks * ACTION_TICK_MS;
   const target = {arrId:anchor.arrId||arr.id, x:anchor.x, y:anchor.y, z:anchor.z};
-  setTimeout(()=> executeActionFormula(target, action, 'delay'), ms);
+  setTimeout(()=>{
+    warmChimeIfNeeded(action);
+    executeActionFormula(target, action, 'delay');
+  }, ms);
   Actions.setCell(arr.id, anchor, `Delay:${ticks}`, ast.raw, true);
 });
 
@@ -8051,7 +8075,7 @@ tag('REPEAT',['ACTION'],(anchor,arr,ast)=>{
   if(count === 0){ console.warn('REPEAT infinite mode not supported outside continuous triggers; defaulting to 1'); count = 1; }
   const intervalTicks = ast.args[2]!==undefined ? Math.max(1, (+Formula.valOf(ast.args[2])|0)) : 1;
   const target = {arrId:anchor.arrId||arr.id, x:anchor.x, y:anchor.y, z:anchor.z};
-  const run = ()=> executeActionFormula(target, action, 'repeat');
+  const run = ()=>{ warmChimeIfNeeded(action); executeActionFormula(target, action, 'repeat'); };
   run();
   let remaining = count-1;
   if(remaining>0){
@@ -8096,6 +8120,7 @@ tag('EXEC_AT',["ACTION"],(anchor,arr,ast,tx)=>{
     throw new Error('EXEC_AT: invalid arguments');
   }
   if(!formula || formula[0] !== '=') formula = `=${formula}`;
+  warmChimeIfNeeded(formula);
   Formula.executeAt(target, formula, tx);
 });
 
