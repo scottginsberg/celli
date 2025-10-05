@@ -6304,7 +6304,16 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
     targetArr.params = targetArr.params || {};
     targetArr.params.physics = targetArr.params.physics || { enabled:false };
     const phys = targetArr.params.physics;
+    const debugLocked = !!phys.__debugOverride;
     const sources = phys.__sources || {};
+    if(debugLocked){
+      phys.__sources = sources;
+      if(respawnProvided){
+        const respawnInfo = resolveRespawn(targetArr);
+        respawnUpdates[targetArr.id] = respawnInfo || null;
+      }
+      return;
+    }
     const priority = (()=>{
       if(scope.mode === 'host') return 2;
       if(scope.mode === 'limit'){
@@ -9539,7 +9548,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   function getPreferredFacing(arr){
     // Prefer occlusion axis for consistency with d-pad/occlusion; fallback to camera-facing state
     let axisNum = null;
-    const oc = arr?._occlusionData || {};
+    const selection = Store.getState().selection;
+    const oc = (selection?.arrayId === arr?.id) ? (arr?._occlusionData || {}) : null;
     if(oc && (oc.facing || oc.axis)){
       const ch = oc.facing || oc.axis; // may be 'X'|'Y'|'Z'
       if(typeof ch === 'string') axisNum = axisCharToNum(ch);
@@ -9739,7 +9749,37 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       }
     });
   }
-  function clearOcclusion(arr){ try{ if(arr){ delete arr._occlusionData; } }catch{} }
+  function clearOcclusion(arr){
+    try{
+      if(!arr) return;
+      delete arr._occlusionData;
+      for(let z=0; z<(arr.size?.z ?? 0); z++){
+        ['ghost'].forEach(type=>{
+          const base=`${arr.id}:${z}:${type}`;
+          const rec=layerMeshes.get(base);
+          if(rec){
+            if(arr._frame) arr._frame.remove(rec.mesh);
+            else scene.remove(rec.mesh);
+            rec.mesh.geometry.dispose?.();
+            rec.mesh.material.dispose?.();
+            layerMeshes.delete(base);
+          }
+          const ekey=`${base}:edges`;
+          const er=layerMeshes.get(ekey);
+          if(er){
+            if(arr._frame) arr._frame.remove(er.mesh);
+            else scene.remove(er.mesh);
+            er.mesh.geometry.dispose?.();
+            er.mesh.material.dispose?.();
+            layerMeshes.delete(ekey);
+          }
+        });
+      }
+      for(let z=0; z<(arr.size?.z ?? 0); z++){
+        renderLayer(arr,z);
+      }
+    }catch{}
+  }
   let lastFocusedArrayId = null;
 
   function setupRenderer(){
@@ -10423,10 +10463,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           // Ensure all value sprites are visible; occlusion disabled in this mode
           try{ valueSprites.forEach((sp,key)=>{ if(String(key).startsWith(`${arr.id}:`)) sp.visible=true; }); }catch{}
           // Clear occlusion data so animate doesn't reuse it
-          try{ delete arr._occlusionData; }catch{}
+          try{ clearOcclusion(arr); }catch{}
         });
       } else if(mode==='hideEmpty'){
-        arrays.forEach(arr=>{ try{ applyHideEmptyMask(arr); delete arr._occlusionData; }catch{} });
+        arrays.forEach(arr=>{ try{ clearOcclusion(arr); applyHideEmptyMask(arr); }catch{} });
       } else { // standard
         arrays.forEach(arr=>{
           Object.values(arr.chunks||{}).forEach(ch=>{ try{ ch.ensureMesh?.(); ch.setLOD?.(1); rehydrateChunkInstances(arr, ch); }catch{} });
@@ -10440,6 +10480,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }
       }
       needsRender = true;
+      arrays.forEach(arr=>{
+        try{ updateArrayValueSpritePlacement(arr); }catch{}
+        try{ updateArrayLabelPlacement(arr); }catch{}
+      });
     }catch{}
   }
 
@@ -11534,7 +11578,18 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   }
 
   function updateFocus(sel){
-    if(!sel.arrayId||!sel.focus){ focusMarker.visible=false; updateAvatars(sel); return; }
+    if(!sel.arrayId||!sel.focus){
+      focusMarker.visible=false;
+      if(lastFocusedArrayId){
+        const prev = Store.getState().arrays[lastFocusedArrayId];
+        clearOcclusion(prev);
+        try{ Object.values(prev?.chunks||{}).forEach(ch=> ch._dirty = true); }catch{}
+      }
+      lastFocusedArrayId = null;
+      try{ if(typeof animate==='function' && animate.lastOcclusionState){ animate.lastOcclusionState.signature=''; } }catch{}
+      updateAvatars(sel);
+      return;
+    }
     const arr=Store.getState().arrays[sel.arrayId];
     // Skip if array is being deleted
     if(arr?._deleting) return;
@@ -12677,19 +12732,6 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     // Optimized occlusion: recompute only when camera-facing changes; clear stale occlusion on array/facing change
     if(!animate.lastOcclusionState) animate.lastOcclusionState = {};
     const s=Store.getState().selection;
-    const clearOcclusion = (arr)=>{
-      if(!arr) return;
-      delete arr._occlusionData;
-      // Remove all ghost groups explicitly so we don't leave transparent overlays
-      for(let z=0; z<arr.size.z; z++){
-        ['ghost'].forEach(type=>{
-          const base=`${arr.id}:${z}:${type}`;
-          const rec=layerMeshes.get(base); if(rec){ if(arr._frame) arr._frame.remove(rec.mesh); else scene.remove(rec.mesh); rec.mesh.geometry.dispose(); rec.mesh.material.dispose(); layerMeshes.delete(base); }
-          const ekey=`${base}:edges`; const er=layerMeshes.get(ekey); if(er){ if(arr._frame) arr._frame.remove(er.mesh); else scene.remove(er.mesh); er.mesh.geometry.dispose(); er.mesh.material.dispose(); layerMeshes.delete(ekey); }
-        });
-      }
-      for(let z=0; z<arr.size.z; z++) renderLayer(arr,z);
-    };
     const viewMode = (Store.getState().ui && Store.getState().ui.viewMode) || 'standard';
     if(viewMode==='standard' && s.arrayId && s.focus){
       const arr=Store.getState().arrays[s.arrayId];
@@ -12752,6 +12794,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           try{ applyGhostMaskToChunks(arr); }catch{}
         }
       }
+    } else {
+      const prevSig = animate.lastOcclusionState.signature;
+      if(prevSig){
+        const prevArrId = +prevSig.split(':')[0];
+        const prevArr = Store.getState().arrays[prevArrId];
+        clearOcclusion(prevArr);
+      }
+      animate.lastOcclusionState.signature = '';
+      animate.lastOcclusionState.blockedLayers = new Set();
     }
     // Update per-array timed gamestate animations and apply planned transforms
     try{
@@ -16263,11 +16314,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     try{
       const S = Store.getState();
       const sel = S.selection || {};
+      const viewModeNow = (S.ui && S.ui.viewMode) || 'standard';
       Object.values(S.arrays).forEach(arr=>{
         try{ Object.values(arr.chunks||{}).forEach(ch=>{ ch.ensureMesh?.(); ch.setLOD?.(1); rehydrateChunkInstances(arr, ch); }); }catch{}
         // Apply occlusion mask only to the focused array so others start solid
-        if(sel.arrayId === arr.id && sel.focus){
+        if(viewModeNow === 'standard' && sel.arrayId === arr.id && sel.focus){
           try{ computeOcclusion(arr, sel.focus); applyGhostMaskToChunks(arr); }catch{}
+        } else if(sel.arrayId === arr.id){
+          clearOcclusion(arr);
         }
         // Rebuild value sprites for visible cells (clear first to prevent duplicates)
         try{
