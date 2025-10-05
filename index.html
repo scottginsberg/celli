@@ -10850,52 +10850,58 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       return markBillboard(s);
     };
     const X=arr.size.x,Y=arr.size.y,Z=arr.size.z;
+    const scale = arrayVoxelScale(arr);
     const grabSize=0.7; // smaller rounded voxel for handle
-    const faceGap=grabSize*0.5 + 0.25; // axis label offset from faces
-    // Fine-tune label offsets relative to grab/cell centers
-    const LABEL_Y_DOWN = 0.12;  // nudge downwards a touch
-    const LABEL_X_RIGHT_Y_AXIS = 0.12; // Y-axis numbers slightly to the right
-    const LABEL_Z_BACK = 0.06; // slight push back along -Z when near grab
+    const halfStep = scale/2;
+    const origin=localPos(arr,0,0,0); // local center of A1α (top row)
+    const topFaceY = origin.y + halfStep;
+    const frontFaceZ = origin.z + halfStep;
+    const leftFaceX = origin.x - halfStep;
+    // Fine-tune label offsets relative to grab/cell centers. Scale with voxel spacing so labels track edges.
+    const LABEL_Y_DOWN = 0.12 * scale;  // nudge downwards a touch
+    const LABEL_X_RIGHT_Y_AXIS = 0.12 * scale; // Y-axis numbers slightly to the right
+    const LABEL_Z_BACK = 0.06 * scale; // slight push back along -Z when near grab
 
     // Only rebuild grab if not already present to avoid stamping
     let grab = arr.labels?.find(l=>l.userData?.type==='grab');
     if(!grab){
       const grabMat=new THREE.MeshBasicMaterial({color:COLORS.grab, depthWrite:true});
       grab=new THREE.Mesh(new RoundedBoxGeometry(grabSize,grabSize,grabSize,3,Math.min(.2,grabSize*.25)), grabMat);
-      const origin=localPos(arr,0,0,0); // local center of A1α (top row)
-    // Position grab so its bottom-back-right corner touches A1α's top-left-front corner
-    grab.position.set(origin.x - 0.5 - grabSize/2, origin.y + 0.5 + grabSize/2, origin.z + 0.5 + grabSize/2);
-    grab.userData={type:'grab', arrayId:arr.id};
+      grab.userData={type:'grab', arrayId:arr.id};
       // Parent grab to frame so it follows
       if(arr._frame) arr._frame.add(grab); else scene.add(grab);
       try{ if(arr._frame) arr._frame.userData.grab = grab; }catch{}
-      arr.labels.push(grab);
     }
+    const grabX = leftFaceX - grabSize/2;
+    const grabY = topFaceY + grabSize/2;
+    const grabZ = frontFaceZ + grabSize/2;
+    grab.position.set(grabX, grabY, grabZ);
+    if(!arr.labels.includes(grab)) arr.labels.push(grab);
 
     // Emit axes from grab handle faces, billboarded and aligned near the grab corner
     // X headers (A..) — emit from right face of grab, aligned to cell centers
     for(let x=0;x<X;x++){ 
       const s=mk(A1(x),'#ff1a1a'); s.userData.billboard=true;
-      const cellPos=localPos(arr,x,0,0); 
+      const cellPos=localPos(arr,x,0,0);
       // Align to the grab handle’s back face Z, and match Z label downshift on Y
-      s.position.set(cellPos.x, grab.position.y - LABEL_Y_DOWN, grab.position.z);
-      if(arr._frame) arr._frame.add(s); else scene.add(s); arr.labels.push(s); 
+      s.position.set(cellPos.x, grabY - LABEL_Y_DOWN, grabZ);
+      if(arr._frame) arr._frame.add(s); else scene.add(s); arr.labels.push(s);
     }
     // Y headers (1..) — top row is 1, increase downward
-    for(let y=0;y<Y;y++){ 
+    for(let y=0;y<Y;y++){
       const s=mk(String(y+1),'#00e676'); s.userData.billboard=true;
-      const cellPos=localPos(arr,0,y,0); 
+      const cellPos=localPos(arr,0,y,0);
       // Align near grab: slightly right on X, slightly down on Y, slightly back on Z
-      s.position.set(grab.position.x + LABEL_X_RIGHT_Y_AXIS, cellPos.y - LABEL_Y_DOWN, grab.position.z - LABEL_Z_BACK);
-      if(arr._frame) arr._frame.add(s); else scene.add(s); arr.labels.push(s); 
+      s.position.set(grabX + LABEL_X_RIGHT_Y_AXIS, cellPos.y - LABEL_Y_DOWN, grabZ - LABEL_Z_BACK);
+      if(arr._frame) arr._frame.add(s); else scene.add(s); arr.labels.push(s);
     }
     // Z headers (α..) — emit negatively along Z, aligned to the back XY face of grab
-    for(let z=0;z<Z;z++){ 
+    for(let z=0;z<Z;z++){
       const s=mk(greek(z),'#0066ff'); s.userData.billboard=true;
-      const cellPos=localPos(arr,0,0,z); 
+      const cellPos=localPos(arr,0,0,z);
       // Emit along Z and match Y with grab center, nudged slightly down
-      s.position.set(grab.position.x, grab.position.y - LABEL_Y_DOWN, cellPos.z); 
-      if(arr._frame) arr._frame.add(s); else scene.add(s); arr.labels.push(s); 
+      s.position.set(grabX, grabY - LABEL_Y_DOWN, cellPos.z);
+      if(arr._frame) arr._frame.add(s); else scene.add(s); arr.labels.push(s);
     }
 
     // In-scene D-Pad removed (use HUD)
