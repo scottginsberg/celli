@@ -8506,7 +8506,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           if(!arr) return;
           const nextParams = { ...(arr.params || {}) };
           const prevPhysics = nextParams.physics ? { ...nextParams.physics } : null;
-          snapshot.arrays.set(Number(id), prevPhysics);
+          snapshot.arrays.set(id, prevPhysics);
           nextParams.physics = { ...(nextParams.physics || {}), enabled:true };
           arrays[id] = { ...arr, params: nextParams };
         });
@@ -8524,7 +8524,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const arrays = { ...state.arrays };
       Object.entries(arrays).forEach(([id, arr])=>{
         if(!arr) return;
-        const prev = snapshot.arrays.get(Number(id));
+        const prev = snapshot.arrays.get(id);
         if(prev){
           const nextParams = { ...(arr.params || {}) };
           nextParams.physics = { ...prev };
