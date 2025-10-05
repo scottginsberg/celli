@@ -1884,7 +1884,13 @@ const Actions = {
       Store.setState({gridPhase:phase});
     }
     // Snap offset to global grid phase so cell centers line up across arrays
-    const snapAxis=(axis,val,sz)=>{ const phase = Store.getState().gridPhase[axis]||0; const base = (axis==='z') ? (sz/2 - 0.5) : (-(sz/2) + 0.5); return Math.round(val - base - phase) + base + phase; };
+    const arrScale = arrayVoxelScale(arr);
+    const snapAxis=(axis,val,sz)=>{
+      const phase = Store.getState().gridPhase[axis]||0;
+      const half = (sz * arrScale) / 2;
+      const base = (axis==='z') ? (half - arrScale/2) : (-(half) + arrScale/2);
+      return Math.round((val - base - phase)/arrScale) * arrScale + base + phase;
+    };
     arr.offset={ x:snapAxis('x', offset.x, size.x), y:snapAxis('y', offset.y, size.y), z:snapAxis('z', offset.z, size.z) };
     Store.setState({ arrays:{...S.arrays,[arrId]:arr}, nextArrayId:Math.max(S.nextArrayId, arrId+1), lastCreatedArrayId:arrId });
     Scene.renderArray(arr);
@@ -1900,8 +1906,17 @@ const Actions = {
     try{
       const arrays = Object.values(Store.getState().arrays).filter(a=>a && a.id!==arr.id);
       if(arrays.length){
-        let maxX=-Infinity; arrays.forEach(a=>{ const x=a.offset?.x||0; maxX=Math.max(maxX, x + a.size.x/2); });
-        const desired = { x: Math.round(maxX + 0.5 + arr.size.x/2 + 1), y: arr.offset.y, z: arr.offset.z };
+        let maxX=-Infinity;
+        arrays.forEach(a=>{
+          const x=a.offset?.x||0;
+          const s=arrayVoxelScale(a);
+          maxX=Math.max(maxX, x + (a.size.x*s)/2);
+        });
+        const desired = {
+          x: Math.round(maxX + arrScale + (arr.size.x*arrScale)/2),
+          y: arr.offset.y,
+          z: arr.offset.z
+        };
         setArrayOffset(arr, desired, {interactive:true});
       }
     }catch{}
@@ -4243,14 +4258,20 @@ const Formula = (()=>{
    Docking Utility
 =========================== */
 function dockOffsetFor(host, port='east', pad=1.0){
-  const {x:W,y:H,z:D} = host.size, o = host.offset || {x:0,y:0,z:0};
+  const scale = arrayVoxelScale(host);
+  const {x:W,y:H,z:D} = host.size;
+  const halfW = (W * scale) / 2;
+  const halfH = (H * scale) / 2;
+  const halfD = (D * scale) / 2;
+  const gap = pad * scale;
+  const o = host.offset || {x:0,y:0,z:0};
   const P = String(port||'east').toLowerCase();
-  const offs = (P==='north')  ? {x:0,       y:0,        z: ( D/2 + pad)} :
-               (P==='south')  ? {x:0,       y:0,        z:-( D/2 + pad)} :
-               (P==='east')   ? {x:( W/2 + pad), y:0,   z:0} :
-               (P==='west')   ? {x:-(W/2 + pad), y:0,   z:0} :
-               (P==='top')    ? {x:0,       y:( H/2 + pad), z:0} :
-                               {x:0,       y:-(H/2 + pad), z:0}; // bottom
+  const offs = (P==='north')  ? {x:0,       y:0,        z:  (halfD + gap)} :
+               (P==='south')  ? {x:0,       y:0,        z: -(halfD + gap)} :
+               (P==='east')   ? {x:(halfW + gap), y:0,   z:0} :
+               (P==='west')   ? {x:-(halfW + gap), y:0,   z:0} :
+               (P==='top')    ? {x:0,       y:(halfH + gap), z:0} :
+                               {x:0,       y:-(halfH + gap), z:0}; // bottom
   return {x:o.x+offs.x, y:o.y+offs.y, z:o.z+offs.z};
 }
 
@@ -5724,7 +5745,7 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
     }
   }
 
-  const { targets } = resolveArrayScopeTargets(arr, anchor, scopeArg);
+  const { targets, scope } = resolveArrayScopeTargets(arr, anchor, scopeArg);
   const respawnUpdates = {};
 
   const resolveRespawn = (targetArr)=>{
@@ -5818,11 +5839,30 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
     if(!targetArr) return;
     targetArr.params = targetArr.params || {};
     targetArr.params.physics = targetArr.params.physics || { enabled:false };
-    targetArr.params.physics.enabled = enabled;
-    if(jumpCount !== undefined) targetArr.params.physics.jumpCount = jumpCount;
-    if(gravityVec) targetArr.params.physics.gravity = gravityVec;
-    if(boundByFloor !== undefined) targetArr.params.physics.boundByArrayFloor = boundByFloor;
-    if(respawnProvided){
+    const phys = targetArr.params.physics;
+    const sources = phys.__sources || {};
+    const priority = (()=>{
+      if(scope.mode === 'host') return 2;
+      if(scope.mode === 'limit'){
+        return (targetArr.id === arr.id) ? 2 : 1;
+      }
+      return 0;
+    })();
+    const claim = (key, provided=true)=>{
+      if(!provided) return false;
+      const prev = sources[key] ?? -Infinity;
+      if(priority >= prev){
+        sources[key] = priority;
+        return true;
+      }
+      return false;
+    };
+    if(claim('enabled', true)) phys.enabled = enabled;
+    if(claim('jumpCount', jumpCount !== undefined)) phys.jumpCount = jumpCount;
+    if(claim('gravity', !!gravityVec)) phys.gravity = gravityVec ? { x:gravityVec.x, y:gravityVec.y, z:gravityVec.z } : undefined;
+    if(claim('boundByArrayFloor', boundByFloor !== undefined)) phys.boundByArrayFloor = boundByFloor;
+    phys.__sources = sources;
+    if(respawnProvided && claim('respawn', true)){
       const respawnInfo = resolveRespawn(targetArr);
       respawnUpdates[targetArr.id] = respawnInfo || null;
     }
@@ -6028,6 +6068,37 @@ tag('SET_ARRAY_POS',["SCENE","ACTION"],(anchor,arr,ast)=>{
   if(!target) { Actions.setCell(arr.id,anchor,'!ERR:ARR',ast.raw,true); return; }
   Scene.setArrayOffset(target,{x,y,z});
   Actions.setCell(arr.id,anchor,`Pos:${x},${y},${z}`,ast.raw,true);
+});
+tag('SCALE',["SCENE","VOXEL"],(anchor,arr,ast)=>{
+  const rawFactor = ast.args[0] !== undefined ? Number(Formula.valOf(ast.args[0])) : NaN;
+  const level = Number.isFinite(rawFactor) ? Math.max(1, Math.round(rawFactor)) : 1;
+  const units = arrayScaleUnitsFromLevel(level);
+  const scopeArg = ast.args[1];
+  const { targets } = resolveArrayScopeTargets(arr, anchor, scopeArg);
+  const touched = [];
+  targets.forEach(targetArr => {
+    if(!targetArr) return;
+    targetArr.params = targetArr.params || {};
+    targetArr.params.voxelScaleLevel = level;
+    targetArr.params.voxelScale = units;
+    touched.push(targetArr);
+  });
+  touched.forEach(targetArr => {
+    try{
+      targetArr._viewSig = '';
+      renderArray(targetArr);
+      try{
+        const off = targetArr.offset ? { x: targetArr.offset.x, y: targetArr.offset.y, z: targetArr.offset.z } : { x:0,y:0,z:0 };
+        Scene.setArrayOffset?.(targetArr, off, { interactive:true, _skipDock:true, _skipConnections:true });
+      }catch{}
+      Object.values(targetArr.chunks||{}).forEach(ch=>{ try{ ch.ensureMesh?.(); ch.setLOD?.(1); rehydrateChunkInstances(targetArr, ch); }catch{} });
+      updateArrayLabelPlacement(targetArr);
+      updateArrayValueSpritePlacement(targetArr);
+      debounceColliderRebuild(targetArr);
+    }catch(e){ console.warn('SCALE refresh failed', e); }
+  });
+  const stamp = `Scale×${units}`;
+  Actions.setCell(arr.id, anchor, stamp, ast.raw, true);
 });
 // Backward-compatible alias: TRANSLATE_ARRAY delegates to 3D_TRANSLATE
 tag('TRANSLATE_ARRAY',["SCENE"],(anchor,arr,ast)=> Fn['3D_TRANSLATE'].impl(anchor,arr,ast));
@@ -8809,8 +8880,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(!arr || !arr._frame) return;
       // Use the same face as occlusion/arrow mapping for consistency
       const face = getPreferredFacing(arr);
+      const scale = arrayVoxelScale(arr);
       const sign = face.sign;
-      const off = SPRITE_FACE_OFFSET * sign;
+      const offsetBase = SPRITE_FACE_OFFSET * scale;
+      const faceOffset = offsetBase * sign;
       // Iterate value sprites for this array only
       valueSprites.forEach((sprite, key)=>{
         if(!String(key).startsWith(`${arr.id}:`)) return;
@@ -8818,9 +8891,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         const [sx, sy, sz] = coords.split(',').map(Number);
         const base = localPos(arr, sx, sy, sz);
         let dx=0, dy=0, dz=0;
-        if(face.axis===2){ dz = off; }
-        else if(face.axis===0){ dx = off; }
-        else { dy = off; }
+        if(face.axis===2){ dz = faceOffset; }
+        else if(face.axis===0){ dx = faceOffset; }
+        else { dy = faceOffset; }
         sprite.position.set(base.x+dx, base.y+dy, base.z+dz);
         // Ensure sprite is visible when repositioned; occlusion masking will hide if blocked
       sprite.visible = true;
@@ -9153,23 +9226,32 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }catch{}
   }
   
+  function arrayScaleUnitsFromLevel(level){
+    const lvl = Math.max(1, Math.round(Number(level)||1));
+    return Math.pow(2, Math.max(0, lvl-1));
+  }
+  function arrayVoxelScale(arr){
+    if(!arr || typeof arr !== 'object') return 1;
+    const params = arr.params || {};
+    const direct = Number(params.voxelScale);
+    if(Number.isFinite(direct) && direct > 0) return direct;
+    const level = Number(params.voxelScaleLevel);
+    if(Number.isFinite(level) && level >= 1) return arrayScaleUnitsFromLevel(level);
+    return 1;
+  }
   function worldPos(arr,x,y,z){
-    const X=arr.size.x,Y=arr.size.y,Z=arr.size.z;
-    const base = new THREE.Vector3(
-      x - X/2 + .5,
-      (Y - 1 - y) - Y/2 + .5,  // Y flipped: y=0 is top, increases downward
-      (Z - 1 - z) - Z/2 + .5   // Z front→back with α at front (near camera)
-    );
+    const base = localPos(arr,x,y,z);
     const off = arr.offset||{x:0,y:0,z:0};
     base.x += off.x; base.y += off.y; base.z += off.z;
     return base;
   }
   function localPos(arr,x,y,z){
     const X=arr.size.x,Y=arr.size.y,Z=arr.size.z;
+    const scale = arrayVoxelScale(arr);
     return new THREE.Vector3(
-      x - X/2 + .5,
-      (Y - 1 - y) - Y/2 + .5,
-      (Z - 1 - z) - Z/2 + .5
+      (x - X/2 + .5) * scale,
+      ((Y - 1 - y) - Y/2 + .5) * scale,
+      ((Z - 1 - z) - Z/2 + .5) * scale
     );
   }
   function withinBounds(arr, coord){
@@ -9183,9 +9265,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       vec.x -= off.x; vec.y -= off.y; vec.z -= off.z;
     }
     const X=arr.size.x,Y=arr.size.y,Z=arr.size.z;
-    const x = Math.round(vec.x + X/2 - 0.5);
-    const y = Math.round((Y/2 - 0.5) - vec.y);
-    const z = Math.round((Z/2 - 0.5) - vec.z);
+    const scale = arrayVoxelScale(arr);
+    const inv = scale !== 0 ? 1/scale : 1;
+    const lx = vec.x * inv;
+    const ly = vec.y * inv;
+    const lz = vec.z * inv;
+    const x = Math.round(lx + X/2 - 0.5);
+    const y = Math.round((Y/2 - 0.5) - ly);
+    const z = Math.round((Z/2 - 0.5) - lz);
     return {x,y,z};
   }
   // GPU-first two-pass materials with local clipping planes
@@ -9222,19 +9309,23 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   // Whole-array highlight shell (single filled shell around the entire array)
   function ensureArrayHighlightShell(arr){
     try{
-      const want = { x:arr.size.x, y:arr.size.y, z:arr.size.z };
+      const scale = arrayVoxelScale(arr);
+      const want = { x:arr.size.x*scale, y:arr.size.y*scale, z:arr.size.z*scale, scale };
       const rebuild = !arr._arrayShell || !arr._arrayShell.userData ||
-        arr._arrayShell.userData.sx!==want.x || arr._arrayShell.userData.sy!==want.y || arr._arrayShell.userData.sz!==want.z;
+        arr._arrayShell.userData.sx!==want.x ||
+        arr._arrayShell.userData.sy!==want.y ||
+        arr._arrayShell.userData.sz!==want.z ||
+        arr._arrayShell.userData.scale!==want.scale;
       if(rebuild){
         // Dispose old
         try{ if(arr._arrayShell){ arr._arrayShell.parent?.remove(arr._arrayShell); arr._arrayShell.traverse(n=>{ try{ n.geometry?.dispose?.(); n.material?.dispose?.(); }catch{} }); } }catch{}
         const group = new THREE.Group();
-        group.userData = { sx:want.x, sy:want.y, sz:want.z };
+        group.userData = { sx:want.x, sy:want.y, sz:want.z, scale:want.scale };
         // Outer backface shell: reach mid-gap between arrays (±0.5 beyond faces)
         const geoOuter = new RoundedBoxGeometry(
-          arr.size.x + 1.20,
-          arr.size.y + 1.20,
-          arr.size.z + 1.20,
+          want.x + 1.20*scale,
+          want.y + 1.20*scale,
+          want.z + 1.20*scale,
           3, 0.20
         );
         const matOuter = new THREE.MeshBasicMaterial({
@@ -9489,11 +9580,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(!meshSolid) return;
       const list = ch.index2cell || ch.cells || [];
       const viewModeNow = (Store.getState().ui && Store.getState().ui.viewMode) || 'standard';
+      const scale = arrayVoxelScale(arr);
       for(let i=0;i<list.length;i++){
         const c = list[i]; if(!c) continue;
         // transform
         const p = localPos(arr, c.x, c.y, c.z);
-        temp.position.copy(p); temp.rotation.set(0,0,0); temp.scale.set(1,1,1); temp.updateMatrix();
+        temp.position.copy(p); temp.rotation.set(0,0,0); temp.scale.set(scale,scale,scale); temp.updateMatrix();
         const M = temp.matrix;
         // In hideEmpty mode, zero-scale empty instances; otherwise set normal transform
         if(viewModeNow==='hideEmpty'){
@@ -9548,6 +9640,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       // Determine focus layer from current selection for this array so it always renders as solid
       const sel = Store.getState().selection || {};
       const focusLayer = (sel.arrayId===arr.id && sel.focus) ? (axis==='X' ? sel.focus.x : axis==='Y' ? sel.focus.y : sel.focus.z) : null;
+      const scale = arrayVoxelScale(arr);
       Object.values(arr.chunks).forEach(ch=>{
         const meshSolid = ch.meshLOD1; const meshGhost = ch.meshGhost; const meshShell = ch.meshShell;
         if(!meshSolid || !ch.index2cell) return;
@@ -9559,7 +9652,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           const isBlocked = blocked.has(L);
           // Build the canonical transform exactly once
           const p = localPos(arr,c.x,c.y,c.z);
-          temp.position.copy(p); temp.rotation.set(0,0,0); temp.scale.set(1,1,1); temp.updateMatrix();
+          temp.position.copy(p); temp.rotation.set(0,0,0); temp.scale.set(scale,scale,scale); temp.updateMatrix();
           const M = temp.matrix.clone();
           // Solid shows when NOT blocked. It also shows on the focus layer even if it would be considered blocked.
           const showSolid = (!isBlocked) || isFocus;
@@ -9602,6 +9695,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   // Hide-Empty: zero-scale all empty instances for an array
   function applyHideEmptyMask(arr){
     try{
+      const scale = arrayVoxelScale(arr);
       Object.values(arr.chunks||{}).forEach(ch=>{
         try{
           ch.ensureMesh?.(); ch.setLOD?.(1);
@@ -9616,7 +9710,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             const hasColor = !!(fresh.meta && fresh.meta.color);
             const show = isFormula || hasVal || emitted || hasColor;
             const p = localPos(arr,c.x,c.y,c.z);
-            temp.position.copy(p); temp.rotation.set(0,0,0); temp.scale.set(1,1,1); temp.updateMatrix();
+            temp.position.copy(p); temp.rotation.set(0,0,0); temp.scale.set(scale,scale,scale); temp.updateMatrix();
             const M = temp.matrix.clone();
             if(ch.meshLOD1){ if(show){ ch.meshLOD1.setMatrixAt(i, M); } else { tempM.identity(); tempM.makeScale(0,0,0); ch.meshLOD1.setMatrixAt(i, tempM); } changedS=true; }
             if(ch.meshShell){ if(show){ ch.meshShell.setMatrixAt(i, M); } else { tempM.identity(); tempM.makeScale(0,0,0); ch.meshShell.setMatrixAt(i, tempM); } changedH=true; }
@@ -9837,6 +9931,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         const sorted = [...this.cells].sort((a,b)=> (a.z-b.z) || (a.y-b.y) || (a.x-b.x));
         this.index2cell = sorted; // expose for picking and ghost masking
         this.cellIndexMap = new Map();
+        const scale = arrayVoxelScale(this.array);
         for(let i=0;i<sorted.length;i++){
           const c = sorted[i];
           this.cellIndexMap.set(`${c.x},${c.y},${c.z}`, i);
@@ -9844,7 +9939,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           const p = localPos(this.array, c.x, c.y, c.z);
           temp.position.copy(p);
           temp.rotation.set(0,0,0);
-          temp.scale.set(1,1,1);
+          temp.scale.set(scale,scale,scale);
           temp.updateMatrix();
           this.instancedMesh.setMatrixAt(i, temp.matrix);
           // Start ghosts hidden (zero scale) until occlusion mask applies
@@ -10003,8 +10098,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       // Frame removed: using clipping planes instead of stencil slab
 
       // 2) Structural rounded-edge cage
+      const scale = arrayVoxelScale(arr);
       const frameGeom = new RoundedBoxGeometry(
-        arr.size.x+1.2, arr.size.y+1.2, arr.size.z+1.2, 3, 0.2
+        arr.size.x*scale+1.2*scale,
+        arr.size.y*scale+1.2*scale,
+        arr.size.z*scale+1.2*scale,
+        3, 0.2
       );
       const edges = new THREE.EdgesGeometry(frameGeom);
       // Remove wireframe cage per request (keep edges object construction for potential future use but do not add)
@@ -10017,7 +10116,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       try{
         const labelSprite = makeArrayLabelSprite(arr);
         // Front-left corner of the array bounds (grab handle lives here)
-        const corner = new THREE.Vector3(-(arr.size.x/2 + 0.4), arr.size.y/2 + 1.2, (arr.size.z/2 + 0.4));
+        const scale = arrayVoxelScale(arr);
+        const corner = new THREE.Vector3(
+          -(arr.size.x*scale/2 + 0.4*scale),
+          arr.size.y*scale/2 + 1.2*scale,
+          arr.size.z*scale/2 + 0.4*scale
+        );
         labelSprite.position.copy(corner);
         labelSprite.userData.billboard = true;
         // Left-align text from the corner. The sprite is center-anchored, so offset half the width along +X.
@@ -10218,6 +10322,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
 
     // Fill transforms & per-instance colors from live cell state (treat as atomic unit)
+    const scale = arrayVoxelScale(arr);
     for (let i = 0; i < count; i++) {
       const c = chunk.cells[i];
 
@@ -10228,15 +10333,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const key = `${arrayId}:${c.x},${c.y},${c.z}`;
       const emitted = !!(Store.getState().sourceByCell?.get?.(key));
       const custom = fresh?.meta?.color;
-      
+
       let hex = has ? COLORS.filled : COLORS.empty;
-      if (isFormula) hex = COLORS.formula; 
+      if (isFormula) hex = COLORS.formula;
       else if (emitted) hex = COLORS.emitted;
 
       // Use local position for frame-relative rendering; zero rotation/scale (centered)
       temp.position.copy(localPos(arr, c.x, c.y, c.z));
       temp.rotation.set(0,0,0);
-      temp.scale.set(1,1,1);
+      temp.scale.set(scale,scale,scale);
       temp.updateMatrix();
       mesh.setMatrixAt(i, temp.matrix);
 
@@ -10426,7 +10531,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     for(let i=0; i<cellData.length; i++){
       const {c, freshCell} = cellData[i];
       const pos = localPos(arr,c.x,c.y,c.z);
+      const scale = arrayVoxelScale(arr);
       temp.position.copy(pos);
+      temp.scale.set(scale, scale, scale);
       temp.updateMatrix();
       mesh.setMatrixAt(i, temp.matrix);
       if(useColors){
@@ -10602,6 +10709,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       });
     }
     // chunk meshes
+    const scale = arrayVoxelScale(arr);
     Object.values(arr.chunks).forEach(ch=>{
       if(ch.meshLOD2) ch.meshLOD2.visible = v && (ch.currentLOD===2);
       if(ch.meshLOD1){
@@ -10700,6 +10808,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const arr=Store.getState().arrays[sel.arrayId];
     // Skip if array is being deleted
     if(arr?._deleting) return;
+    const scale = arrayVoxelScale(arr);
     
     // One-time occlusion clear when focus array changes; do not repeatedly clear
     if(lastFocusedArrayId && lastFocusedArrayId !== sel.arrayId){
@@ -10739,7 +10848,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       else if(ay>az) dims.y=0.04;
       else dims.z=0.04;
     }
-    const geo=new THREE.BoxGeometry(dims.x,dims.y,dims.z);
+    const geo=new THREE.BoxGeometry(dims.x*scale,dims.y*scale,dims.z*scale);
     if(focusMarker.geometry) focusMarker.geometry.dispose?.();
     focusMarker.geometry=geo;
 
@@ -10768,12 +10877,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   }
   function centerOnArray(arr){ 
     if(!arr) return; 
-    const off=arr.offset||{x:0,y:0,z:0}; 
+    const off=arr.offset||{x:0,y:0,z:0};
+    const scale = arrayVoxelScale(arr);
     // Look at center of array, not just the offset
-    const centerY = off.y + arr.size.y / 2;
-    controls.target.set(off.x, centerY, off.z); 
+    const centerY = off.y + (arr.size.y * scale) / 2;
+    controls.target.set(off.x, centerY, off.z);
     // Position camera above and in front for good viewing angle
-    camera.position.set(off.x + arr.size.x*1.2, centerY + arr.size.y*1.5, off.z + arr.size.z*1.8); 
+    camera.position.set(
+      off.x + arr.size.x*scale*1.2,
+      centerY + arr.size.y*scale*1.5,
+      off.z + arr.size.z*scale*1.8
+    );
   }
 
   function centerOnPlayer(){
@@ -10859,6 +10973,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
     clearColliders(arr);
 
+    const scale = arrayVoxelScale(arr);
     const staticOcc = new Map();
     const grouped = new Map(); // id -> {cells:Map,key->cell,pivots:[]}
     let staticSolidCount = 0;
@@ -10969,8 +11084,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
               for(let xx=x; xx<=x2; xx++)
                 staticVisited.add(`${xx},${yy},${zz}`);
 
-          const hx=(x2-x+1)/2, hy=(y2-y+1)/2, hz=(z2-z+1)/2;
-          const center=worldPos(arr, x+hx-.5, y+hy-.5, z+hz-.5);
+          const hxCells=(x2-x+1)/2;
+          const hyCells=(y2-y+1)/2;
+          const hzCells=(z2-z+1)/2;
+          const center=worldPos(arr, x+hxCells-.5, y+hyCells-.5, z+hzCells-.5);
+          const hx=hxCells*scale, hy=hyCells*scale, hz=hzCells*scale;
           const col=RAPIER.ColliderDesc.cuboid(hx*0.9, hy*0.9, hz*0.9).setTranslation(center.x,center.y,center.z);
           col.setRestitution(0.0);
           col.setFriction(0.7);
@@ -11017,10 +11135,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       }
 
       boxes.forEach(box=>{
-        const hx=(box.x2-box.x1+1)/2;
-        const hy=(box.y2-box.y1+1)/2;
-        const hz=(box.z2-box.z1+1)/2;
-        const center=worldPos(arr, box.x1+hx-.5, box.y1+hy-.5, box.z1+hz-.5);
+        const hxCells=(box.x2-box.x1+1)/2;
+        const hyCells=(box.y2-box.y1+1)/2;
+        const hzCells=(box.z2-box.z1+1)/2;
+        const center=worldPos(arr, box.x1+hxCells-.5, box.y1+hyCells-.5, box.z1+hzCells-.5);
+        const hx=hxCells*scale, hy=hyCells*scale, hz=hzCells*scale;
         const rel = {x:center.x-origin.x, y:center.y-origin.y, z:center.z-origin.z};
         try{
           const desc = RAPIER.ColliderDesc.cuboid(hx*0.9, hy*0.9, hz*0.9).setTranslation(rel.x, rel.y, rel.z);
@@ -12469,7 +12588,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   function setArrayOffset(arr, next, opts){
     opts = opts||{}; const fast = !!opts.interactive; const skipDock = !!opts._skipDock; const skipConn = !!opts._skipConnections;
     // Snap to global phase
-    const snapAxis=(axis,val,sz)=>{ const phase = Store.getState().gridPhase[axis]||0; const base = (axis==='z') ? (arr.size[axis]/2 - 0.5) : (-(arr.size[axis]/2) + 0.5); return Math.round(val - base - phase) + base + phase; };
+    const arrScale = arrayVoxelScale(arr);
+    const snapAxis=(axis,val,sz)=>{
+      const phases = Store.getState().gridPhase || {};
+      const phase = phases[axis] || 0;
+      const half = (sz * arrScale) / 2;
+      const base = axis==='z' ? (half - arrScale/2) : (-(half) + arrScale/2);
+      if(arrScale === 0) return val;
+      return Math.round((val - base - phase)/arrScale) * arrScale + base + phase;
+    };
     const snapped={ x:snapAxis('x',next.x,arr.size.x), y:snapAxis('y',next.y,arr.size.y), z:snapAxis('z',next.z,arr.size.z) };
     const curOff = arr.offset||{x:0,y:0,z:0};
     // If no actual snap delta, do nothing (prevents wobble without movement)
@@ -12621,6 +12748,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   // Apply post-snap wiggle/tilt to give momentum feeling
   function applyWiggle(arr, {angle=0.11, lift=0.06, hold=170}={}){
     try{
+      const scale = arrayVoxelScale(arr);
       for(let zz=0; zz<arr.size.z; zz++){
         const recs=[];
         ['empty','ghost','filled','formula'].forEach(type=>{ const r=layerMeshes.get(`${arr.id}:${zz}:${type}`); if(r) recs.push(r); });
@@ -12630,9 +12758,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           for(let k=0;k<rec.index2cell.length;k++){
             const c=rec.index2cell[k]; if(!c) continue;
             const basePos = localPos(arr,c.x,c.y,c.z);
-            temp.position.copy(basePos).add(new THREE.Vector3(0,lift,0));
+            temp.position.copy(basePos).add(new THREE.Vector3(0,lift*scale,0));
             temp.rotation.set(angle, 0, -angle);
-            temp.scale.set(1,1,1);
+            temp.scale.set(scale,scale,scale);
             temp.updateMatrix();
             rec.mesh.setMatrixAt(k,temp.matrix);
           }
@@ -12641,7 +12769,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             for(let k=0;k<rec.index2cell.length;k++){
               const c=rec.index2cell[k]; if(!c) continue;
               temp.position.copy(localPos(arr,c.x,c.y,c.z));
-              temp.rotation.set(0,0,0); temp.scale.set(1,1,1); temp.updateMatrix();
+              temp.rotation.set(0,0,0); temp.scale.set(scale,scale,scale); temp.updateMatrix();
               rec.mesh.setMatrixAt(k,temp.matrix);
             }
             rec.mesh.instanceMatrix.needsUpdate=true;
@@ -13833,14 +13961,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
 
-  function computeJumpBudget(){
+  function computeJumpBudget(arrOverride=null){
     const avatarCfg = Store.getState().avatarPhysics || {};
     let max = Math.max(1, Math.round(Number(avatarCfg.jumpCount ?? 1)) || 1);
     let source = 'avatar';
     try{
       const sel = Store.getState().selection;
-      if(sel?.arrayId){
-        const arr = Store.getState().arrays[sel.arrayId];
+      const arr = arrOverride || (sel?.arrayId ? Store.getState().arrays[sel.arrayId] : null);
+      if(arr){
         const arrJump = arr?.params?.physics?.jumpCount;
         if(Number.isFinite(arrJump) && arrJump > 0){
           max = Math.max(1, Math.round(arrJump));
@@ -13850,8 +13978,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }catch{}
     return {max, source};
   }
-  function resetJumpBudget(){
-    const base = computeJumpBudget();
+  function resetJumpBudget(arrOverride=null){
+    const base = computeJumpBudget(arrOverride);
     jumpBudget = { ...base, remaining: base.max };
   }
   function consumeJump(){
@@ -14916,40 +15044,92 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
 
+  function locateArrayCollision(worldVec, {preferSelection=true}={}){
+    if(!worldVec) return null;
+    const arrays = Store.getState().arrays || {};
+    const sel = Store.getState().selection;
+    const consider = (arr)=>{
+      if(!arr || arr._deleting) return null;
+      let coord;
+      try{ coord = worldToCellCoord(arr, worldVec); }catch{ return null; }
+      if(!withinBounds(arr, coord)) return null;
+      let center = null;
+      try{ center = cellWorldPos(arr, coord.x, coord.y, coord.z); }catch{}
+      if(!center){
+        try{ center = worldPos(arr, coord.x, coord.y, coord.z); }catch{}
+      }
+      if(!center) return null;
+      const distSq = center.distanceToSquared(worldVec);
+      const cell = Formula.getCell({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z});
+      return { arr, coord, cell, center, distSq };
+    };
+
+    if(preferSelection && sel?.arrayId){
+      const preferred = consider(arrays[sel.arrayId]);
+      if(preferred) return preferred;
+    }
+
+    let best = null;
+    Object.values(arrays).forEach(arr=>{
+      const hit = consider(arr);
+      if(!hit) return;
+      if(!best || hit.distSq < best.distSq) best = hit;
+    });
+    return best;
+  }
+
+  function exitPhysicsOnNonEnabledArray(hit){
+    if(!hit || !hit.arr) return false;
+    const arr = hit.arr;
+    const enabled = !!arr?.params?.physics?.enabled;
+    if(enabled) return false;
+    try{
+      Actions.setSelection(arr.id, {x:hit.coord.x, y:hit.coord.y, z:hit.coord.z}, null, '3d');
+    }catch{}
+    try{ centerOnArray(arr); }catch{}
+    const physicsActive = !!Store.getState().scene?.physics;
+    if(physicsActive){
+      try{ togglePhysicsMode(); }catch{}
+    }
+    return true;
+  }
+
   function triggerTouchHandlers(){
     try{
-      const sel = Store.getState().selection;
-      if(!sel?.arrayId) return;
-      const arr = Store.getState().arrays[sel.arrayId];
-      if(!arr) return;
       const world = new THREE.Vector3(cachedPlayerPos.x, cachedPlayerPos.y, cachedPlayerPos.z);
-      const coord = worldToCellCoord(arr, world);
-      if(!withinBounds(arr, coord)){ lastTouchKey=null; return; }
-      const key = `${arr.id}:${coord.x},${coord.y},${coord.z}`;
+      const hit = locateArrayCollision(world);
+      if(!hit){ lastTouchKey=null; return; }
+      const key = `${hit.arr.id}:${hit.coord.x},${hit.coord.y},${hit.coord.z}`;
+      if(exitPhysicsOnNonEnabledArray(hit)){ lastTouchKey = key; return; }
       if(key===lastTouchKey) return;
       lastTouchKey = key;
-      const cell = Formula.getCell({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z});
+      const cell = hit.cell ?? Formula.getCell({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z});
       const action = getMetaAction(cell?.meta, 'on_touch');
-      if(action){ executeActionFormula({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z}, action, 'touch'); }
+      if(action){ executeActionFormula({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z}, action, 'touch'); }
     }catch(err){ console.warn('touch handler failed', err); }
   }
 
   function triggerLandHandler(){
     try{
-      const sel = Store.getState().selection;
-      if(!sel?.arrayId) return;
-      const arr = Store.getState().arrays[sel.arrayId];
-      if(!arr) return;
       const world = new THREE.Vector3(cachedPlayerPos.x, cachedPlayerPos.y - 0.6, cachedPlayerPos.z);
-      const coord = worldToCellCoord(arr, world);
-      if(!withinBounds(arr, coord)){ lastLandKey=null; return; }
-      const key = `${arr.id}:${coord.x},${coord.y},${coord.z}`;
+      const hit = locateArrayCollision(world);
+      if(!hit){ lastLandKey=null; return; }
+      const key = `${hit.arr.id}:${hit.coord.x},${hit.coord.y},${hit.coord.z}`;
       if(key===lastLandKey) return;
       lastLandKey = key;
-      resetJumpBudget();
-      const cell = Formula.getCell({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z});
+      resetJumpBudget(hit.arr);
+      if(exitPhysicsOnNonEnabledArray(hit)) return;
+      const cell = hit.cell ?? Formula.getCell({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z});
       const action = getMetaAction(cell?.meta, 'on_land');
-      if(action){ executeActionFormula({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z}, action, 'land'); }
+      if(action){ executeActionFormula({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z}, action, 'land'); }
+      const physicsEnabled = !!hit.arr?.params?.physics?.enabled;
+      if(!physicsEnabled){
+        try{ Actions.setSelection(hit.arr.id, {x:hit.coord.x,y:hit.coord.y,z:hit.coord.z}, null, '3d'); }catch{}
+        if(Store.getState().scene.physics){
+          try{ Scene.togglePhysicsMode(); }catch{}
+        }
+        try{ Scene.centerOnArray?.(hit.arr); }catch{}
+      }
     }catch(err){ console.warn('land handler failed', err); }
   }
 
@@ -15158,6 +15338,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const grabW = new THREE.Vector3(); grab.getWorldPosition(grabW);
 
     const camW = camera.position;
+    const scale = arrayVoxelScale(arr);
     const toCam = new THREE.Vector3().subVectors(camW, grabW);
     toCam.y = 0;
     if(toCam.lengthSq() < 1e-6){ toCam.set(0,0,1); }
@@ -15165,8 +15346,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
     // offsets: a little above in world Y, and a little toward the camera (horizontal only)
     const up = new THREE.Vector3(0,1,0);
-    const above   = up.multiplyScalar(0.35 + Math.abs(label.scale.y)*0.5);
-    const inFront = toCam.multiplyScalar(0.3);
+    const above   = up.multiplyScalar((0.35 + Math.abs(label.scale.y)*0.5) * scale);
+    const inFront = toCam.multiplyScalar(0.3 * scale);
 
     const targetW = grabW.clone().add(above).add(inFront);
 
@@ -15220,19 +15401,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       }
       const sel = Store.getState().selection;
       let spawnPos = {x: 0, y: 1, z: 0}; // Default spawn position
-      if(sel?.arrayId && sel.focus){
-        const arr = Store.getState().arrays[sel.arrayId];
-        if(arr){
-          const pos = worldPos(arr, sel.focus.x, sel.focus.y, sel.focus.z);
-          spawnPos = {x: pos.x, y: pos.y + 0.7, z: pos.z};
-          spawnPlayerAt(spawnPos.x, spawnPos.y, spawnPos.z);
-          console.log(`[PHYSICS] Spawned Celli at cell (${sel.focus.x},${sel.focus.y},${sel.focus.z}) -> world (${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)})`);
-        }
+      const selectedArr = sel?.arrayId ? Store.getState().arrays[sel.arrayId] : null;
+      if(selectedArr && sel?.focus){
+        const pos = worldPos(selectedArr, sel.focus.x, sel.focus.y, sel.focus.z);
+        spawnPos = {x: pos.x, y: pos.y + 0.7, z: pos.z};
+        spawnPlayerAt(spawnPos.x, spawnPos.y, spawnPos.z);
+        console.log(`[PHYSICS] Spawned Celli at cell (${sel.focus.x},${sel.focus.y},${sel.focus.z}) -> world (${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)})`);
       } else {
         // No selection, spawn at default position
         spawnPlayerAt(spawnPos.x, spawnPos.y, spawnPos.z);
       }
-      resetJumpBudget();
+      resetJumpBudget(selectedArr || null);
       // Position camera to show Celli from a good platformer angle
       if(camera && controls){
         // Target Celli's position (slightly above ground)
