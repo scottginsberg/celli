@@ -1389,6 +1389,7 @@ const Store = createStore((set,get)=>{
             }
           }catch(e){ console.warn('restoreTimedPreviewState error', e); }
         };
+        try{ Scene.restoreTimedPreviewState = restoreTimedPreviewState; }catch{}
         console.log('Loading state version:', data.version, 'from:', new Date(data.timestamp));
         
         // Clear existing scene visuals
@@ -2931,19 +2932,16 @@ tag('3D_TRANSLATE',["SCENE"],(anchor,arr,ast)=>{
 
   if(!targetArr){ Actions.setCell(arr.id, anchor, '!ERR:TARGET', ast.raw, true); return; }
 
+  const ak = aKey(anchor);
+  let existingTranslateRec = null;
+  try{ existingTranslateRec = (S.activeTranslations||new Map()).get(ak); }catch{}
+
   // If PREVIEW is on (in-array or 3D), do not apply now; animation system will read formulas
   let timed = null; try{ if(typeof Scene!=='undefined' && Scene.ensureTimedState) timed = Scene.ensureTimedState(targetArr); }catch{}
   const G0 = (Store.getState().scene||{}).timed3D;
   if((timed && timed.previewInArray) || (G0 && G0.preview)){
     return;
   }
-
-  // Non-repeat executable: if this anchor already applied a translate, skip
-  try{
-    const ak=aKey(anchor);
-    const existing=(Store.getState().activeTranslations||new Map()).get(ak);
-    if(existing && !cont){ Actions.setCell(arr.id, anchor, `3D_Translate:skip`, (ast.raw||`=3D_TRANSLATE(...)`)); return; }
-  }catch{}
 
   // Immediate translation respecting docking/parentage (apply to group as a unit)
   const group = [...(S.dockGroups||new Map()).values()].find(g=>g.members.includes(targetArr.id));
@@ -2953,23 +2951,84 @@ tag('3D_TRANSLATE',["SCENE"],(anchor,arr,ast)=>{
         : [...group.members])
     : [targetArr.id];
   const arrays = ids.map(id=>S.arrays[id]).filter(Boolean);
+
+  const cloneOffset=(src)=>({
+    x: Number.isFinite(+src?.x) ? Math.round(+src.x) : 0,
+    y: Number.isFinite(+src?.y) ? Math.round(+src.y) : 0,
+    z: Number.isFinite(+src?.z) ? Math.round(+src.z) : 0
+  });
+  const captureBases=(list)=> list.map(a=>({ id:a.id, offset:cloneOffset(a.offset||{x:0,y:0,z:0}) }));
+
+  let baseRecords=null;
+  if(existingTranslateRec && !cont){
+    const baseMap=new Map();
+    if(Array.isArray(existingTranslateRec.bases)){
+      existingTranslateRec.bases.forEach(entry=>{
+        if(entry==null) return;
+        const id=Number.isFinite(+entry.id)?(+entry.id|0):null;
+        if(id==null) return;
+        const src=entry.offset||entry.base||entry;
+        baseMap.set(id, cloneOffset(src));
+      });
+    }
+    if(existingTranslateRec.from){
+      const base=cloneOffset(existingTranslateRec.from);
+      const targetId=Number.isFinite(+existingTranslateRec.targetId)?(+existingTranslateRec.targetId|0):targetArr.id;
+      if(!baseMap.has(targetId)) baseMap.set(targetId, base);
+    }
+    arrays.forEach(a=>{
+      const base=baseMap.get(a.id);
+      if(base){ Scene.setArrayOffset(a, base, {interactive:true, _skipDock:true, _skipConnections:true}); }
+    });
+    baseRecords=captureBases(arrays);
+  } else if(existingTranslateRec && cont){
+    if(Array.isArray(existingTranslateRec.bases) && existingTranslateRec.bases.length){
+      baseRecords=existingTranslateRec.bases.map(entry=>({
+        id:Number.isFinite(+entry.id)?(+entry.id|0):targetArr.id,
+        offset:cloneOffset(entry.offset||entry.base||entry)
+      }));
+    } else {
+      baseRecords=captureBases(arrays);
+      if(existingTranslateRec.from){
+        const base=cloneOffset(existingTranslateRec.from);
+        const targetId=Number.isFinite(+existingTranslateRec.targetId)?(+existingTranslateRec.targetId|0):targetArr.id;
+        baseRecords=baseRecords.map(rec=> rec.id===targetId ? {id:rec.id, offset:base} : rec);
+      }
+    }
+  } else {
+    baseRecords=captureBases(arrays);
+  }
+
   arrays.forEach(a=>{
     const offA = a.offset||{x:0,y:0,z:0};
     const nextA = { x: Math.round((offA.x||0) + dx), y: Math.round((offA.y||0) + dy), z: Math.round((offA.z||0) + dz) };
     Scene.setArrayOffset(a, nextA, {interactive:true, _skipDock:true, _skipConnections:true});
   });
+  try{
+    arrays.forEach(a=>{
+      if(!a) return;
+      const timedLocal = a.params?.timed;
+      if(timedLocal){
+        timedLocal.baseOffset = { ...(a.offset||{x:0,y:0,z:0}) };
+        if(a._frame && a._frame.quaternion){
+          try{ timedLocal.baseQuat = a._frame.quaternion.clone(); }catch{}
+        }
+      }
+    });
+  }catch{}
   Actions.setCell(arr.id, anchor, `Moved:${dx},${dy},${dz}`, ast.raw, true);
   // Record for revert when this anchor's formula is cleared; suppress repeat execution
   try{
     const S=Store.getState();
-    const ak=aKey(anchor);
     const map=new Map(S.activeTranslations||new Map());
-    map.set(ak, { targetId: targetArr.id, from:{...off}, delta:{dx,dy,dz} });
+    const basesCloned = (baseRecords||[]).map(rec=>({ id:rec.id, offset:{...rec.offset} }));
+    const targetBase = basesCloned.find(rec=>rec.id===targetArr.id)?.offset || cloneOffset(targetArr.offset||{x:0,y:0,z:0});
+    map.set(ak, { targetId: targetArr.id, from:{...targetBase}, delta:{dx,dy,dz}, bases:basesCloned });
     Store.setState({activeTranslations:map});
     // Persist revert info in meta so refresh can restore revert behavior
     const txw = Write.start('mark.3d.translate','mark');
     const cell = Formula.getCell(anchor) || {value:'',formula:null,meta:{}};
-    Write.set(txw, arr.id, {x:anchor.x,y:anchor.y,z:anchor.z}, { value: cell.value, formula: cell.formula, meta:{...(cell.meta||{}), appliedTranslate:{ targetId: targetArr.id, from: off, delta:{dx,dy,dz} } } });
+    Write.set(txw, arr.id, {x:anchor.x,y:anchor.y,z:anchor.z}, { value: cell.value, formula: cell.formula, meta:{...(cell.meta||{}), appliedTranslate:{ targetId: targetArr.id, from: targetBase, delta:{dx,dy,dz}, bases:basesCloned } } });
     Write.commit(txw);
   }catch{}
 });
@@ -3005,6 +3064,23 @@ tag('3D_ROTATE',["SCENE"],(anchor,arr,ast)=>{
         : [...group.members])
     : [targetArr.id];
   const arrays = ids.map(id=>S.arrays[id]).filter(Boolean);
+  const ak=aKey(anchor);
+
+  let existingRotationRec=null;
+  try{ existingRotationRec = (S.activeRotations||new Map()).get(ak); }catch{}
+  if(existingRotationRec){
+    const revertIds = Array.isArray(existingRotationRec.ids) && existingRotationRec.ids.length
+      ? existingRotationRec.ids
+      : [existingRotationRec.targetId ?? targetArr.id];
+    const revertArrays = revertIds.map(id=>S.arrays[id]).filter(Boolean);
+    revertArrays.forEach(a=>{ if(a && !a._frame) Scene.renderArray(a); });
+    const pivotArrPrev = S.arrays[existingRotationRec.targetId] || targetArr;
+    if(pivotArrPrev){
+      const pivotPrev = Scene.cellWorldPos(pivotArrPrev, existingRotationRec.pivot?.x||0, existingRotationRec.pivot?.y||0, existingRotationRec.pivot?.z||0);
+      revertArrays.forEach(a=> Scene.rotateArrayAround(a, pivotPrev, -(existingRotationRec.steps?.sx||0), -(existingRotationRec.steps?.sy||0), -(existingRotationRec.steps?.sz||0)));
+      revertArrays.forEach(a=>{ if(a?._frame){ a.offset={ x:Math.round(a._frame.position.x), y:Math.round(a._frame.position.y), z:Math.round(a._frame.position.z) }; } });
+    }
+  }
 
   // Timed preview queue (in-array or 3D)
   const timed0 = (typeof Scene!=='undefined' && Scene.ensureTimedState) ? Scene.ensureTimedState(arr) : (arr.params&&arr.params.timed);
@@ -3022,10 +3098,21 @@ tag('3D_ROTATE',["SCENE"],(anchor,arr,ast)=>{
   // Apply atomic rotation
   arrays.forEach(a=> Scene.rotateArrayAround(a, pivotWorld, sx, sy, sz));
   arrays.forEach(a=>{ if(a._frame){ a.offset={ x:Math.round(a._frame.position.x), y:Math.round(a._frame.position.y), z:Math.round(a._frame.position.z) }; }});
+  try{
+    arrays.forEach(a=>{
+      if(!a) return;
+      const timedLocal = a.params?.timed;
+      if(timedLocal){
+        timedLocal.baseOffset = { ...(a.offset||{x:0,y:0,z:0}) };
+        if(a._frame && a._frame.quaternion){
+          try{ timedLocal.baseQuat = a._frame.quaternion.clone(); }catch{}
+        }
+      }
+    });
+  }catch{}
 
   // Track for revert when this anchor formula is removed
   try{
-    const ak=aKey(anchor);
     const rec={targetId:targetArr.id, ids:[...ids], pivot:{...pivotRef}, steps:{sx,sy,sz}};
     const map=new Map(S.activeRotations||new Map()); map.set(ak, rec); Store.setState({activeRotations:map});
   }catch{}
@@ -4245,15 +4332,38 @@ const Formula = (()=>{
         const clearing = newFormulaStr==='';
         const formulaChanged = (prevFormula!==null && newFormulaStr!==prevFormulaStr);
         if(recT && (clearing || formulaChanged) && !suppressedT){
-          const targ=S.arrays[recT.targetId];
-          if(targ){
-            // Differential revert: subtract only this cell's delta to preserve stacking
-            const off = targ.offset||{x:0,y:0,z:0};
-            const d = recT.delta || {dx:0,dy:0,dz:0};
-            const nx = Math.round((off.x||0) - (d.dx||0));
-            const ny = Math.round((off.y||0) - (d.dy||0));
-            const nz = Math.round((off.z||0) - (d.dz||0));
-            setArrayOffset(targ, {x:nx,y:ny,z:nz}, {interactive:true});
+          const stateNow = Store.getState();
+          const baseEntries = Array.isArray(recT.bases) ? recT.bases : [];
+          let restored=false;
+          if(baseEntries.length){
+            const seen=new Set();
+            baseEntries.forEach(entry=>{
+              if(!entry) return;
+              const id = Number.isFinite(+entry.id) ? (+entry.id|0) : null;
+              if(id==null || seen.has(id)) return;
+              const arrTarget = stateNow.arrays?.[id];
+              if(!arrTarget) return;
+              const src = entry.offset || entry.base || entry;
+              const base={
+                x: Number.isFinite(+src?.x) ? Math.round(+src.x) : 0,
+                y: Number.isFinite(+src?.y) ? Math.round(+src.y) : 0,
+                z: Number.isFinite(+src?.z) ? Math.round(+src.z) : 0
+              };
+              setArrayOffset(arrTarget, base, {interactive:true, _skipDock:true, _skipConnections:true});
+              seen.add(id);
+              restored=true;
+            });
+          }
+          if(!restored){
+            const targ=stateNow.arrays?.[recT.targetId];
+            if(targ){
+              const base = recT.from || {x:0,y:0,z:0};
+              const nx = Number.isFinite(+base.x) ? Math.round(+base.x) : 0;
+              const ny = Number.isFinite(+base.y) ? Math.round(+base.y) : 0;
+              const nz = Number.isFinite(+base.z) ? Math.round(+base.z) : 0;
+              setArrayOffset(targ, {x:nx,y:ny,z:nz}, {interactive:true});
+              restored=true;
+            }
           }
           const map=new Map(S.activeTranslations); map.delete(ak); Store.setState({activeTranslations:map});
         }
