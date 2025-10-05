@@ -5267,6 +5267,89 @@ tag('DISPLAY_AS',['ACTION'],(anchor,arr,ast)=>{
   Scene.updateValueSprite(arr, t.x, t.y, t.z, ch.cells[idx]);
   // silent: do not stamp anchor
 });
+tag('BOUNCE',['ACTION'],(anchor,arr,ast,tx)=>{
+  const valOf = Formula.valOf;
+  const modeRaw = Math.round(Number(valOf(ast.args[0] ?? 0)) || 0);
+  const bounceType = modeRaw === 1 ? 'land' : 'walk';
+  const heightRaw = Number(valOf(ast.args[1] ?? 0));
+  const height = Number.isFinite(heightRaw) ? Math.max(0, heightRaw) : 0;
+  const targets = collectTargetCells(ast.args[2], anchor);
+  const info = ensureTransaction(tx, 'scene.bounce', 'Configure bounce pads');
+  const formatHeight = (value)=>{
+    const num = Number(value);
+    if(!Number.isFinite(num) || num <= 0) return 'OFF';
+    const precision = Math.abs(num) >= 10 ? 1 : 2;
+    return num.toFixed(precision).replace(/\.0+$/,'').replace(/(\.[0-9]*?)0+$/,'$1');
+  };
+  targets.forEach(target=>{
+    mutateCellMeta(info.tx, target, meta=>{
+      const next = {...meta};
+      let rawConfig = next.bounceConfig ?? next.bounce ?? null;
+      if(typeof rawConfig === 'string'){
+        try{ rawConfig = JSON.parse(rawConfig); }catch{}
+      }
+      const config = {};
+      if(rawConfig && typeof rawConfig === 'object'){
+        if(Array.isArray(rawConfig)){
+          if(Number.isFinite(+rawConfig[0])) config.walk = +rawConfig[0];
+          if(Number.isFinite(+rawConfig[1])) config.land = +rawConfig[1];
+        } else {
+          if(Number.isFinite(+rawConfig.walk)) config.walk = +rawConfig.walk;
+          if(Number.isFinite(+rawConfig.land)) config.land = +rawConfig.land;
+          if(Number.isFinite(+rawConfig.onWalk)) config.walk = +rawConfig.onWalk;
+          if(Number.isFinite(+rawConfig.onLand)) config.land = +rawConfig.onLand;
+        }
+      }
+      if(height > 0){
+        config[bounceType] = height;
+      } else {
+        delete config[bounceType];
+      }
+      ['walk','land'].forEach(key=>{
+        const val = config[key];
+        if(!Number.isFinite(val) || val <= 0){
+          delete config[key];
+        } else {
+          config[key] = Number(val);
+        }
+      });
+      if(Object.keys(config).length){
+        next.bounceConfig = config;
+      } else {
+        delete next.bounceConfig;
+      }
+      if(next.bounce !== undefined) delete next.bounce;
+      const labelParts = [];
+      if(Number.isFinite(config.walk) && config.walk > 0){
+        labelParts.push(`W:${formatHeight(config.walk)}`);
+      }
+      if(Number.isFinite(config.land) && config.land > 0){
+        labelParts.push(`L:${formatHeight(config.land)}`);
+      }
+      if(labelParts.length){
+        next.displayText = `⬆️ ${labelParts.join(' ')}`;
+        next.bounceLabel = true;
+      } else if(next.bounceLabel){
+        delete next.displayText;
+        delete next.bounceLabel;
+      }
+      return next;
+    });
+  });
+  finalizeTransaction(info);
+  targets.forEach(target=>{
+    try{
+      const targetArr = Store.getState().arrays[target.arrId];
+      if(!targetArr) return;
+      if(window.UI?.renderSheetCell) window.UI.renderSheetCell(targetArr, target.x, target.y, target.z);
+      const updated = Formula.getCell({arrId:target.arrId,x:target.x,y:target.y,z:target.z});
+      if(updated) Scene.updateValueSprite(targetArr, target.x, target.y, target.z, updated);
+    }catch{}
+  });
+  const summary = height > 0 ? formatHeight(height) : 'OFF';
+  const suffix = targets.length > 1 ? `×${targets.length}` : '';
+  Actions.setCell(arr.id, anchor, `bounce:${bounceType}:${summary}${suffix}`, ast.raw, true);
+});
 
 function __collectMetaTargets(rangeArg, anchor, arr){
   if(rangeArg && rangeArg.kind==='range'){
@@ -8376,12 +8459,16 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   let lastLandKey = null;
   let landingCellKey = null;
   let landingCellAnim = null;
+  let surfaceBounceState = { key:null, depression:0, intensity:1 };
+  let skipWalkBounceUntil = 0;
 
   function resetContactCache(){
     lastTouchKey = null;
     lastLandKey = null;
     wasGroundedLastFrame = false;
     cancelLandingCellAnimation();
+    surfaceBounceState = { key:null, depression:0, intensity:1 };
+    skipWalkBounceUntil = 0;
   }
 
   const FancyDefaults = {
@@ -14515,12 +14602,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     if(physicsMode && playerBody && rapierWorld){
       try{
         const translation = playerBody.translation();
-        celli.position.set(translation.x, translation.y - 0.3, translation.z); // Lower visual to sit on cells
+        const basePosX = translation.x;
+        const basePosY = translation.y - 0.3;
+        const basePosZ = translation.z;
+        let verticalOffset = 0;
         celli.visible = true;
-        
+
         // Stretch and squash animation during jump/fall with anticipation
         const baseScale = 0.7;
-        
+
         // Anticipation squash when preparing to jump
         if(anticipationSquashTime > 0){
           const squashY = 0.65; // Squash down to build energy
@@ -14543,7 +14633,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           landingSquashTime = 0;
         }
         // Landing squash and recovery
-        else if(Math.abs(jumpVelocity) < 0.5 && translation.y <= 0.8){
+        else if(Math.abs(jumpVelocity) < 0.5){
           if(landingSquashTime === 0){
             landingSquashTime = 1; // Trigger landing squash
           }
@@ -14570,6 +14660,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
               }
             }
             celli.scale.set(baseScale * expandXZ, baseScale * squashY, baseScale * expandXZ);
+            const depression = Math.max(0, 1 - Math.min(squashY, 1));
+            verticalOffset = Math.max(verticalOffset, Math.min(0.5, depression * 0.32));
             landingSquashTime++;
           } else {
             // Fully recovered to normal
@@ -14581,7 +14673,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           celli.scale.set(baseScale, baseScale, baseScale);
           if(Math.abs(jumpVelocity) > 1) landingSquashTime = 0; // Reset if airborne
         }
-        
+
+        if(surfaceBounceState.key && (surfaceBounceState.key === lastLandKey || surfaceBounceState.key === lastTouchKey)){
+          const intensityScale = Math.max(0.2, 0.32 + 0.18 * (surfaceBounceState.intensity - 1));
+          const depression = Math.max(0, Math.min(0.5, surfaceBounceState.depression * intensityScale));
+          verticalOffset = Math.max(verticalOffset, depression);
+        }
+
+        celli.position.set(basePosX, basePosY - verticalOffset, basePosZ);
+
         // Physics mode: face movement direction
         if(mouseLookEnabled){
           // Face the mouse look direction
@@ -15992,13 +16092,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     landingCellKey = null;
   }
 
-  function startLandingCellBounce(arr, coord){
+  function startLandingCellBounce(arr, coord, strength=1){
     if(!arr || !coord) return;
     const key = `${arr.id}:${coord.x},${coord.y},${coord.z}`;
     if(landingCellAnim){
       if(landingCellAnim.key === key){ landingCellAnim.cancel(); }
       else { landingCellAnim.cancel(); }
     }
+    const clampedStrength = Math.max(0.3, Math.min(Number(strength)||1, 2.5));
     const records = [];
     const pushRecord = (mesh, idx)=>{
       if(!mesh || !Number.isInteger(idx) || idx < 0) return;
@@ -16046,6 +16147,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     if(!records.length){
       landingCellAnim = null;
       landingCellKey = key;
+      if(surfaceBounceState.key === key){
+        surfaceBounceState = { key:null, depression:0, intensity:1 };
+      }
       return;
     }
     const duration = 240;
@@ -16053,6 +16157,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     let cancelled = false;
     let frameId = null;
     const scaleMatrix = new THREE.Matrix4();
+    const maxSquashDelta = Math.min(0.35 * clampedStrength, 0.65);
+    const expandDelta = Math.min(0.3 * clampedStrength, 0.55);
+    const overshootAmount = Math.min(0.03 * clampedStrength, 0.06);
+    const squashRecoveryDelta = Math.min(0.38 * clampedStrength, 0.6);
+    const expandOvershoot = Math.min(0.02 * clampedStrength, 0.08);
+    const baseMinSquash = 1 - maxSquashDelta;
+    const squashRecoveryTarget = Math.min(1 + overshootAmount, baseMinSquash + squashRecoveryDelta);
+    const expandPeak = 1 + expandDelta;
+    const expandEnd = 1 - expandOvershoot;
 
     const restore = ()=>{
       records.forEach(rec=>{
@@ -16062,6 +16175,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }catch{}
       });
       needsRender = true;
+      if(surfaceBounceState.key === key){
+        surfaceBounceState = { key:null, depression:0, intensity:1 };
+      }
     };
 
     const applyScale = (sx, sy, sz)=>{
@@ -16075,6 +16191,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }catch{}
       });
       needsRender = true;
+      surfaceBounceState = {
+        key,
+        depression: Math.max(0, 1 - Math.min(sy, 1)),
+        intensity: clampedStrength
+      };
     };
 
     const step = (ts)=>{
@@ -16084,17 +16205,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       let squashY, stretchXZ;
       if(t < 0.3){
         const impactT = t / 0.3;
-        squashY = 1 - 0.18 * impactT;
-        stretchXZ = 1 + 0.12 * impactT;
+        squashY = 1 - maxSquashDelta * impactT;
+        stretchXZ = 1 + expandDelta * impactT;
       } else {
         const recoveryT = Math.min(1, Math.max(0, (t - 0.3) / 0.7));
         const easeOut = 1 - Math.pow(1 - recoveryT, 3);
-        squashY = 0.82 + 0.2 * easeOut;
-        stretchXZ = 1.12 - 0.14 * easeOut;
+        squashY = baseMinSquash + (squashRecoveryTarget - baseMinSquash) * easeOut;
+        stretchXZ = expandPeak + (expandEnd - expandPeak) * easeOut;
         if(recoveryT > 0.85){
           const overshootT = (recoveryT - 0.85) / 0.15;
           const clamped = Math.min(1, Math.max(0, overshootT));
-          squashY += 0.02 * Math.sin(clamped * Math.PI);
+          squashY += overshootAmount * Math.sin(clamped * Math.PI);
         }
       }
       applyScale(stretchXZ, squashY, stretchXZ);
@@ -16115,8 +16236,98 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     };
 
     landingCellKey = key;
+    surfaceBounceState = { key, depression:0, intensity: clampedStrength };
     landingCellAnim = { key, cancel };
     frameId = requestAnimationFrame(step);
+  }
+
+  function parseBounceMeta(meta){
+    if(!meta) return { walk:0, land:0 };
+    const normalized = normalizeMetaKeys(meta) || {};
+    let raw = normalized.bounceConfig ?? normalized.bounce ?? null;
+    if(typeof raw === 'string'){
+      try{
+        raw = JSON.parse(raw);
+      }catch{
+        const parts = String(raw)
+          .split(/[;,\s]+/)
+          .map(part=>part.trim())
+          .filter(Boolean);
+        if(parts.length){
+          raw = {};
+          if(parts.length === 1){
+            raw.land = parts[0];
+          } else {
+            raw.walk = parts[0];
+            raw.land = parts[1];
+          }
+        }
+      }
+    }
+    const cfg = { walk:0, land:0 };
+    const assign = (value, key)=>{
+      if(value === undefined || value === null) return;
+      const num = Number(value);
+      if(Number.isFinite(num) && num > 0){
+        cfg[key] = Math.max(0, num);
+      }
+    };
+    if(raw && typeof raw === 'object'){
+      if(Array.isArray(raw)){
+        assign(raw[0], 'walk');
+        assign(raw[1], 'land');
+      } else {
+        assign(raw.walk ?? raw.onWalk, 'walk');
+        assign(raw.land ?? raw.onLand, 'land');
+      }
+    } else {
+      assign(raw, 'land');
+    }
+    return cfg;
+  }
+
+  function bounceIntensityFromHeight(height){
+    const h = Math.max(0, Number(height) || 0);
+    return Math.max(0.3, Math.min(1 + Math.min(h, 4) * 0.35, 2.5));
+  }
+
+  function applyBounceImpulse(height, mode='land'){
+    if(!playerBody || !rapierWorld) return false;
+    const h = Math.max(0, Number(height) || 0);
+    if(h <= 0) return false;
+    let gravityMag = 20;
+    try{
+      const gy = rapierWorld.gravity?.y;
+      if(Number.isFinite(gy)) gravityMag = Math.max(0.001, Math.abs(gy));
+    }catch{}
+    const bounceVel = Math.sqrt(Math.max(0, 2 * gravityMag * h));
+    if(!Number.isFinite(bounceVel) || bounceVel <= 0.05) return false;
+    try{
+      const currentVel = playerBody.linvel();
+      if(mode === 'walk' && currentVel.y > 0.6) return false;
+      if(mode === 'walk' && currentVel.y > bounceVel) return false;
+      playerBody.setLinvel({ x: currentVel.x, y: bounceVel, z: currentVel.z }, true);
+      jumpVelocity = bounceVel;
+      wasGroundedLastFrame = false;
+      return true;
+    }catch(err){
+      console.warn('Bounce impulse failed', err);
+    }
+    return false;
+  }
+
+  function triggerBounceFromHit(mode, hit, height){
+    if(!hit || !hit.arr || !hit.coord) return;
+    const h = Math.max(0, Number(height) || 0);
+    if(h <= 0) return;
+    const intensity = bounceIntensityFromHeight(h);
+    try{ startLandingCellBounce(hit.arr, hit.coord, intensity); }catch{}
+    const applied = applyBounceImpulse(h, mode);
+    if(applied){
+      landingSquashTime = Math.max(landingSquashTime, 1);
+    } else {
+      landingSquashTime = Math.max(landingSquashTime || 0, 1);
+    }
   }
 
   function triggerTouchHandlers(){
@@ -16129,6 +16340,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(key===lastTouchKey) return;
       lastTouchKey = key;
       const cell = hit.cell ?? Formula.getCell({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z});
+      const bounceCfg = parseBounceMeta(cell?.meta);
+      if(bounceCfg.walk > 0 && nowMs() >= skipWalkBounceUntil){
+        triggerBounceFromHit('walk', hit, bounceCfg.walk);
+      }
       const action = getMetaAction(cell?.meta, 'on_touch');
       if(action){ executeActionFormula({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z}, action, 'touch'); }
     }catch(err){ console.warn('touch handler failed', err); }
@@ -16142,10 +16357,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const key = `${hit.arr.id}:${hit.coord.x},${hit.coord.y},${hit.coord.z}`;
       if(key===lastLandKey) return;
       lastLandKey = key;
-      try{ startLandingCellBounce(hit.arr, hit.coord); }catch{}
+      const cell = hit.cell ?? Formula.getCell({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z});
+      const bounceCfg = parseBounceMeta(cell?.meta);
+      const landHeight = bounceCfg.land || 0;
+      if(landHeight > 0){
+        triggerBounceFromHit('land', hit, landHeight);
+        skipWalkBounceUntil = Math.max(skipWalkBounceUntil, nowMs() + 180);
+      } else {
+        try{ startLandingCellBounce(hit.arr, hit.coord, 1); }catch{}
+      }
       resetJumpBudget(hit.arr);
       if(exitPhysicsOnNonEnabledArray(hit)) return;
-      const cell = hit.cell ?? Formula.getCell({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z});
       const action = getMetaAction(cell?.meta, 'on_land');
       if(action){ executeActionFormula({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z}, action, 'land'); }
       const physicsEnabled = !!hit.arr?.params?.physics?.enabled;
