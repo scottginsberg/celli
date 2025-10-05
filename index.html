@@ -7821,6 +7821,7 @@ const Boot = {
 };
 const Scene = (()=>{
   let scene, camera, renderer, controls, grid, axesHelper;
+  let baseLightsGroup = null;
 let rapierWorld=null, controller=null, playerBody=null, playerCollider=null, staticPhysicsBody=null;
   const chunkMeshes=new Map(); // legacy chunk meshes (still used for some visuals)
   const layerMeshes=new Map(); // `${arr.id}:${z}` -> {mesh, capacity, used, index2cell}
@@ -7898,6 +7899,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   };
 
   const billboardObjects = new Set();
+  let debugPhysicsSnapshot = null;
   const REFLECTION_FLIP_AXIS = 'y';
 
   function markBillboard(obj){
@@ -7967,6 +7969,61 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
   const PRESENT_LIGHT_BG = new THREE.Color(0xf6f7fb);
   const PRESENT_DARK_BG = new THREE.Color(0x0f172a);
+
+  function applyDebugPhysicsOverrides(enable){
+    if(enable){
+      if(debugPhysicsSnapshot) return;
+      const snapshot = {
+        avatar: { ...Store.getState().avatarPhysics },
+        arrays: new Map()
+      };
+      Store.setState(state=>{
+        const arrays = { ...state.arrays };
+        Object.entries(arrays).forEach(([id, arr])=>{
+          if(!arr) return;
+          const nextParams = { ...(arr.params || {}) };
+          const prevPhysics = nextParams.physics ? { ...nextParams.physics } : null;
+          snapshot.arrays.set(Number(id), prevPhysics);
+          nextParams.physics = { ...(nextParams.physics || {}), enabled:true };
+          arrays[id] = { ...arr, params: nextParams };
+        });
+        debugPhysicsSnapshot = snapshot;
+        const avatarPhysics = { ...state.avatarPhysics, enabled:true, jumpCount: Number.POSITIVE_INFINITY };
+        return { arrays, avatarPhysics };
+      });
+      resetJumpBudget();
+      return;
+    }
+
+    if(!debugPhysicsSnapshot) return;
+    const snapshot = debugPhysicsSnapshot;
+    Store.setState(state=>{
+      const arrays = { ...state.arrays };
+      Object.entries(arrays).forEach(([id, arr])=>{
+        if(!arr) return;
+        const prev = snapshot.arrays.get(Number(id));
+        if(prev){
+          const nextParams = { ...(arr.params || {}) };
+          nextParams.physics = { ...prev };
+          arrays[id] = { ...arr, params: nextParams };
+        } else {
+          const nextParams = { ...(arr.params || {}) };
+          delete nextParams.physics;
+          if(Object.keys(nextParams).length){
+            arrays[id] = { ...arr, params: nextParams };
+          } else {
+            const clone = { ...arr };
+            delete clone.params;
+            arrays[id] = clone;
+          }
+        }
+      });
+      const avatarPhysics = snapshot.avatar ? { ...snapshot.avatar } : { ...state.avatarPhysics };
+      debugPhysicsSnapshot = null;
+      return { arrays, avatarPhysics };
+    });
+    resetJumpBudget();
+  }
 
   function cloneColorOrNull(color){
     if(!color) return null;
@@ -8210,6 +8267,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       FancyGraphics.passes.afterimage.uniforms['damp'].value = FancyGraphics.settings.motionDamping;
     }
     if(FancyGraphics.groups.lights){ FancyGraphics.groups.lights.visible = FancyGraphics.settings.lights; }
+    updateBaseLightingVisibility();
     if(FancyGraphics.groups.waveGrid){ FancyGraphics.groups.waveGrid.visible = FancyGraphics.settings.waveGrid; }
     refreshShadowCasting();
     if(FancyGraphics.settings.hdri){
@@ -8268,6 +8326,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       scene.background = FancyGraphics.base.background ? cloneColorOrNull(FancyGraphics.base.background) : PRESENT_LIGHT_BG.clone();
       scene.fog = FancyGraphics.base.fog || null;
       if(FancyGraphics.passes.outline) FancyGraphics.passes.outline.selectedObjects = [];
+      updateBaseLightingVisibility();
     }
     updateShellVisibilityGlobal();
     refreshCellMaterials();
@@ -9072,17 +9131,33 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     renderer.autoClearStencil = true;
     renderer.localClippingEnabled = true;
   }
+  function updateBaseLightingVisibility(){
+    if(!baseLightsGroup) return;
+    const fancyLightsActive = FancyGraphics.enabled && FancyGraphics.settings.lights;
+    baseLightsGroup.visible = !fancyLightsActive;
+  }
+
   function setupLighting(){
-    // Clear existing lights
-    const lightsToRemove = [];
-    scene.traverse(obj => {
-      if(obj.isLight) lightsToRemove.push(obj);
-    });
-    lightsToRemove.forEach(light => scene.remove(light));
-    // Simple lighting (kept minimal and clean)
-    scene.add(new THREE.AmbientLight(0xffffff,0.7));
-    const hemi=new THREE.HemisphereLight(0xffffff,0x8899aa,0.7); scene.add(hemi);
-    const dir=new THREE.DirectionalLight(0xffffff,0.9); dir.position.set(8,12,6); dir.castShadow=false; scene.add(dir);
+    if(baseLightsGroup){
+      try{ scene.remove(baseLightsGroup); }catch{}
+      baseLightsGroup = null;
+    }
+
+    baseLightsGroup = new THREE.Group();
+    baseLightsGroup.name = 'BaseLighting';
+
+    const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x8899aa, 0.7);
+    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+    dir.position.set(8, 12, 6);
+    dir.castShadow = false;
+
+    baseLightsGroup.add(ambient);
+    baseLightsGroup.add(hemi);
+    baseLightsGroup.add(dir);
+
+    scene.add(baseLightsGroup);
+    updateBaseLightingVisibility();
   }
   // Settings UI removed
   async function init(canvas){
@@ -11937,6 +12012,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             // Disable physics on repeated failures
             Store.setState(s => ({scene: {...s.scene, physics: false}}));
             document.getElementById('physChip').textContent = 'Physics: OFF (error)';
+            applyDebugPhysicsOverrides(false);
           }
         }
       } finally {
@@ -13185,6 +13261,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       root.traverse(n=>{
         if(!n.isMesh) return;
         const isOutline = !!n.userData?.isAvatarOutline;
+        if(n.material && !n.material.transparent){
+          n.material.transparent = true;
+          n.material.opacity = 1;
+          try{ n.material.needsUpdate = true; }catch{}
+        }
         n.material.depthTest = false;
         n.material.depthWrite = false;
         if(n.material.toneMapped !== false) n.material.toneMapped = false;
@@ -15364,11 +15445,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const current = Store.getState().scene.physics;
     const next = !current;
     console.log(`[PHYSICS MODE TOGGLE] Current: ${current}, Next: ${next}`);
+    if(next){
+      applyDebugPhysicsOverrides(true);
+    }
     const avatarCfg = Store.getState().avatarPhysics || {};
     if(next && avatarCfg.enabled === false){
       showToast?.('Avatar physics disabled by CELLI_PHYS');
       Store.setState(s=>({scene:{...s.scene, physics:false}}));
       document.getElementById('physChip').textContent='Physics: OFF';
+      applyDebugPhysicsOverrides(false);
       return;
     }
     Store.setState(s=>({scene:{...s.scene, physics:next}}));
@@ -15466,6 +15551,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         console.log('[PHYSICS] Orbit controls re-enabled');
       }
       document.getElementById('physChip').textContent='Physics: OFF';
+      applyDebugPhysicsOverrides(false);
     }
   }
 
