@@ -1007,6 +1007,8 @@ const Store = createStore((set,get)=>{
     // Track active 3D_TRANSLATE applications and suppressions for revert logic
     activeTranslations: new Map(), // anchorKey -> {targetId, from:{x,y,z}, delta:{dx,dy,dz}}
     suppress3DTranslateRevert: new Set(), // Set<anchorKey>
+    // Track active SCALE applications so manual clears/changes can restore defaults
+    activeScales: new Map(), // anchorKey -> {targets:[{id, prevLevel, prevUnits}]}
     // Signal system
     bufferedWrites: [], // { tick, anchor, value, formula }
     currentTick: 0,
@@ -1022,11 +1024,81 @@ const Store = createStore((set,get)=>{
       try{
         const s = get();
         console.log('Saving state with', Object.keys(s.arrays).length, 'arrays...');
-        
+
+        const sanitizeTimedParams=(timed)=>{
+          if(!timed) return undefined;
+          const clone={
+            ticks: Number.isFinite(+timed.ticks) ? (+timed.ticks|0) : 60,
+            repeat: !!timed.repeat,
+            reverse: !!timed.reverse,
+            reverseTicks: (timed.reverseTicks==null) ? null : ((+timed.reverseTicks|0) || (+timed.ticks|0) || 60),
+            t: 0,
+            dir: (timed.dir===-1)?-1:1,
+            previewInArray: !!timed.previewInArray,
+            smooth: !!timed.smooth
+          };
+          if(Array.isArray(timed.plan)){
+            clone.plan = timed.plan.map(op=>{
+              const out={...op};
+              if(op.anchor){ out.anchor = { ...op.anchor }; }
+              return out;
+            });
+          } else {
+            clone.plan = [];
+          }
+          if(timed.baseOffset){
+            clone.baseOffset = {
+              x: Number.isFinite(+timed.baseOffset.x) ? +timed.baseOffset.x : 0,
+              y: Number.isFinite(+timed.baseOffset.y) ? +timed.baseOffset.y : 0,
+              z: Number.isFinite(+timed.baseOffset.z) ? +timed.baseOffset.z : 0
+            };
+          }
+          if(timed.baseQuat){
+            try{
+              if(Array.isArray(timed.baseQuat)) clone.baseQuat = timed.baseQuat.slice(0,4);
+              else if(typeof timed.baseQuat.toArray==='function') clone.baseQuat = timed.baseQuat.toArray();
+              else if(timed.baseQuat && typeof timed.baseQuat.x==='number') clone.baseQuat = [timed.baseQuat.x, timed.baseQuat.y, timed.baseQuat.z, timed.baseQuat.w];
+            }catch{}
+          }
+          if(typeof timed.waitStart==='number') clone.waitStart = timed.waitStart|0;
+          if(typeof timed.waitEnd==='number') clone.waitEnd = timed.waitEnd|0;
+          return clone;
+        };
+        const cloneParamValue=(val)=>{
+          if(val===undefined) return undefined;
+          if(val===null) return null;
+          if(typeof val==='function') return undefined;
+          if(typeof val!=='object') return val;
+          try{ return JSON.parse(JSON.stringify(val)); }
+          catch{ return undefined; }
+        };
+        const sanitizeTimed3D=(timed)=>{
+          if(!timed) return null;
+          const scope = timed.scope ? {
+            mode: timed.scope.mode || 'all',
+            ids: Array.isArray(timed.scope.ids) ? timed.scope.ids.map(n=> Number.isFinite(+n)?(+n|0):null).filter(n=>n!=null) : []
+          } : null;
+          return {
+            configured: !!timed.configured,
+            ticks: Number.isFinite(+timed.ticks) ? (+timed.ticks|0) : 60,
+            repeat: !!timed.repeat,
+            reverse: !!timed.reverse,
+            reverseTicks: (timed.reverseTicks==null) ? null : ((+timed.reverseTicks|0) || ((+timed.ticks|0)||60)),
+            smooth: !!timed.smooth,
+            preview: !!timed.preview,
+            waitStart: Number.isFinite(+timed.waitStart) ? (+timed.waitStart|0) : 0,
+            waitEnd: Number.isFinite(+timed.waitEnd) ? (+timed.waitEnd|0) : 0,
+            hostId: Number.isFinite(+timed.hostId) ? (+timed.hostId|0) : null,
+            scope,
+            t: 0,
+            dir: (timed.dir===-1)?-1:1
+          };
+        };
+
         // Enhanced state preservation - keep ALL meaningful data
         const arrays = {};
         Object.values(s.arrays).forEach(a=>{
-          const outA = { 
+          const outA = {
             id:a.id, name:a.name, size:a.size, hidden:a.hidden, sealed:a.sealed, offset:a.offset,
             fnPolicy: a.fnPolicy ? {
               mode: a.fnPolicy.mode,
@@ -1034,7 +1106,20 @@ const Store = createStore((set,get)=>{
               deny: Array.from(a.fnPolicy.deny || []),
               tags: Array.from(a.fnPolicy.tags || [])
             } : undefined,
-            params: a.params,
+            params: (()=>{
+              if(!a.params) return undefined;
+              const paramsOut={};
+              Object.entries(a.params).forEach(([key,val])=>{
+                if(key==='timed'){
+                  const clean = sanitizeTimedParams(val);
+                  if(clean) paramsOut.timed = clean;
+                } else {
+                  const cloned = cloneParamValue(val);
+                  if(cloned!==undefined) paramsOut[key]=cloned;
+                }
+              });
+              return Object.keys(paramsOut).length ? paramsOut : undefined;
+            })(),
             locks: Array.from(a.locks || []),
             chunks:{} 
           };
@@ -1092,7 +1177,8 @@ const Store = createStore((set,get)=>{
             physics: false, // Never save physics as enabled
             showGrid: s.scene.showGrid,
             showAxes: s.scene.showAxes,
-            arrowMapDepth: s.scene.arrowMapDepth
+            arrowMapDepth: s.scene.arrowMapDepth,
+            timed3D: sanitizeTimed3D(s.scene?.timed3D)
           },
           avatarPhysics: s.avatarPhysics,
           physicsCamera: s.physicsCamera,
@@ -1158,6 +1244,151 @@ const Store = createStore((set,get)=>{
         if(!json){ showToast('📂 No saved state found'); return; }
         
         const data = JSON.parse(json);
+        const rehydrateTimedParams=(timed)=>{
+          if(!timed) return undefined;
+          const out={
+            ticks: Number.isFinite(+timed.ticks) ? (+timed.ticks|0) : 60,
+            repeat: !!timed.repeat,
+            reverse: !!timed.reverse,
+            reverseTicks: (timed.reverseTicks==null) ? null : ((+timed.reverseTicks|0) || ((+timed.ticks|0)||60)),
+            t: Number.isFinite(+timed.t) ? (+timed.t|0) : 0,
+            dir: (timed.dir===-1)?-1:1,
+            previewInArray: !!timed.previewInArray,
+            smooth: !!timed.smooth,
+            plan: Array.isArray(timed.plan) ? timed.plan.map(op=>{
+              const copy={...op};
+              if(op.anchor) copy.anchor={...op.anchor};
+              return copy;
+            }) : []
+          };
+          if(timed.baseOffset){
+            out.baseOffset={
+              x: Number.isFinite(+timed.baseOffset.x) ? +timed.baseOffset.x : 0,
+              y: Number.isFinite(+timed.baseOffset.y) ? +timed.baseOffset.y : 0,
+              z: Number.isFinite(+timed.baseOffset.z) ? +timed.baseOffset.z : 0
+            };
+          }
+          if(timed.baseQuat){
+            try{
+              const arrQuat = Array.isArray(timed.baseQuat) ? timed.baseQuat : [timed.baseQuat.x, timed.baseQuat.y, timed.baseQuat.z, timed.baseQuat.w];
+              if(Array.isArray(arrQuat) && arrQuat.length===4){
+                const quat=new THREE.Quaternion();
+                quat.fromArray(arrQuat);
+                out.baseQuat=quat;
+              }
+            }catch{ out.baseQuat=null; }
+          }
+          if(typeof timed.waitStart==='number') out.waitStart = timed.waitStart|0;
+          if(typeof timed.waitEnd==='number') out.waitEnd = timed.waitEnd|0;
+          return out;
+        };
+        const rehydrateParams=(params)=>{
+          if(!params) return {};
+          const out={};
+          Object.entries(params).forEach(([key,val])=>{
+            if(key==='timed'){
+              const t = rehydrateTimedParams(val);
+              if(t) out.timed = t;
+            } else {
+              out[key] = val;
+            }
+          });
+          return out;
+        };
+        const rehydrateTimed3D=(timed)=>{
+          if(!timed) return null;
+          const scope = timed.scope ? {
+            mode: timed.scope.mode || 'all',
+            ids: Array.isArray(timed.scope.ids) ? timed.scope.ids.map(n=> Number.isFinite(+n)?(+n|0):null).filter(n=>n!=null) : []
+          } : null;
+          return {
+            configured: !!timed.configured,
+            ticks: Number.isFinite(+timed.ticks) ? (+timed.ticks|0) : 60,
+            repeat: !!timed.repeat,
+            reverse: !!timed.reverse,
+            reverseTicks: (timed.reverseTicks==null) ? null : ((+timed.reverseTicks|0) || ((+timed.ticks|0)||60)),
+            smooth: !!timed.smooth,
+            preview: !!timed.preview,
+            waitStart: Number.isFinite(+timed.waitStart) ? (+timed.waitStart|0) : 0,
+            waitEnd: Number.isFinite(+timed.waitEnd) ? (+timed.waitEnd|0) : 0,
+            hostId: Number.isFinite(+timed.hostId) ? (+timed.hostId|0) : null,
+            scope,
+            t: Number.isFinite(+timed.t) ? (+timed.t|0) : 0,
+            dir: (timed.dir===-1)?-1:1,
+            _waitCounter: 0
+          };
+        };
+        const restoreTimedPreviewState=()=>{
+          try{
+            const S=Store.getState();
+            const arrays=Object.values(S.arrays||{});
+            const globalPreviewActive = !!(S.scene?.timed3D?.preview);
+            const ensurePlan=(arr)=>{ try{ Scene.buildTimedPlanFromArray?.(arr); }catch{} };
+            arrays.forEach(arr=>{
+              if(!arr) return;
+              const timed=arr.params?.timed;
+              if(!timed) return;
+              timed.t = 0;
+              timed.dir = 1;
+              const shouldResetBase = !!timed.previewInArray || globalPreviewActive;
+              if(shouldResetBase){
+                if(timed.baseOffset){
+                  setArrayOffset(arr, {x:timed.baseOffset.x,y:timed.baseOffset.y,z:timed.baseOffset.z}, {interactive:true});
+                } else {
+                  timed.baseOffset = { ...(arr.offset||{x:0,y:0,z:0}) };
+                }
+              }
+              if(timed.baseQuat && !(timed.baseQuat instanceof THREE.Quaternion)){
+                try{
+                  const qArr = Array.isArray(timed.baseQuat) ? timed.baseQuat : [timed.baseQuat.x, timed.baseQuat.y, timed.baseQuat.z, timed.baseQuat.w];
+                  if(Array.isArray(qArr) && qArr.length===4){ const q=new THREE.Quaternion(); q.fromArray(qArr); timed.baseQuat=q; }
+                }catch{}
+              }
+              if(timed.previewInArray){
+                ensurePlan(arr);
+                if(!timed.overlay){
+                  try{
+                    timed.overlay = { group:new THREE.Group(), cells:new Map() };
+                    if(arr._frame) arr._frame.add(timed.overlay.group); else Scene.addToScene?.(timed.overlay.group);
+                  }catch{ timed.overlay=null; }
+                }
+                try{ Scene.maskArrayForPreview?.(arr, true); }catch{}
+              } else {
+                if(globalPreviewActive){ ensurePlan(arr); }
+                try{ Scene.maskArrayForPreview?.(arr, false); }catch{}
+              }
+            });
+            const savedTimed = S.scene?.timed3D;
+            if(savedTimed){
+              try{
+                const G = Scene.ensureTimed3D ? Scene.ensureTimed3D() : null;
+                if(G){
+                  G.configured = !!savedTimed.configured;
+                  G.ticks = Number.isFinite(+savedTimed.ticks) ? (+savedTimed.ticks|0) : 60;
+                  G.repeat = !!savedTimed.repeat;
+                  G.reverse = !!savedTimed.reverse;
+                  G.reverseTicks = (savedTimed.reverseTicks==null) ? null : ((+savedTimed.reverseTicks|0) || ((+savedTimed.ticks|0)||60));
+                  G.smooth = !!savedTimed.smooth;
+                  G.preview = !!savedTimed.preview;
+                  G.waitStart = Number.isFinite(+savedTimed.waitStart) ? (+savedTimed.waitStart|0) : 0;
+                  G.waitEnd = Number.isFinite(+savedTimed.waitEnd) ? (+savedTimed.waitEnd|0) : 0;
+                  G._waitCounter = 0;
+                  G.t = Number.isFinite(+savedTimed.t) ? (+savedTimed.t|0) : 0;
+                  G.dir = (savedTimed.dir===-1)?-1:1;
+                  G.hostId = Number.isFinite(+savedTimed.hostId) ? (+savedTimed.hostId|0) : null;
+                  if(savedTimed.scope){
+                    G.scope = {
+                      mode: savedTimed.scope.mode || 'all',
+                      ids: Array.isArray(savedTimed.scope.ids) ? savedTimed.scope.ids.map(n=> Number.isFinite(+n)?(+n|0):null).filter(n=>n!=null) : []
+                    };
+                  } else {
+                    G.scope = null;
+                  }
+                }
+              }catch(e){ console.warn('Timed3D restore failed', e); }
+            }
+          }catch(e){ console.warn('restoreTimedPreviewState error', e); }
+        };
         console.log('Loading state version:', data.version, 'from:', new Date(data.timestamp));
         
         // Clear existing scene visuals
@@ -1182,7 +1413,7 @@ const Store = createStore((set,get)=>{
 
         const arrays={};
         Object.values(data.arrays||{}).forEach(a=>{
-          arrays[a.id] = { 
+          arrays[a.id] = {
             id:a.id, name:a.name, size:{...a.size}, hidden:a.hidden, sealed:a.sealed, offset:{...a.offset},
             state:'ACTIVE', stableCount:0, lastHash:null, lastDepSig:null,
             fnPolicy: a.fnPolicy ? {
@@ -1191,9 +1422,9 @@ const Store = createStore((set,get)=>{
               deny: new Set(a.fnPolicy.deny || []),
               tags: new Set(a.fnPolicy.tags || [])
             } : {mode:'ALLOW_ALL', allow:new Set(), deny:new Set(), tags:new Set()},
-            params: a.params || {},
+            params: rehydrateParams(a.params),
             locks: new Set(a.locks || []),
-            chunks:{}, labels:[], _frame:null, _colliders:[], _occluders:null 
+            chunks:{}, labels:[], _frame:null, _colliders:[], _occluders:null
           };
           // Hydrate added fields (back-compat: prefer transform)
           const T = a.transform || {};
@@ -1296,6 +1527,7 @@ const Store = createStore((set,get)=>{
         if(restoredUi.crystal2D !== true){ restoredUi.crystal2D = false; }
         // ALWAYS restore physics as FALSE to prevent auto-enable
         const restoredScene = {...get().scene, ...(data.scene||{}), physics: false};
+        if(data.scene?.timed3D){ restoredScene.timed3D = rehydrateTimed3D(data.scene.timed3D); }
         console.log('[LOAD STATE] Forcing physics to false, ignoring saved state');
         set({
           arrays,
@@ -1310,7 +1542,8 @@ const Store = createStore((set,get)=>{
           namedBlocks: new Map(Object.entries(data.namedBlocks||{})),
           namedMacros: new Map(Object.entries(data.namedMacros||{})),
           emittedByAnchor,
-          sourceByCell
+          sourceByCell,
+          activeScales: new Map()
         });
         
         // Restore selection early so focused array renders with shells/LOD correctly
@@ -1355,6 +1588,7 @@ const Store = createStore((set,get)=>{
 
         // Rebuild visuals and restore UI state
         Scene.reconcileAllArrays();
+        restoreTimedPreviewState();
         try{
           const camCfg = Store.getState().physicsCamera;
           if(camCfg && Scene.setPhysicsCamera){
@@ -3962,6 +4196,7 @@ const Formula = (()=>{
     }
     const ch=arr.chunks[keyChunk(...Object.values(chunkOf(anchor.x,anchor.y,anchor.z)))];
     const cell=ch.cells.find(c=>c.x===anchor.x&&c.y===anchor.y&&c.z===anchor.z);
+    const prevFormula = cell ? cell.formula : null;
     if(cell) {
       // Revert previously applied 3D_ROTATE if this anchor was controlling one and not suppressed
       try{
@@ -3974,7 +4209,11 @@ const Formula = (()=>{
           if(cell && cell.meta && cell.meta.appliedRotate){ rec = cell.meta.appliedRotate; }
         }
         const suppressed = (S.suppress3DRotateRevert||new Set()).has(ak);
-        if(rec && (!text || text==='') && !suppressed){
+        const newFormulaStr = text || '';
+        const prevFormulaStr = prevFormula || '';
+        const clearing = newFormulaStr==='';
+        const formulaChanged = (prevFormula!==null && newFormulaStr!==prevFormulaStr);
+        if(rec && (clearing || formulaChanged) && !suppressed){
           const targ=S.arrays[rec.targetId];
           if(targ){
             const ids = rec.ids||[rec.targetId];
@@ -4001,8 +4240,11 @@ const Formula = (()=>{
           if(cell && cell.meta && cell.meta.appliedTranslate){ recT = cell.meta.appliedTranslate; }
         }
         const suppressedT = (S.suppress3DTranslateRevert||new Set()).has(ak);
-        const clearing = (!text || text==='');
-        if(recT && clearing && !suppressedT){
+        const newFormulaStr = text || '';
+        const prevFormulaStr = prevFormula || '';
+        const clearing = newFormulaStr==='';
+        const formulaChanged = (prevFormula!==null && newFormulaStr!==prevFormulaStr);
+        if(recT && (clearing || formulaChanged) && !suppressedT){
           const targ=S.arrays[recT.targetId];
           if(targ){
             // Differential revert: subtract only this cell's delta to preserve stacking
@@ -4016,6 +4258,32 @@ const Formula = (()=>{
           const map=new Map(S.activeTranslations); map.delete(ak); Store.setState({activeTranslations:map});
         }
         if(suppressedT){ const sup=new Set(S.suppress3DTranslateRevert); sup.delete(ak); Store.setState({suppress3DTranslateRevert:sup}); }
+      }catch{}
+      // Revert previously applied SCALE if this anchor controlled one
+      try{
+        const ak=aKey(anchor);
+        const S=Store.getState();
+        let recS = (S.activeScales||new Map()).get(ak);
+        if(!recS){
+          const cellMeta = Formula.getCell(anchor);
+          if(cellMeta && cellMeta.meta && cellMeta.meta.appliedScale){ recS = cellMeta.meta.appliedScale; }
+        }
+        const newFormulaStr = text || '';
+        const prevFormulaStr = prevFormula || '';
+        const clearing = newFormulaStr==='';
+        const formulaChanged = (prevFormula!==null && newFormulaStr!==prevFormulaStr);
+        if(recS && (clearing || formulaChanged)){
+          const stateNow = Store.getState();
+          (recS.targets||[]).forEach(t=>{
+            const target = stateNow.arrays?.[t.id];
+            if(!target) return;
+            target.params = target.params || {};
+            target.params.voxelScaleLevel = t.prevLevel ?? 1;
+            target.params.voxelScale = t.prevUnits ?? arrayScaleUnitsFromLevel(t.prevLevel ?? 1);
+            try{ refreshArrayScale(target); }catch{}
+          });
+          const map=new Map(S.activeScales||new Map()); map.delete(ak); Store.setState({activeScales:map});
+        }
       }catch{}
       cell.formula=text;
       // Use new AST-based dependency tracking
@@ -5418,6 +5686,20 @@ tag('FORMULIZE',["ACTION"],(anchor,arr,ast)=>{
       });
     });
 
+    // 6) Apply color metadata via COLOR() so visual styling survives
+    ids.forEach((oldId, idx)=>{
+      const A=S.arrays[oldId]; if(!A) return;
+      Object.values(A.chunks||{}).forEach(ch=>{
+        (ch.cells||[]).forEach(c=>{
+          const color = c?.meta?.color;
+          if(!color) return;
+          const targetIdExpr = F('VALUE_AT', V(idx), V(0), V(0), varsIdExpr);
+          const colorText = astToString( F('COLOR', V(String(color))) );
+          commands.push( F('EXEC_AT', V(c.x), V(c.y), V(c.z), targetIdExpr, V(colorText)) );
+        });
+      });
+    });
+
     // 6) Restore world positions
     ids.forEach((oldId, idx)=>{
       const A=S.arrays[oldId]; if(!A) return; const off=A.offset||{x:0,y:0,z:0};
@@ -6158,6 +6440,21 @@ tag('SET_ARRAY_POS',["SCENE","ACTION"],(anchor,arr,ast)=>{
   Scene.setArrayOffset(target,{x,y,z});
   Actions.setCell(arr.id,anchor,`Pos:${x},${y},${z}`,ast.raw,true);
 });
+function refreshArrayScale(targetArr){
+  if(!targetArr) return;
+  try{
+    targetArr._viewSig = '';
+    renderArray(targetArr);
+    try{
+      const off = targetArr.offset ? { x: targetArr.offset.x, y: targetArr.offset.y, z: targetArr.offset.z } : { x:0,y:0,z:0 };
+      Scene.setArrayOffset?.(targetArr, off, { interactive:true, _skipDock:true, _skipConnections:true });
+    }catch{}
+    Object.values(targetArr.chunks||{}).forEach(ch=>{ try{ ch.ensureMesh?.(); ch.setLOD?.(1); rehydrateChunkInstances(targetArr, ch); }catch{} });
+    updateArrayLabelPlacement(targetArr);
+    updateArrayValueSpritePlacement(targetArr);
+    debounceColliderRebuild(targetArr);
+  }catch(e){ console.warn('SCALE refresh failed', e); }
+}
 tag('SCALE',["SCENE","VOXEL"],(anchor,arr,ast)=>{
   const rawFactor = ast.args[0] !== undefined ? Number(Formula.valOf(ast.args[0])) : NaN;
   const level = Number.isFinite(rawFactor) ? Math.max(1, Math.round(rawFactor)) : 1;
@@ -6165,27 +6462,33 @@ tag('SCALE',["SCENE","VOXEL"],(anchor,arr,ast)=>{
   const scopeArg = ast.args[1];
   const { targets } = resolveArrayScopeTargets(arr, anchor, scopeArg);
   const touched = [];
+  const prevStates = [];
   targets.forEach(targetArr => {
     if(!targetArr) return;
     targetArr.params = targetArr.params || {};
+    const prevLevel = Number.isFinite(+targetArr.params.voxelScaleLevel) ? (+targetArr.params.voxelScaleLevel|0) : 1;
+    const prevUnits = Number.isFinite(+targetArr.params.voxelScale) ? +targetArr.params.voxelScale : arrayScaleUnitsFromLevel(prevLevel);
+    prevStates.push({ id: targetArr.id, prevLevel, prevUnits });
     targetArr.params.voxelScaleLevel = level;
     targetArr.params.voxelScale = units;
     touched.push(targetArr);
   });
   touched.forEach(targetArr => {
-    try{
-      targetArr._viewSig = '';
-      renderArray(targetArr);
-      try{
-        const off = targetArr.offset ? { x: targetArr.offset.x, y: targetArr.offset.y, z: targetArr.offset.z } : { x:0,y:0,z:0 };
-        Scene.setArrayOffset?.(targetArr, off, { interactive:true, _skipDock:true, _skipConnections:true });
-      }catch{}
-      Object.values(targetArr.chunks||{}).forEach(ch=>{ try{ ch.ensureMesh?.(); ch.setLOD?.(1); rehydrateChunkInstances(targetArr, ch); }catch{} });
-      updateArrayLabelPlacement(targetArr);
-      updateArrayValueSpritePlacement(targetArr);
-      debounceColliderRebuild(targetArr);
-    }catch(e){ console.warn('SCALE refresh failed', e); }
+    refreshArrayScale(targetArr);
   });
+  if(prevStates.length){
+    try{
+      const ak=aKey(anchor);
+      const S=Store.getState();
+      const map=new Map(S.activeScales||new Map());
+      map.set(ak, { targets: prevStates });
+      Store.setState({ activeScales: map });
+      const txw = Write.start('mark.scale','mark');
+      const cell = Formula.getCell(anchor) || {value:'',formula:null,meta:{}};
+      Write.set(txw, arr.id, {x:anchor.x,y:anchor.y,z:anchor.z}, { value: cell.value, formula: cell.formula, meta:{...(cell.meta||{}), appliedScale:{ targets: prevStates }} });
+      Write.commit(txw);
+    }catch{}
+  }
   const stamp = `Scale×${units}`;
   Actions.setCell(arr.id, anchor, stamp, ast.raw, true);
 });
@@ -12698,7 +13001,26 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         // Interactive drag: apply immediately and skip wobble to keep 60fps
         setArrayOffset(arr, {x:nx, y:ny, z:nz}, {interactive:true});
       };
-      const onUp=()=>{ resumeOrbitControls(); window.removeEventListener('pointermove',onMove); window.removeEventListener('pointerup',onUp); try{ const cur=arr.offset||{x:0,y:0,z:0}; const dir={ dx: Math.sign((cur.x||0)-(startOff.x||0)), dy: Math.sign((cur.y||0)-(startOff.y||0)), dz: Math.sign((cur.z||0)-(startOff.z||0)) }; settleAfterDrag(arr, dir); }catch{} };
+      const onUp=()=>{
+        resumeOrbitControls();
+        window.removeEventListener('pointermove',onMove);
+        window.removeEventListener('pointerup',onUp);
+        try{
+          const cur=arr.offset||{x:0,y:0,z:0};
+          const dir={ dx: Math.sign((cur.x||0)-(startOff.x||0)), dy: Math.sign((cur.y||0)-(startOff.y||0)), dz: Math.sign((cur.z||0)-(startOff.z||0)) };
+          settleAfterDrag(arr, dir);
+        }catch{}
+        try{
+          arr.params = arr.params || {};
+          const timed = arr.params.timed;
+          if(timed){
+            timed.baseOffset = { ...(arr.offset||{x:0,y:0,z:0}) };
+            if(arr._frame && arr._frame.quaternion){
+              try{ timed.baseQuat = arr._frame.quaternion.clone(); }catch{}
+            }
+          }
+        }catch{}
+      };
       window.addEventListener('pointermove',onMove); window.addEventListener('pointerup',onUp);
       return;
     }
