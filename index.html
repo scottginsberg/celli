@@ -6374,11 +6374,21 @@ tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
   const stateBefore = Store.getState();
   const prevEnabled = !!stateBefore.avatarPhysics?.enabled;
   const physicsActiveBefore = !!stateBefore.scene?.physics;
+  const debugOverrideActive = !!stateBefore.scene?.physicsDebugAll && !!stateBefore.avatarPhysics?.__debugOverride;
+  const effectiveEnabled = debugOverrideActive ? true : enabled;
   const updates = {};
-  updates.enabled = enabled;
+  if(debugOverrideActive){
+    updates.enabled = stateBefore.avatarPhysics?.enabled !== false;
+  } else {
+    updates.enabled = effectiveEnabled;
+  }
   if(jumpCountArg !== undefined){
     const jc = Math.max(0, Math.round(Number(Formula.valOf(jumpCountArg)) || 0));
-    updates.jumpCount = jc;
+    if(!debugOverrideActive){
+      updates.jumpCount = jc;
+    } else if(stateBefore.avatarPhysics && stateBefore.avatarPhysics.jumpCount !== undefined){
+      updates.jumpCount = stateBefore.avatarPhysics.jumpCount;
+    }
   }
   if(runArg !== undefined){
     let rm = Number(Formula.valOf(runArg));
@@ -6395,7 +6405,7 @@ tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
   }));
 
   let spawnTarget = null;
-  if(enabled && !prevEnabled){
+  if(effectiveEnabled && !prevEnabled){
     try{
       const sel = stateBefore.selection;
       const arrays = stateBefore.arrays || {};
@@ -6413,7 +6423,7 @@ tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
     }catch{}
   }
 
-  if(enabled && !physicsActiveBefore){
+  if(effectiveEnabled && !physicsActiveBefore){
     try{ Scene.togglePhysicsMode(); }catch{}
   }
 
@@ -6422,11 +6432,11 @@ tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
     try{ Scene.setPhysicsSpawn?.(spawnTarget); }catch{}
   }
 
-  if(!enabled && Store.getState().scene.physics){
+  if(!effectiveEnabled && Store.getState().scene.physics){
     try{ Scene.togglePhysicsMode(); }catch{}
   }
 
-  const stamp = enabled ? '🤸 Avatar' : '🚶 Classic';
+  const stamp = effectiveEnabled ? '🤸 Avatar' : '🚶 Classic';
   Actions.setCell(arr.id, anchor, stamp, ast.raw, true);
 });
 
@@ -8423,6 +8433,21 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
   const billboardObjects = new Set();
   let debugPhysicsSnapshot = null;
+
+  function clonePhysicsConfig(cfg){
+    if(cfg == null || typeof cfg !== 'object') return cfg;
+    if(Array.isArray(cfg)) return cfg.map(item=> clonePhysicsConfig(item));
+    const out = {};
+    Object.keys(cfg).forEach(key=>{
+      const val = cfg[key];
+      if(val && typeof val === 'object'){
+        out[key] = clonePhysicsConfig(val);
+      } else {
+        out[key] = val;
+      }
+    });
+    return out;
+  }
   const REFLECTION_FLIP_AXIS = 'y';
 
   function markBillboard(obj){
@@ -8497,22 +8522,37 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     if(enable){
       if(debugPhysicsSnapshot) return;
       const snapshot = {
-        avatar: { ...Store.getState().avatarPhysics },
+        avatar: clonePhysicsConfig(Store.getState().avatarPhysics) || null,
         arrays: new Map()
       };
+      const arraysToRebuild = [];
       Store.setState(state=>{
         const arrays = { ...state.arrays };
         Object.entries(arrays).forEach(([id, arr])=>{
           if(!arr) return;
           const nextParams = { ...(arr.params || {}) };
-          const prevPhysics = nextParams.physics ? { ...nextParams.physics } : null;
-          snapshot.arrays.set(id, prevPhysics);
-          nextParams.physics = { ...(nextParams.physics || {}), enabled:true };
-          arrays[id] = { ...arr, params: nextParams };
+          const prevPhysics = clonePhysicsConfig(nextParams.physics);
+          snapshot.arrays.set(id, prevPhysics ?? null);
+          const debugPhysics = { ...(nextParams.physics || {}), enabled:true, __debugOverride:true };
+          const sources = { ...(debugPhysics.__sources || {}) };
+          sources.enabled = Number.POSITIVE_INFINITY;
+          debugPhysics.__sources = sources;
+          nextParams.physics = debugPhysics;
+          const nextArr = { ...arr, params: nextParams };
+          arrays[id] = nextArr;
+          arraysToRebuild.push(nextArr);
         });
         debugPhysicsSnapshot = snapshot;
-        const avatarPhysics = { ...state.avatarPhysics, enabled:true, jumpCount: Number.POSITIVE_INFINITY };
+        const avatarPhysics = {
+          ...state.avatarPhysics,
+          enabled:true,
+          jumpCount: Number.POSITIVE_INFINITY,
+          __debugOverride:true
+        };
         return { arrays, avatarPhysics };
+      });
+      arraysToRebuild.forEach(arr=>{
+        try{ debounceColliderRebuild(arr); }catch{}
       });
       resetJumpBudget();
       return;
@@ -8524,24 +8564,27 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const arrays = { ...state.arrays };
       Object.entries(arrays).forEach(([id, arr])=>{
         if(!arr) return;
-        const prev = snapshot.arrays.get(id);
-        if(prev){
-          const nextParams = { ...(arr.params || {}) };
-          nextParams.physics = { ...prev };
+        const hasSnapshot = snapshot.arrays.has(id);
+        const prev = hasSnapshot ? snapshot.arrays.get(id) : undefined;
+        const nextParams = { ...(arr.params || {}) };
+        if(prev != null){
+          nextParams.physics = clonePhysicsConfig(prev);
+          arrays[id] = { ...arr, params: nextParams };
+          return;
+        }
+        delete nextParams.physics;
+        if(Object.keys(nextParams).length){
           arrays[id] = { ...arr, params: nextParams };
         } else {
-          const nextParams = { ...(arr.params || {}) };
-          delete nextParams.physics;
-          if(Object.keys(nextParams).length){
-            arrays[id] = { ...arr, params: nextParams };
-          } else {
-            const clone = { ...arr };
-            delete clone.params;
-            arrays[id] = clone;
-          }
+          const clone = { ...arr };
+          delete clone.params;
+          arrays[id] = clone;
         }
       });
-      const avatarPhysics = snapshot.avatar ? { ...snapshot.avatar } : { ...state.avatarPhysics };
+      let avatarPhysics = snapshot.avatar ? clonePhysicsConfig(snapshot.avatar) : { ...state.avatarPhysics };
+      if(avatarPhysics && typeof avatarPhysics === 'object'){
+        delete avatarPhysics.__debugOverride;
+      }
       debugPhysicsSnapshot = null;
       return { arrays, avatarPhysics };
     });
