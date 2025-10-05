@@ -13789,7 +13789,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const MAT_BLUSH = new THREE.MeshLambertMaterial({ color: 0xec4899 });
       const MAT_WING  = new THREE.MeshLambertMaterial({ color: 0xf59e0b, side: THREE.DoubleSide });
       const MAT_OUTLINE = new THREE.MeshBasicMaterial({ color: 0x111827 });
-      MAT_OUTLINE.depthTest = false;
+      MAT_OUTLINE.depthTest = true;
       MAT_OUTLINE.depthWrite = false;
       MAT_OUTLINE.toneMapped = false;
       const root = new THREE.Group();
@@ -13905,6 +13905,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       return root;
     }
   };
+
+  const ARRAYA_BASE_SCALE = 0.28;
 
   const ArrayaAvatarFactory = (function(){
     function push(arr, ...v){ for(const x of v) arr.push(x); }
@@ -14139,7 +14141,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     function create(THREE){
       const group = new THREE.Group();
       group.name = 'ArrayaAvatar';
-      group.scale.setScalar(0.28); // Smaller than Celli
+      group.scale.setScalar(ARRAYA_BASE_SCALE); // Smaller than Celli
       const greens = greensRaw.map(rgb=> new THREE.Color(rgb[0], rgb[1], rgb[2]));
       const segments=[];
       for(let i=0;i<NSEG;i++){
@@ -14210,7 +14212,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       group.add(eyeL, eyeR, smile);
 
       const MAT_OUTLINE = new THREE.MeshBasicMaterial({ color: 0x111827 });
-      MAT_OUTLINE.depthTest = false;
+      MAT_OUTLINE.depthTest = true;
       MAT_OUTLINE.depthWrite = false;
       MAT_OUTLINE.toneMapped = false;
       MAT_OUTLINE.transparent = true;
@@ -14233,11 +14235,16 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const pivotVec = new THREE.Vector3();
       const sFace = 0.006;
 
+      const aggregateBox = new THREE.Box3();
+      const partBox = new THREE.Box3();
+      const partCenter = new THREE.Vector3();
+
       const controller = {
         group,
         visible:false,
         needsUpdate:true,
         headOffset:new THREE.Vector3(),
+        centerOffset:new THREE.Vector3(),
         setVisible(v){
           if(this.visible !== v){
             this.visible = v;
@@ -14337,6 +14344,24 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           smile.scale.set(1,1,0.55);
 
           this.headOffset.copy(facePos);
+          aggregateBox.makeEmpty();
+          group.traverse(node=>{
+            if(!node.isMesh) return;
+            const geometry = node.geometry;
+            if(!geometry) return;
+            if(!geometry.boundingBox) geometry.computeBoundingBox();
+            const bbox = geometry.boundingBox;
+            if(!bbox) return;
+            node.updateMatrix();
+            partBox.copy(bbox).applyMatrix4(node.matrix);
+            aggregateBox.union(partBox);
+          });
+          if(!aggregateBox.isEmpty()){
+            aggregateBox.getCenter(partCenter);
+            this.centerOffset.copy(partCenter);
+          } else {
+            this.centerOffset.set(0,0,0);
+          }
           this.needsUpdate = false;
         }
       };
@@ -14351,6 +14376,21 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   // Celli and Arraya avatars
   const ARRAYA_ROTATION_OFFSET = -Math.PI / 2; // Rotate 90° clockwise around Y
   let celli, arraya, arrayaAvatar;
+  const Y_AXIS = new THREE.Vector3(0,1,0);
+  const TMP_ARRAYA_PLACEMENT = new THREE.Vector3();
+  const TMP_ARRAYA_OFFSET = new THREE.Vector3();
+
+  function computeArrayaPlacement(basePos, hoverHeight, rotationY, scale){
+    TMP_ARRAYA_PLACEMENT.copy(basePos);
+    TMP_ARRAYA_PLACEMENT.y += hoverHeight;
+    if(arrayaAvatar?.centerOffset){
+      TMP_ARRAYA_OFFSET.set(arrayaAvatar.centerOffset.x, 0, arrayaAvatar.centerOffset.z);
+      TMP_ARRAYA_OFFSET.multiplyScalar(scale);
+      TMP_ARRAYA_OFFSET.applyAxisAngle(Y_AXIS, rotationY);
+      TMP_ARRAYA_PLACEMENT.sub(TMP_ARRAYA_OFFSET);
+    }
+    return TMP_ARRAYA_PLACEMENT;
+  }
   function ensureArrayaAvatar(){
     if(arrayaAvatar || typeof ArrayaAvatarFactory === 'undefined') return;
     try{
@@ -14531,15 +14571,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           arrayaAvatar.update(0);
         }
         
-        // Position centered ABOVE the cell - simple direct positioning
         const arrScale = arrayVoxelScale(arr);
         const arrayaHover = clampedScaleOffset(arrScale, 0.8);
-        const target = pos.clone().add(new THREE.Vector3(0, arrayaHover, 0));
-        arrayaAvatar.group.position.copy(target);
-        arrayaAvatar.group.scale.set(0.28, 0.28, 0.28);
-        
+        let targetRotation = arrayaAvatar._targetRotation;
+
         // Update rotation on cell change or if not set
-        if(cellChanged || arrayaAvatar._targetRotation === undefined){
+        if(cellChanged || targetRotation === undefined){
           // Face camera - calculate direction from cell to camera
           const cellToCamera = new THREE.Vector3().subVectors(camera.position, pos);
           cellToCamera.y = 0;
@@ -14550,13 +14587,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           const baseDeg = (baseAngle * 180 / Math.PI).toFixed(1);
           const spawnDeg = (spawnAngle * 180 / Math.PI).toFixed(1);
           console.log(`[AVATAR] Arraya spawn at cell(${pos.x.toFixed(1)},${pos.z.toFixed(1)}), camera(${camera.position.x.toFixed(1)},${camera.position.z.toFixed(1)}), direction(${cellToCamera.x.toFixed(2)},${cellToCamera.z.toFixed(2)}), base=${baseDeg}°, spawn=${spawnDeg}°`);
-          arrayaAvatar.group.rotation.y = spawnAngle;
+          targetRotation = spawnAngle;
           arrayaAvatar._targetRotation = spawnAngle;
-        } else {
-          // Keep static rotation
-          arrayaAvatar.group.rotation.y = arrayaAvatar._targetRotation;
         }
-        
+
+        const placement = computeArrayaPlacement(pos, arrayaHover, targetRotation, ARRAYA_BASE_SCALE);
+        arrayaAvatar.group.position.copy(placement);
+        arrayaAvatar.group.scale.set(ARRAYA_BASE_SCALE, ARRAYA_BASE_SCALE, ARRAYA_BASE_SCALE);
+        arrayaAvatar.group.rotation.y = targetRotation;
+
         arrayaAvatar._lastCellKey = currentCellKey;
         arrayaAvatar._lastCell = {hasArray: true};
       } else {
@@ -14605,7 +14644,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const isArrayaTo = (toAvatarOrFactory.group != null);
       const toAvatar = toAvatarOrFactory.group || toAvatarOrFactory;
       const isCelliTo = (toAvatar === celli);
-      const finalTargetScale = isCelliTo ? 0.7 : 0.28;
+      const finalTargetScale = isCelliTo ? 0.7 : ARRAYA_BASE_SCALE;
       
       let t0 = null;
       const dur = 400; // 400ms for smooth magical swap
@@ -14641,14 +14680,20 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           const spin = targetRotation + Math.PI * 2 - (Math.PI * 2 * t); // Reverse spin
           const rise = 0.35 * Math.sin((1-t) * Math.PI);
           toAvatar.scale.set(scale, scale, scale);
-          toAvatar.rotation.y = spin;
-          
+
           // Position matching updateAvatars logic - simple direct positioning
           const targetY = isArrayaTo ? 0.8 : 0.7;
-          const targetPos = cellPos.clone().add(new THREE.Vector3(0, targetY, 0));
-          toAvatar.position.x = targetPos.x;
-          toAvatar.position.y = targetPos.y + rise;
-          toAvatar.position.z = targetPos.z;
+          if(isArrayaTo){
+            const placement = computeArrayaPlacement(cellPos, targetY, spin, scale);
+            toAvatar.position.copy(placement);
+            toAvatar.position.y += rise;
+          } else {
+            const targetPos = cellPos.clone().add(new THREE.Vector3(0, targetY, 0));
+            toAvatar.position.x = targetPos.x;
+            toAvatar.position.y = targetPos.y + rise;
+            toAvatar.position.z = targetPos.z;
+          }
+          toAvatar.rotation.y = spin;
         }
         
         if(u < 1){
@@ -14663,9 +14708,13 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           
           // Final position matching updateAvatars logic
           const targetY = isArrayaTo ? perchArraya : perchCelli;
-          toAvatar.position.copy(cellPos).add(new THREE.Vector3(0, targetY, 0));
-          if(arrayaAvatar._targetRotation !== undefined && isArrayaTo){
-            toAvatar.rotation.y = arrayaAvatar._targetRotation;
+          if(isArrayaTo){
+            const finalRotation = arrayaAvatar._targetRotation ?? toAvatar.rotation.y;
+            const placement = computeArrayaPlacement(cellPos, targetY, finalRotation, finalTargetScale);
+            toAvatar.position.copy(placement);
+            toAvatar.rotation.y = finalRotation;
+          } else {
+            toAvatar.position.copy(cellPos).add(new THREE.Vector3(0, targetY, 0));
           }
           swapAnimating = false;
         }
@@ -14678,7 +14727,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       fromAvatar.visible = false;
       const toAvatar = toAvatarOrFactory.group || toAvatarOrFactory;
       toAvatar.visible = true;
-      const finalScale = (toAvatar === celli) ? 0.7 : 0.28;
+      const finalScale = (toAvatar === celli) ? 0.7 : ARRAYA_BASE_SCALE;
       toAvatar.scale?.set(finalScale, finalScale, finalScale);
     }
   }
