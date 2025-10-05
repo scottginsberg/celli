@@ -966,7 +966,7 @@ const Store = createStore((set,get)=>{
   return {
     arrays: {}, nextArrayId:1, lastCreatedArrayId:null,
     selection:{arrayId:null, focus:null, anchor:null, range:null},
-    scene:{physics:false, showGrid:true, showAxes:true},
+    scene:{physics:false, showGrid:true, showAxes:true, physicsDebugAll:false},
     ui:{zLayer:0, fxOpen:false, addressMode:'local', lastInteraction:'3d', viewMode:'standard', crystal2D:false},
     gridPhase:{x:null,y:null,z:null},
     namedBlocks:new Map(), // name -> {x,y,z, data: [layers[z][y][x]] }
@@ -6196,6 +6196,20 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
   }
 
   const { targets, scope } = resolveArrayScopeTargets(arr, anchor, scopeArg);
+  let targetList;
+  if(scope.mode === 'all'){
+    targetList = targets.filter(Boolean);
+  } else {
+    targetList = arr ? [arr] : targets.filter(Boolean);
+  }
+  const seenTargets = new Set();
+  targetList = targetList.filter(targetArr => {
+    if(!targetArr || !Number.isFinite(targetArr.id)) return false;
+    if(seenTargets.has(targetArr.id)) return false;
+    seenTargets.add(targetArr.id);
+    return true;
+  });
+  if(!targetList.length && arr) targetList = [arr];
   const respawnUpdates = {};
 
   const resolveRespawn = (targetArr)=>{
@@ -6285,7 +6299,7 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
     };
   };
 
-  targets.forEach(targetArr => {
+  targetList.forEach(targetArr => {
     if(!targetArr) return;
     targetArr.params = targetArr.params || {};
     targetArr.params.physics = targetArr.params.physics || { enabled:false };
@@ -6319,7 +6333,7 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
   });
 
   if(enabled){
-    targets.forEach(targetArr=>{ try{ Scene.debounceColliderRebuild(targetArr); }catch{} });
+    targetList.forEach(targetArr=>{ try{ Scene.debounceColliderRebuild(targetArr); }catch{} });
   }
 
   const updateRespawns = Object.keys(respawnUpdates).length > 0;
@@ -8341,11 +8355,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   let cachedPlayerPos = new THREE.Vector3(0, 0, 0); // Cache to avoid Rapier aliasing issues - initialize with valid coords
   let lastTouchKey = null;
   let lastLandKey = null;
+  let landingCellKey = null;
+  let landingCellAnim = null;
 
   function resetContactCache(){
     lastTouchKey = null;
     lastLandKey = null;
     wasGroundedLastFrame = false;
+    cancelLandingCellAnimation();
   }
 
   const FancyDefaults = {
@@ -8529,6 +8546,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       return { arrays, avatarPhysics };
     });
     resetJumpBudget();
+  }
+
+  function setPhysicsDebugAll(enable){
+    Store.setState(state=>({ scene:{ ...state.scene, physicsDebugAll: !!enable } }));
+    if(enable){
+      if(Store.getState().scene.physics){
+        applyDebugPhysicsOverrides(true);
+      }
+    } else {
+      applyDebugPhysicsOverrides(false);
+    }
   }
 
   function cloneColorOrNull(color){
@@ -10375,44 +10403,79 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   // Click pulse: scale both solid and shell at the same instance center
   function pulseCell(arr, cell, z){
     try{
-      const useChunks = !!(Scene.ChunkManager && Scene.ChunkManager.enabled);
-      const pos = localPos(arr, cell.x, cell.y, cell.z);
-      const setScaleAt=(mesh, i, s)=>{
-        if(!mesh || typeof i!=='number' || i<0) return;
-        temp.position.copy(pos);
-        temp.rotation.set(0,0,0);
-        temp.scale.set(s,s,s);
-        temp.updateMatrix();
-        mesh.setMatrixAt(i, temp.matrix);
-        mesh.instanceMatrix.needsUpdate = true;
+      const useChunks = !!(ChunkManager && ChunkManager.enabled);
+      const records = [];
+      const captureBase = (mesh, idx)=>{
+        if(!mesh || !Number.isInteger(idx) || idx < 0) return;
+        if(idx >= (mesh.count ?? Infinity)) return;
+        try{
+          const base = new THREE.Matrix4();
+          mesh.getMatrixAt(idx, base);
+          records.push({ mesh, idx, base });
+        }catch{}
       };
-      let idx=-1; let ch=null;
       if(useChunks){
-        ch = arr.chunks[keyChunk(...Object.values(chunkOf(cell.x,cell.y,cell.z)))] || null;
-        if(ch && ch.index2cell){ idx = ch.index2cell.findIndex(c=>c && c.x===cell.x && c.y===cell.y && c.z===cell.z); }
+        const chunkId = keyChunk(...Object.values(chunkOf(cell.x,cell.y,cell.z)));
+        const ch = arr.chunks?.[chunkId];
+        if(ch){
+          let idx = -1;
+          if(ch.cellIndexMap && typeof ch.cellIndexMap.get === 'function'){
+            const maybeIdx = ch.cellIndexMap.get(`${cell.x},${cell.y},${cell.z}`);
+            if(Number.isInteger(maybeIdx)) idx = maybeIdx;
+          }
+          if(idx < 0 && Array.isArray(ch.index2cell)){
+            idx = ch.index2cell.findIndex(c=>c && c.x===cell.x && c.y===cell.y && c.z===cell.z);
+          }
+          if(idx >= 0){
+            captureBase(ch.meshLOD1, idx);
+            captureBase(ch.meshShell, idx);
+          }
+        }
+      } else {
+        const types=['filled','formula'];
+        types.forEach(tp=>{
+          const rec = layerMeshes.get(`${arr.id}:${z}:${tp}`);
+          if(rec && rec.mesh && Array.isArray(rec.index2cell)){
+            const idx = rec.index2cell.findIndex(c=>c && c.x===cell.x && c.y===cell.y && c.z===cell.z);
+            captureBase(rec.mesh, idx);
+          }
+          const er = layerMeshes.get(`${arr.id}:${z}:${tp}:edges`);
+          if(er && er.mesh && Array.isArray(er.index2cell)){
+            const idx = er.index2cell.findIndex(c=>c && c.x===cell.x && c.y===cell.y && c.z===cell.z);
+            captureBase(er.mesh, idx);
+          }
+        });
       }
+      if(!records.length) return;
       const start=performance.now(); const dur=180; const peak=1.10;
+      const scaleMatrix = new THREE.Matrix4();
+      const restore=()=>{
+        records.forEach(rec=>{
+          try{
+            rec.mesh.setMatrixAt(rec.idx, rec.base);
+            rec.mesh.instanceMatrix.needsUpdate = true;
+          }catch{}
+        });
+        needsRender = true;
+      };
       const step=()=>{
         const t=Math.min(1, (performance.now()-start)/dur);
         const s = 1 + (peak-1) * (t<0.5 ? (t*2) : (2-2*t));
-        if(useChunks && ch){ setScaleAt(ch.meshLOD1, idx, s); setScaleAt(ch.meshShell, idx, s); }
-        // Also try legacy layer meshes (solids + edges) when chunks are off
-        try{
-          const types=['filled','formula'];
-          for(const tp of types){
-            const rec = layerMeshes.get(`${arr.id}:${z}:${tp}`);
-            if(rec){
-              const i = rec.index2cell.findIndex(c=>c && c.x===cell.x && c.y===cell.y && c.z===cell.z);
-              setScaleAt(rec.mesh, i, s);
-            }
-            const er = layerMeshes.get(`${arr.id}:${z}:${tp}:edges`);
-            if(er){
-              const i2 = er.index2cell.findIndex(c=>c && c.x===cell.x && c.y===cell.y && c.z===cell.z);
-              setScaleAt(er.mesh, i2, s);
-            }
-          }
-        }catch{}
-        if(t<1){ requestAnimationFrame(step); }
+        scaleMatrix.identity();
+        scaleMatrix.makeScale(s, s, s);
+        records.forEach(rec=>{
+          try{
+            const next = rec.base.clone().multiply(scaleMatrix);
+            rec.mesh.setMatrixAt(rec.idx, next);
+            rec.mesh.instanceMatrix.needsUpdate = true;
+          }catch{}
+        });
+        needsRender = true;
+        if(t<1){
+          requestAnimationFrame(step);
+        } else {
+          restore();
+        }
       };
       requestAnimationFrame(step);
     }catch{}
@@ -15753,6 +15816,141 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     return true;
   }
 
+  function cancelLandingCellAnimation(){
+    if(landingCellAnim && typeof landingCellAnim.cancel === 'function'){
+      try{ landingCellAnim.cancel(); }catch{}
+    }
+    landingCellAnim = null;
+    landingCellKey = null;
+  }
+
+  function startLandingCellBounce(arr, coord){
+    if(!arr || !coord) return;
+    const key = `${arr.id}:${coord.x},${coord.y},${coord.z}`;
+    if(landingCellAnim){
+      if(landingCellAnim.key === key){ landingCellAnim.cancel(); }
+      else { landingCellAnim.cancel(); }
+    }
+    const records = [];
+    const pushRecord = (mesh, idx)=>{
+      if(!mesh || !Number.isInteger(idx) || idx < 0) return;
+      if(idx >= (mesh.count ?? Infinity)) return;
+      try{
+        const base = new THREE.Matrix4();
+        mesh.getMatrixAt(idx, base);
+        records.push({ mesh, idx, base });
+      }catch{}
+    };
+    const useChunks = !!(ChunkManager && ChunkManager.enabled);
+    if(useChunks){
+      const chunkId = keyChunk(...Object.values(chunkOf(coord.x, coord.y, coord.z)));
+      const ch = arr.chunks?.[chunkId];
+      if(ch){
+        let idx = -1;
+        if(ch.cellIndexMap && typeof ch.cellIndexMap.get === 'function'){
+          const maybeIdx = ch.cellIndexMap.get(`${coord.x},${coord.y},${coord.z}`);
+          if(Number.isInteger(maybeIdx)) idx = maybeIdx;
+        }
+        if(idx < 0 && Array.isArray(ch.index2cell)){
+          idx = ch.index2cell.findIndex(c=>c && c.x===coord.x && c.y===coord.y && c.z===coord.z);
+        }
+        if(idx >= 0){
+          pushRecord(ch.meshLOD1, idx);
+          pushRecord(ch.meshShell, idx);
+        }
+      }
+    } else {
+      const z = coord.z|0;
+      const types = ['filled','formula'];
+      types.forEach(tp=>{
+        const rec = layerMeshes.get(`${arr.id}:${z}:${tp}`);
+        if(rec && rec.mesh && Array.isArray(rec.index2cell)){
+          const idx = rec.index2cell.findIndex(c=>c && c.x===coord.x && c.y===coord.y && c.z===coord.z);
+          pushRecord(rec.mesh, idx);
+        }
+        const er = layerMeshes.get(`${arr.id}:${z}:${tp}:edges`);
+        if(er && er.mesh && Array.isArray(er.index2cell)){
+          const idx = er.index2cell.findIndex(c=>c && c.x===coord.x && c.y===coord.y && c.z===coord.z);
+          pushRecord(er.mesh, idx);
+        }
+      });
+    }
+    if(!records.length){
+      landingCellAnim = null;
+      landingCellKey = key;
+      return;
+    }
+    const duration = 240;
+    let start = null;
+    let cancelled = false;
+    let frameId = null;
+    const scaleMatrix = new THREE.Matrix4();
+
+    const restore = ()=>{
+      records.forEach(rec=>{
+        try{
+          rec.mesh.setMatrixAt(rec.idx, rec.base);
+          rec.mesh.instanceMatrix.needsUpdate = true;
+        }catch{}
+      });
+      needsRender = true;
+    };
+
+    const applyScale = (sx, sy, sz)=>{
+      scaleMatrix.identity();
+      scaleMatrix.makeScale(sx, sy, sz);
+      records.forEach(rec=>{
+        try{
+          const next = rec.base.clone().multiply(scaleMatrix);
+          rec.mesh.setMatrixAt(rec.idx, next);
+          rec.mesh.instanceMatrix.needsUpdate = true;
+        }catch{}
+      });
+      needsRender = true;
+    };
+
+    const step = (ts)=>{
+      if(cancelled){ restore(); return; }
+      if(start === null) start = ts;
+      const t = Math.min(1, (ts - start) / duration);
+      let squashY, stretchXZ;
+      if(t < 0.3){
+        const impactT = t / 0.3;
+        squashY = 1 - 0.18 * impactT;
+        stretchXZ = 1 + 0.12 * impactT;
+      } else {
+        const recoveryT = Math.min(1, Math.max(0, (t - 0.3) / 0.7));
+        const easeOut = 1 - Math.pow(1 - recoveryT, 3);
+        squashY = 0.82 + 0.2 * easeOut;
+        stretchXZ = 1.12 - 0.14 * easeOut;
+        if(recoveryT > 0.85){
+          const overshootT = (recoveryT - 0.85) / 0.15;
+          const clamped = Math.min(1, Math.max(0, overshootT));
+          squashY += 0.02 * Math.sin(clamped * Math.PI);
+        }
+      }
+      applyScale(stretchXZ, squashY, stretchXZ);
+      if(t < 1){
+        frameId = requestAnimationFrame(step);
+      } else {
+        restore();
+        landingCellAnim = null;
+      }
+    };
+
+    const cancel = ()=>{
+      if(cancelled) return;
+      cancelled = true;
+      if(frameId != null) cancelAnimationFrame(frameId);
+      restore();
+      landingCellAnim = null;
+    };
+
+    landingCellKey = key;
+    landingCellAnim = { key, cancel };
+    frameId = requestAnimationFrame(step);
+  }
+
   function triggerTouchHandlers(){
     try{
       const world = new THREE.Vector3(cachedPlayerPos.x, cachedPlayerPos.y, cachedPlayerPos.z);
@@ -15772,10 +15970,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     try{
       const world = new THREE.Vector3(cachedPlayerPos.x, cachedPlayerPos.y - 0.6, cachedPlayerPos.z);
       const hit = locateArrayCollision(world);
-      if(!hit){ lastLandKey=null; return; }
+      if(!hit){ lastLandKey=null; cancelLandingCellAnimation(); return; }
       const key = `${hit.arr.id}:${hit.coord.x},${hit.coord.y},${hit.coord.z}`;
       if(key===lastLandKey) return;
       lastLandKey = key;
+      try{ startLandingCellBounce(hit.arr, hit.coord); }catch{}
       resetJumpBudget(hit.arr);
       if(exitPhysicsOnNonEnabledArray(hit)) return;
       const cell = hit.cell ?? Formula.getCell({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z});
@@ -16024,7 +16223,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const current = Store.getState().scene.physics;
     const next = !current;
     console.log(`[PHYSICS MODE TOGGLE] Current: ${current}, Next: ${next}`);
-    if(next){
+    const debugAll = !!Store.getState().scene.physicsDebugAll;
+    if(next && debugAll){
       applyDebugPhysicsOverrides(true);
     }
     const avatarCfg = Store.getState().avatarPhysics || {};
@@ -16140,7 +16340,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
 
-  return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsCamera, resetContactCache, setPhysicsSpawn};
+return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsDebugAll, setPhysicsCamera, resetContactCache, setPhysicsSpawn};
 })();
 
 /* ===========================
