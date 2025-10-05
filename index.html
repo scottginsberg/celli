@@ -412,6 +412,14 @@ document.addEventListener('click', function(e){
         <span>Dark Background</span>
         <input type="checkbox" id="gfxDarkBg">
       </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Light Rotation <span id="gfxLightRotationValue"></span></span>
+        <input type="range" id="gfxLightRotation" min="0" max="360" step="1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Light Strength <span id="gfxLightStrengthValue"></span></span>
+        <input type="range" id="gfxLightStrength" min="0" max="2" step="0.05">
+      </label>
     </div>
 
     <div class="stack" style="gap:6px;">
@@ -2591,6 +2599,41 @@ function arrayVoxelScale(arr){
   const level = Number(params.voxelScaleLevel);
   if(Number.isFinite(level) && level >= 1) return arrayScaleUnitsFromLevel(level);
   return 1;
+}
+
+const BASE_VOXEL_GEOMETRY_SIZE = 0.9;
+const BASE_VOXEL_MARGIN = (1 - BASE_VOXEL_GEOMETRY_SIZE) / 2;
+
+function voxelMargin(scale){
+  if(!Number.isFinite(scale) || scale <= 0) return BASE_VOXEL_MARGIN;
+  return Math.min(scale * BASE_VOXEL_MARGIN, BASE_VOXEL_MARGIN);
+}
+
+function clampedScaleOffset(scale, coefficient){
+  if(!Number.isFinite(scale) || scale <= 0) return coefficient;
+  return Math.min(scale * coefficient, coefficient);
+}
+
+function voxelDisplayScale(scale){
+  if(!Number.isFinite(scale) || scale <= 0) return 1;
+  const spacing = scale;
+  const margin = voxelMargin(spacing);
+  const width = Math.max(spacing - 2 * margin, spacing * BASE_VOXEL_GEOMETRY_SIZE);
+  return width / BASE_VOXEL_GEOMETRY_SIZE;
+}
+
+function voxelHalfExtent(scale, cells=1){
+  if(!Number.isFinite(scale) || scale <= 0) return (BASE_VOXEL_GEOMETRY_SIZE * cells) / 2;
+  const spacing = scale;
+  const margin = voxelMargin(spacing);
+  const total = Math.max(cells * spacing - 2 * margin, cells * spacing * BASE_VOXEL_GEOMETRY_SIZE);
+  return total / 2;
+}
+
+function avatarPerchOffset(scale){
+  const half = voxelHalfExtent(scale, 1);
+  const hover = clampedScaleOffset(scale, 0.25);
+  return half + hover;
 }
 // helper: policy check with proper tag filtering
 function isAllowed(arr, fnName){
@@ -5922,6 +5965,9 @@ tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
   const jumpCountArg = ast.args[1];
   const runArg = ast.args[2];
   const momentumArg = ast.args[3];
+  const stateBefore = Store.getState();
+  const prevEnabled = !!stateBefore.avatarPhysics?.enabled;
+  const physicsActiveBefore = !!stateBefore.scene?.physics;
   const updates = {};
   updates.enabled = enabled;
   if(jumpCountArg !== undefined){
@@ -5941,6 +5987,34 @@ tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
   Store.setState(state => ({
     avatarPhysics: { ...state.avatarPhysics, ...updates }
   }));
+
+  let spawnTarget = null;
+  if(enabled && !prevEnabled){
+    try{
+      const sel = stateBefore.selection;
+      const arrays = stateBefore.arrays || {};
+      if(sel?.arrayId != null && sel.focus){
+        const arrSel = arrays[sel.arrayId];
+        if(arrSel){
+          const pos = Scene.worldPos ? Scene.worldPos(arrSel, sel.focus.x, sel.focus.y, sel.focus.z) : null;
+          if(pos){
+            const scale = arrayVoxelScale(arrSel);
+            const perch = avatarPerchOffset(scale);
+            spawnTarget = { x: pos.x, y: pos.y + perch, z: pos.z };
+          }
+        }
+      }
+    }catch{}
+  }
+
+  if(enabled && !physicsActiveBefore){
+    try{ Scene.togglePhysicsMode(); }catch{}
+  }
+
+  if(spawnTarget){
+    try{ Scene.spawnPlayerAt?.(spawnTarget.x, spawnTarget.y, spawnTarget.z); }catch{}
+    try{ Scene.setPhysicsSpawn?.(spawnTarget); }catch{}
+  }
 
   if(!enabled && Store.getState().scene.physics){
     try{ Scene.togglePhysicsMode(); }catch{}
@@ -7864,6 +7938,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   const FancyDefaults = {
     hdri: true,
     lights: true,
+    lightRotation: 0,
+    lightStrength: 1,
     darkBg: false,
     bloomEnabled: true,
     bloomStrength: 0.15,
@@ -7892,6 +7968,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     composer: null,
     passes: {},
     groups: { lights: null, mirror: null, waveGrid: null, ground: null },
+    lightDefaults: { key: 3.2, fill: 1.4, rim: 2.6, hemi: 0.6 },
+    lights: { key: null, fill: null, rim: null, hemi: null },
     shadowLights: [],
     decor: null,
     hdriTexture: null,
@@ -8139,10 +8217,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     FancyGraphics.groups.waveGrid = waveGrid;
 
     const lights = new THREE.Group();
-    const key = new THREE.DirectionalLight(0xffffff, 3.2); key.position.set(-8, 14, 10);
-    const fill = new THREE.DirectionalLight(0xffffff, 1.4); fill.position.set(10, 6, 12);
-    const rim = new THREE.DirectionalLight(0xffffff, 2.6); rim.position.set(0, 8, -14);
-    const hemi = new THREE.HemisphereLight(0xdbeafe, 0x0f172a, 0.6);
+    const defaults = FancyGraphics.lightDefaults;
+    const strength = FancyGraphics.settings.lightStrength ?? 1;
+    const key = new THREE.DirectionalLight(0xffffff, defaults.key * strength); key.position.set(-8, 14, 10);
+    const fill = new THREE.DirectionalLight(0xffffff, defaults.fill * strength); fill.position.set(10, 6, 12);
+    const rim = new THREE.DirectionalLight(0xffffff, defaults.rim * strength); rim.position.set(0, 8, -14);
+    const hemi = new THREE.HemisphereLight(0xdbeafe, 0x0f172a, defaults.hemi * strength);
     key.castShadow = false;
     key.shadow.mapSize.set(2048,2048);
     key.shadow.camera.near = 0.5;
@@ -8161,6 +8241,39 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     });
     FancyGraphics.decor.add(lights);
     FancyGraphics.groups.lights = lights;
+    FancyGraphics.lights = { key, fill, rim, hemi };
+    applyFancyLightingAdjustments();
+  }
+
+  function applyFancyLightingAdjustments(){
+    try{
+      const rotation = THREE.MathUtils.degToRad(FancyGraphics.settings.lightRotation || 0);
+      if(FancyGraphics.groups.lights){
+        FancyGraphics.groups.lights.rotation.y = rotation;
+      }
+      if(baseLightsGroup){
+        baseLightsGroup.rotation.y = rotation;
+      }
+      const strength = Math.max(0, FancyGraphics.settings.lightStrength ?? 1);
+      const defaults = FancyGraphics.lightDefaults;
+      const lights = FancyGraphics.lights || {};
+      if(lights.key) lights.key.intensity = defaults.key * strength;
+      if(lights.fill) lights.fill.intensity = defaults.fill * strength;
+      if(lights.rim) lights.rim.intensity = defaults.rim * strength;
+      if(lights.hemi) lights.hemi.intensity = defaults.hemi * strength;
+      if(scene){
+        try{ scene.environmentIntensity = strength; }catch{}
+        const env = scene.environment;
+        if(env && env.isTexture){
+          try{
+            if(env.center && env.center.set){ env.center.set(0.5, 0.5); }
+            else if(env.center){ env.center.x = 0.5; env.center.y = 0.5; }
+            env.rotation = rotation;
+            env.needsUpdate = true;
+          }catch{}
+        }
+      }
+    }catch(e){ console.warn('applyFancyLightingAdjustments failed', e); }
   }
 
   function ensureFancyComposer(){
@@ -8286,7 +8399,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     if(FancyGraphics.groups.waveGrid){ FancyGraphics.groups.waveGrid.visible = FancyGraphics.settings.waveGrid; }
     refreshShadowCasting();
     if(FancyGraphics.settings.hdri){
-      ensureFancyHDRI().then((tex)=>{ if(FancyGraphics.enabled && FancyGraphics.settings.hdri){ scene.environment = tex; } }).catch(()=>{});
+      ensureFancyHDRI().then((tex)=>{
+        if(FancyGraphics.enabled && FancyGraphics.settings.hdri){
+          scene.environment = tex;
+          applyFancyLightingAdjustments();
+        }
+      }).catch(()=>{});
     } else {
       scene.environment = null;
     }
@@ -8296,6 +8414,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     } else {
       scene.fog = null;
     }
+    applyFancyLightingAdjustments();
   }
 
   function setPresentMode(force){
@@ -8369,11 +8488,13 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       FancyGraphics.settings.mirror = false;
     }
     const affectsMaterials = Object.prototype.hasOwnProperty.call(incoming, 'transmission');
+    const affectsLights = Object.prototype.hasOwnProperty.call(incoming, 'lightRotation') || Object.prototype.hasOwnProperty.call(incoming, 'lightStrength');
     if(FancyGraphics.enabled){
       applyFancyRuntimeSettings();
       if(affectsMaterials) refreshCellMaterials();
-    } else if(affectsMaterials){
-      refreshCellMaterials();
+    } else {
+      if(affectsMaterials) refreshCellMaterials();
+      if(affectsLights) applyFancyLightingAdjustments();
     }
   }
 
@@ -8955,6 +9076,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       // Use the same face as occlusion/arrow mapping for consistency
       const face = getPreferredFacing(arr);
       const scale = arrayVoxelScale(arr);
+      const cellScale = voxelDisplayScale(scale);
       const sign = face.sign;
       const offsetBase = SPRITE_FACE_OFFSET * scale;
       const faceOffset = offsetBase * sign;
@@ -9173,6 +9295,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
     scene.add(baseLightsGroup);
     updateBaseLightingVisibility();
+    applyFancyLightingAdjustments();
   }
   // Settings UI removed
   async function init(canvas){
@@ -9389,6 +9512,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     try{
       const scale = arrayVoxelScale(arr);
       const want = { x:arr.size.x*scale, y:arr.size.y*scale, z:arr.size.z*scale, scale };
+      const framePad = clampedScaleOffset(scale, 0.6);
       const rebuild = !arr._arrayShell || !arr._arrayShell.userData ||
         arr._arrayShell.userData.sx!==want.x ||
         arr._arrayShell.userData.sy!==want.y ||
@@ -9401,9 +9525,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         group.userData = { sx:want.x, sy:want.y, sz:want.z, scale:want.scale };
         // Outer backface shell: reach mid-gap between arrays (±0.5 beyond faces)
         const geoOuter = new RoundedBoxGeometry(
-          want.x + 1.20*scale,
-          want.y + 1.20*scale,
-          want.z + 1.20*scale,
+          want.x + 2*framePad,
+          want.y + 2*framePad,
+          want.z + 2*framePad,
           3, 0.20
         );
         const matOuter = new THREE.MeshBasicMaterial({
@@ -9659,11 +9783,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const list = ch.index2cell || ch.cells || [];
       const viewModeNow = (Store.getState().ui && Store.getState().ui.viewMode) || 'standard';
       const scale = arrayVoxelScale(arr);
+      const cellScale = voxelDisplayScale(scale);
       for(let i=0;i<list.length;i++){
         const c = list[i]; if(!c) continue;
         // transform
         const p = localPos(arr, c.x, c.y, c.z);
-        temp.position.copy(p); temp.rotation.set(0,0,0); temp.scale.set(scale,scale,scale); temp.updateMatrix();
+        temp.position.copy(p); temp.rotation.set(0,0,0); temp.scale.set(cellScale,cellScale,cellScale); temp.updateMatrix();
         const M = temp.matrix;
         // In hideEmpty mode, zero-scale empty instances; otherwise set normal transform
         if(viewModeNow==='hideEmpty'){
@@ -9730,7 +9855,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           const isBlocked = blocked.has(L);
           // Build the canonical transform exactly once
           const p = localPos(arr,c.x,c.y,c.z);
-          temp.position.copy(p); temp.rotation.set(0,0,0); temp.scale.set(scale,scale,scale); temp.updateMatrix();
+          temp.position.copy(p); temp.rotation.set(0,0,0); temp.scale.set(cellScale,cellScale,cellScale); temp.updateMatrix();
           const M = temp.matrix.clone();
           // Solid shows when NOT blocked. It also shows on the focus layer even if it would be considered blocked.
           const showSolid = (!isBlocked) || isFocus;
@@ -10010,6 +10135,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         this.index2cell = sorted; // expose for picking and ghost masking
         this.cellIndexMap = new Map();
         const scale = arrayVoxelScale(this.array);
+        const cellScale = voxelDisplayScale(scale);
         for(let i=0;i<sorted.length;i++){
           const c = sorted[i];
           this.cellIndexMap.set(`${c.x},${c.y},${c.z}`, i);
@@ -10017,7 +10143,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           const p = localPos(this.array, c.x, c.y, c.z);
           temp.position.copy(p);
           temp.rotation.set(0,0,0);
-          temp.scale.set(scale,scale,scale);
+          temp.scale.set(cellScale,cellScale,cellScale);
           temp.updateMatrix();
           this.instancedMesh.setMatrixAt(i, temp.matrix);
           // Start ghosts hidden (zero scale) until occlusion mask applies
@@ -10177,10 +10303,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
       // 2) Structural rounded-edge cage
       const scale = arrayVoxelScale(arr);
+      const framePad = clampedScaleOffset(scale, 0.6);
       const frameGeom = new RoundedBoxGeometry(
-        arr.size.x*scale+1.2*scale,
-        arr.size.y*scale+1.2*scale,
-        arr.size.z*scale+1.2*scale,
+        arr.size.x*scale + 2*framePad,
+        arr.size.y*scale + 2*framePad,
+        arr.size.z*scale + 2*framePad,
         3, 0.2
       );
       const edges = new THREE.EdgesGeometry(frameGeom);
@@ -10196,9 +10323,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         // Front-left corner of the array bounds (grab handle lives here)
         const scale = arrayVoxelScale(arr);
         const corner = new THREE.Vector3(
-          -(arr.size.x*scale/2 + 0.4*scale),
-          arr.size.y*scale/2 + 1.2*scale,
-          arr.size.z*scale/2 + 0.4*scale
+          -(arr.size.x*scale/2 + clampedScaleOffset(scale, 0.4)),
+          arr.size.y*scale/2 + clampedScaleOffset(scale, 1.2),
+          arr.size.z*scale/2 + clampedScaleOffset(scale, 0.4)
         );
         labelSprite.position.copy(corner);
         labelSprite.userData.billboard = true;
@@ -13881,7 +14008,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }
         
         // Position centered ABOVE the cell - simple direct positioning
-        const target = pos.clone().add(new THREE.Vector3(0, 0.8, 0));
+        const arrScale = arrayVoxelScale(arr);
+        const arrayaHover = clampedScaleOffset(arrScale, 0.8);
+        const target = pos.clone().add(new THREE.Vector3(0, arrayaHover, 0));
         arrayaAvatar.group.position.copy(target);
         arrayaAvatar.group.scale.set(0.28, 0.28, 0.28);
         
@@ -13906,7 +14035,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         arrayaAvatar._lastCell = {hasArray: true};
       } else {
         // Celli is visible - continuous camera tracking
-        celli.position.copy(pos).add(new THREE.Vector3(0,.7,0));
+        const arrScale = arrayVoxelScale(arr);
+        const perch = avatarPerchOffset(arrScale);
+        celli.position.copy(pos).add(new THREE.Vector3(0, perch, 0));
         celli.visible=true;
         celli.scale.set(0.7, 0.7, 0.7); // Smaller Celli
         
@@ -13932,8 +14063,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
     swapAnimating = true;
     console.log('[AVATAR] animateAvatarSwap called', {from: fromAvatar.name || 'Celli', to: toAvatarOrFactory.group?.name || 'Celli'});
-    
+
     try{
+      const selState = Store.getState().selection;
+      const arraysState = Store.getState().arrays;
+      const activeArr = selState?.arrayId != null ? arraysState?.[selState.arrayId] : null;
+      const swapScale = activeArr ? arrayVoxelScale(activeArr) : 1;
+      const perchCelli = avatarPerchOffset(swapScale);
+      const perchArraya = clampedScaleOffset(swapScale, 0.8);
       // Magical swirl/spin/shrink animation
       const startPos = fromAvatar.position.clone();
       const startScale = fromAvatar.scale?.clone() || new THREE.Vector3(1,1,1);
@@ -13999,7 +14136,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           toAvatar.scale.set(finalTargetScale, finalTargetScale, finalTargetScale);
           
           // Final position matching updateAvatars logic
-          const targetY = isArrayaTo ? 0.8 : 0.7;
+          const targetY = isArrayaTo ? perchArraya : perchCelli;
           toAvatar.position.copy(cellPos).add(new THREE.Vector3(0, targetY, 0));
           if(arrayaAvatar._targetRotation !== undefined && isArrayaTo){
             toAvatar.rotation.y = arrayaAvatar._targetRotation;
@@ -15430,8 +15567,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
     // offsets: a little above in world Y, and a little toward the camera (horizontal only)
     const up = new THREE.Vector3(0,1,0);
-    const above   = up.multiplyScalar((0.35 + Math.abs(label.scale.y)*0.5) * scale);
-    const inFront = toCam.multiplyScalar(0.3 * scale);
+    const aboveBase = 0.35 + Math.abs(label.scale.y)*0.5;
+    const above   = up.multiplyScalar(clampedScaleOffset(scale, aboveBase));
+    const inFront = toCam.multiplyScalar(clampedScaleOffset(scale, 0.3));
 
     const targetW = grabW.clone().add(above).add(inFront);
 
@@ -15492,7 +15630,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const selectedArr = sel?.arrayId ? Store.getState().arrays[sel.arrayId] : null;
       if(selectedArr && sel?.focus){
         const pos = worldPos(selectedArr, sel.focus.x, sel.focus.y, sel.focus.z);
-        spawnPos = {x: pos.x, y: pos.y + 0.7, z: pos.z};
+        const arrScale = arrayVoxelScale(selectedArr);
+        const perch = avatarPerchOffset(arrScale);
+        spawnPos = {x: pos.x, y: pos.y + perch, z: pos.z};
         spawnPlayerAt(spawnPos.x, spawnPos.y, spawnPos.z);
         console.log(`[PHYSICS] Spawned Celli at cell (${sel.focus.x},${sel.focus.y},${sel.focus.z}) -> world (${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)})`);
       } else {
@@ -15599,6 +15739,8 @@ const UI = (()=>{
   const graphicsControls = {
     hdri: document.getElementById('gfxHdri'),
     lights: document.getElementById('gfxLights'),
+    lightRotation: document.getElementById('gfxLightRotation'),
+    lightStrength: document.getElementById('gfxLightStrength'),
     darkBg: document.getElementById('gfxDarkBg'),
     bloom: document.getElementById('gfxBloom'),
     bloomStrength: document.getElementById('gfxBloomStrength'),
@@ -15626,6 +15768,8 @@ const UI = (()=>{
     exposure: document.getElementById('gfxExposureValue'),
     dofAperture: document.getElementById('gfxDofApertureValue'),
     dofMaxBlur: document.getElementById('gfxDofMaxBlurValue'),
+    lightRotation: document.getElementById('gfxLightRotationValue'),
+    lightStrength: document.getElementById('gfxLightStrengthValue'),
     fogDensity: document.getElementById('gfxFogDensityValue'),
     outlineStrength: document.getElementById('gfxOutlineStrengthValue'),
     outlineThickness: document.getElementById('gfxOutlineThicknessValue'),
@@ -15639,6 +15783,8 @@ const UI = (()=>{
     exposure: (v)=>v.toFixed(2),
     dofAperture: (v)=>v.toFixed(4),
     dofMaxBlur: (v)=>v.toFixed(4),
+    lightRotation: (v)=>`${Math.round(Number(v)||0)}°`,
+    lightStrength: (v)=>Number(v).toFixed(2),
     fogDensity: (v)=>v.toFixed(3),
     outlineStrength: (v)=>v.toFixed(1),
     outlineThickness: (v)=>v.toFixed(2),
@@ -15663,6 +15809,8 @@ const UI = (()=>{
     if(graphicsControls.bloomStrength){ graphicsControls.bloomStrength.value = settings.bloomStrength; updateSliderDisplay('bloomStrength', settings.bloomStrength); }
     if(graphicsControls.bloomRadius){ graphicsControls.bloomRadius.value = settings.bloomRadius; updateSliderDisplay('bloomRadius', settings.bloomRadius); }
     if(graphicsControls.exposure){ graphicsControls.exposure.value = settings.exposure; updateSliderDisplay('exposure', settings.exposure); }
+    if(graphicsControls.lightRotation){ graphicsControls.lightRotation.value = settings.lightRotation ?? 0; updateSliderDisplay('lightRotation', settings.lightRotation ?? 0); }
+    if(graphicsControls.lightStrength){ graphicsControls.lightStrength.value = settings.lightStrength ?? 1; updateSliderDisplay('lightStrength', settings.lightStrength ?? 1); }
     if(graphicsControls.dof) graphicsControls.dof.checked = !!settings.dofEnabled;
     if(graphicsControls.dofAperture){ graphicsControls.dofAperture.value = settings.dofAperture; updateSliderDisplay('dofAperture', settings.dofAperture); }
     if(graphicsControls.dofMaxBlur){ graphicsControls.dofMaxBlur.value = settings.dofMaxBlur; updateSliderDisplay('dofMaxBlur', settings.dofMaxBlur); }
@@ -15914,6 +16062,8 @@ const UI = (()=>{
       exposure:'exposure',
       dofAperture:'dofAperture',
       dofMaxBlur:'dofMaxBlur',
+      lightRotation:'lightRotation',
+      lightStrength:'lightStrength',
       fogDensity:'fogDensity',
       outlineStrength:'outlineStrength',
       outlineThickness:'outlineThickness',
