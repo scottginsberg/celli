@@ -14209,6 +14209,26 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       smile.frustumCulled = false;
       group.add(eyeL, eyeR, smile);
 
+      const MAT_OUTLINE = new THREE.MeshBasicMaterial({ color: 0x111827 });
+      MAT_OUTLINE.depthTest = false;
+      MAT_OUTLINE.depthWrite = false;
+      MAT_OUTLINE.toneMapped = false;
+      MAT_OUTLINE.transparent = true;
+      const outlineScale = 1.08;
+      const baseMeshes = [];
+      group.traverse(n=>{ if(n.isMesh) baseMeshes.push(n); });
+      baseMeshes.forEach(mesh=>{
+        const outline = new THREE.Mesh(mesh.geometry, MAT_OUTLINE);
+        outline.name = `${mesh.name||'part'}_outline`;
+        outline.userData.isAvatarOutline = true;
+        outline.scale.set(outlineScale, outlineScale, outlineScale);
+        outline.position.set(0,0,0);
+        outline.castShadow = false;
+        outline.receiveShadow = false;
+        outline.renderOrder = (mesh.renderOrder ?? 0) - 1;
+        mesh.add(outline);
+      });
+
       const hd = D/2;
       const pivotVec = new THREE.Vector3();
       const sFace = 0.006;
@@ -14329,6 +14349,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   })();
 
   // Celli and Arraya avatars
+  const ARRAYA_ROTATION_OFFSET = -Math.PI / 2; // Rotate 90° clockwise around Y
   let celli, arraya, arrayaAvatar;
   function ensureArrayaAvatar(){
     if(arrayaAvatar || typeof ArrayaAvatarFactory === 'undefined') return;
@@ -14484,10 +14505,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         const cellToCamera = new THREE.Vector3().subVectors(camera.position, pos);
         cellToCamera.y = 0;
         cellToCamera.normalize();
-        const targetAngle = Math.atan2(cellToCamera.x, cellToCamera.z);
-        const degrees = (targetAngle * 180 / Math.PI).toFixed(1);
-        console.log(`[AVATAR] Swap spawn: cell(${pos.x.toFixed(1)},${pos.z.toFixed(1)}), camera(${camera.position.x.toFixed(1)},${camera.position.z.toFixed(1)}), direction(${cellToCamera.x.toFixed(2)},${cellToCamera.z.toFixed(2)}), angle=${degrees}°`);
-        arrayaAvatar._targetRotation = targetAngle;
+        const baseAngle = Math.atan2(cellToCamera.x, cellToCamera.z);
+        const spawnAngle = baseAngle + ARRAYA_ROTATION_OFFSET;
+        const baseDeg = (baseAngle * 180 / Math.PI).toFixed(1);
+        const spawnDeg = (spawnAngle * 180 / Math.PI).toFixed(1);
+        console.log(`[AVATAR] Swap spawn: cell(${pos.x.toFixed(1)},${pos.z.toFixed(1)}), camera(${camera.position.x.toFixed(1)},${camera.position.z.toFixed(1)}), direction(${cellToCamera.x.toFixed(2)},${cellToCamera.z.toFixed(2)}), base=${baseDeg}°, spawn=${spawnDeg}°`);
+        arrayaAvatar._targetRotation = spawnAngle;
         animateAvatarSwap(celli, arrayaAvatar, pos);
         arrayaAvatar._lastCellKey = currentCellKey;
         arrayaAvatar._lastCell = {hasArray: true};
@@ -14522,11 +14545,13 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           cellToCamera.y = 0;
           cellToCamera.normalize();
           // For character facing: atan2(x, z) where character looks down +Z by default
-          const targetAngle = Math.atan2(cellToCamera.x, cellToCamera.z);
-          const degrees = (targetAngle * 180 / Math.PI).toFixed(1);
-          console.log(`[AVATAR] Arraya spawn at cell(${pos.x.toFixed(1)},${pos.z.toFixed(1)}), camera(${camera.position.x.toFixed(1)},${camera.position.z.toFixed(1)}), direction(${cellToCamera.x.toFixed(2)},${cellToCamera.z.toFixed(2)}), angle=${degrees}°`);
-          arrayaAvatar.group.rotation.y = targetAngle;
-          arrayaAvatar._targetRotation = targetAngle;
+          const baseAngle = Math.atan2(cellToCamera.x, cellToCamera.z);
+          const spawnAngle = baseAngle + ARRAYA_ROTATION_OFFSET;
+          const baseDeg = (baseAngle * 180 / Math.PI).toFixed(1);
+          const spawnDeg = (spawnAngle * 180 / Math.PI).toFixed(1);
+          console.log(`[AVATAR] Arraya spawn at cell(${pos.x.toFixed(1)},${pos.z.toFixed(1)}), camera(${camera.position.x.toFixed(1)},${camera.position.z.toFixed(1)}), direction(${cellToCamera.x.toFixed(2)},${cellToCamera.z.toFixed(2)}), base=${baseDeg}°, spawn=${spawnDeg}°`);
+          arrayaAvatar.group.rotation.y = spawnAngle;
+          arrayaAvatar._targetRotation = spawnAngle;
         } else {
           // Keep static rotation
           arrayaAvatar.group.rotation.y = arrayaAvatar._targetRotation;
