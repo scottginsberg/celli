@@ -10333,7 +10333,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const axisKey = axisKeys[axis];
     const horizontalCount = counts[axisKeys[planeAxes.horizontal]] || 1;
     const verticalCount = counts[axisKeys[planeAxes.vertical]] || 1;
-    const depthCount = counts[axisKey] || 1;
+    const depthCount = Math.max(1, counts[axisKey] || 1);
 
     const cellWidth = Math.max(horizontalCount * scale, scale * 0.9);
     const cellHeight = Math.max(verticalCount * scale, scale * 0.9);
@@ -10434,11 +10434,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
     up = new THREE.Vector3().crossVectors(right, forward).normalize();
 
-    const halfDepth = Math.max(0, (depthCount - 1) * 0.5);
+    const halfDepth = depthCount * 0.5;
     const faceCenter = { ...center };
-    if(halfDepth > 0){
-      faceCenter[axisKey] = center[axisKey] + sign * halfDepth;
-    }
+    faceCenter[axisKey] = center[axisKey] + sign * halfDepth;
 
     const rotMatrix = new THREE.Matrix4().makeBasis(right, up, forward);
     selectionCelli.setRotationFromMatrix(rotMatrix);
@@ -14983,6 +14981,25 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         return;
       }
       if(e.key==='p'||e.key==='P'){ Actions.togglePhysics(); return; }
+    }
+
+    if(!physicsCapturing && physicsActive){
+      const typing = typingElement || directOpen;
+      if(!typing && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Spacebar','w','a','s','d','W','A','S','D','Escape'].includes(e.key)){
+        if(handlePlatformerKey(e.key, true)) refreshPlatformerInput(s.globalState);
+        e.preventDefault();
+        if(e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.f=1;
+        if(e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.b=1;
+        if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.r=1;
+        if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.l=1;
+        if(e.key===' '||e.key==='Spacebar') input.j=1;
+        if(e.key==='Escape'){
+          console.log('[PHYSICS] ESC pressed - exiting physics mode');
+          Actions.togglePhysics();
+          return;
+        }
+        return;
+      }
     }
 
     if(platformerMode && !typingElement && !directOpen){
