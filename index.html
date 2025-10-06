@@ -9787,6 +9787,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const vs = window.VisibilitySettings || {}; const s = vs[tk];
     return (s && typeof s.color==='number') ? s.color : (tk==='empty'?COLORS.empty: tk==='formula'?COLORS.formula: tk==='emitted'?COLORS.emitted: COLORS.filled);
   }
+  function ghostBaseHex(){
+    const vs = window.VisibilitySettings || {};
+    const setting = vs.ghost;
+    if(setting && typeof setting.color === 'number') return setting.color;
+    return COLORS.ghost;
+  }
   // Make default outlines subtler: 1.01 instead of 1.04
   const BASE_OUTLINE_SCALE = 1.01;
   function outlineParamsForTypeKey(tk){
@@ -10757,6 +10763,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const viewModeNow = (Store.getState().ui && Store.getState().ui.viewMode) || 'standard';
       const scale = arrayVoxelScale(arr);
       const cellScale = voxelDisplayScale(scale);
+      const ghostColorLinear = new THREE.Color(ghostBaseHex());
+      ghostColorLinear.convertSRGBToLinear();
       for(let i=0;i<list.length;i++){
         const c = list[i]; if(!c) continue;
         // transform
@@ -10793,7 +10801,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           let hex; if(isFormula) hex = baseHexForTypeKey('formula'); else if(emitted) hex = baseHexForTypeKey('emitted'); else hex = hasValue ? baseHexForTypeKey('value') : baseHexForTypeKey('empty');
           const col = new THREE.Color(hex).convertSRGBToLinear();
           meshSolid.setColorAt(i, col);
-          if(meshGhost) meshGhost.setColorAt(i, col);
+          if(meshGhost) meshGhost.setColorAt(i, ghostColorLinear);
           if(meshShell){ const sc = col.clone(); sc.offsetHSL(0,0,-0.22); meshShell.setColorAt(i, sc); }
         }catch{}
       }
@@ -11149,6 +11157,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         this.cellIndexMap = new Map();
         const scale = arrayVoxelScale(this.array);
         const cellScale = voxelDisplayScale(scale);
+        const ghostColorLinear = new THREE.Color(ghostBaseHex());
+        ghostColorLinear.convertSRGBToLinear();
         for(let i=0;i<sorted.length;i++){
           const c = sorted[i];
           this.cellIndexMap.set(`${c.x},${c.y},${c.z}`, i);
@@ -11174,7 +11184,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           col.convertSRGBToLinear();
           try{
             this.instancedMesh.setColorAt(i, col);
-            if(this.meshGhost) this.meshGhost.setColorAt(i, col);
+            if(this.meshGhost) this.meshGhost.setColorAt(i, ghostColorLinear);
             if(this.meshShell){ const sc = col.clone(); sc.offsetHSL(0,0,-0.22); this.meshShell.setColorAt(i, sc); }
           }catch{}
         }
