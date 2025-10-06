@@ -9902,6 +9902,23 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     if(setting && typeof setting.color === 'number') return setting.color;
     return COLORS.ghost;
   }
+  const ghostBaseLinearCache = { hex:null, color:null };
+  function ghostBaseLinearColor(){
+    const hex = ghostBaseHex();
+    if(ghostBaseLinearCache.color && ghostBaseLinearCache.hex === hex) return ghostBaseLinearCache.color;
+    const col = new THREE.Color(hex);
+    col.convertSRGBToLinear();
+    ghostBaseLinearCache.hex = hex;
+    ghostBaseLinearCache.color = col;
+    return col;
+  }
+  function tintGhostColorFrom(colLinear){
+    try{
+      const base = ghostBaseLinearColor().clone();
+      return base.lerp(colLinear, 0.65);
+    }catch{}
+    return colLinear.clone();
+  }
   // Make default outlines subtler: 1.01 instead of 1.04
   const BASE_OUTLINE_SCALE = 1.01;
   function outlineParamsForTypeKey(tk){
@@ -11089,7 +11106,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           const idx = map.findIndex(c=>c && c.x===coord.x && c.y===coord.y && c.z===coord.z);
           if(idx>=0){
             if(mesh){ mesh.setColorAt(idx, col); if(mesh.instanceColor) mesh.instanceColor.needsUpdate = true; mesh.visible = true; }
-            if(gmesh){ gmesh.setColorAt(idx, col); if(gmesh.instanceColor) gmesh.instanceColor.needsUpdate = true; }
+            if(gmesh){ const ghostTint = tintGhostColorFrom(col); gmesh.setColorAt(idx, ghostTint); if(gmesh.instanceColor) gmesh.instanceColor.needsUpdate = true; }
             if(smesh){ const scol = col.clone(); scol.offsetHSL(0,0,-0.22); if(smesh.instanceColor){ smesh.setColorAt(idx, scol); smesh.instanceColor.needsUpdate = true; } }
           }
         }
@@ -11123,8 +11140,6 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const viewModeNow = (Store.getState().ui && Store.getState().ui.viewMode) || 'standard';
       const scale = arrayVoxelScale(arr);
       const cellScale = voxelDisplayScale(scale);
-      const ghostColorLinear = new THREE.Color(ghostBaseHex());
-      ghostColorLinear.convertSRGBToLinear();
       for(let i=0;i<list.length;i++){
         const c = list[i]; if(!c) continue;
         // transform
@@ -11162,7 +11177,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           const custom = fresh?.meta?.color;
           const col = new THREE.Color(custom || hex).convertSRGBToLinear();
           meshSolid.setColorAt(i, col);
-          if(meshGhost) meshGhost.setColorAt(i, ghostColorLinear);
+          if(meshGhost){ const ghostTint = tintGhostColorFrom(col); meshGhost.setColorAt(i, ghostTint); }
           if(meshShell){ const sc = col.clone(); sc.offsetHSL(0,0,-0.22); meshShell.setColorAt(i, sc); }
         }catch{}
       }
@@ -11518,8 +11533,6 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         this.cellIndexMap = new Map();
         const scale = arrayVoxelScale(this.array);
         const cellScale = voxelDisplayScale(scale);
-        const ghostColorLinear = new THREE.Color(ghostBaseHex());
-        ghostColorLinear.convertSRGBToLinear();
         for(let i=0;i<sorted.length;i++){
           const c = sorted[i];
           this.cellIndexMap.set(`${c.x},${c.y},${c.z}`, i);
@@ -11545,7 +11558,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           col.convertSRGBToLinear();
           try{
             this.instancedMesh.setColorAt(i, col);
-            if(this.meshGhost) this.meshGhost.setColorAt(i, ghostColorLinear);
+            if(this.meshGhost){ const ghostTint = tintGhostColorFrom(col); this.meshGhost.setColorAt(i, ghostTint); }
             if(this.meshShell){ const sc = col.clone(); sc.offsetHSL(0,0,-0.22); this.meshShell.setColorAt(i, sc); }
           }catch{}
         }
