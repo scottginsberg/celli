@@ -17735,7 +17735,6 @@ const UI = (()=>{
     const termOut=document.getElementById('term');
     const termClose=document.getElementById('term-close');
     const padWin=document.getElementById('pad');
-    if(padWin) makeResizable(padWin);
     // Ensure console windows are hidden on load
     try{ if(termWin) termWin.style.display='none'; if(padWin) padWin.style.display='none'; }catch{}
     const padClose=document.getElementById('pad-close');
@@ -17781,6 +17780,7 @@ const UI = (()=>{
         window.addEventListener('pointercancel', up, {once:true});
       });
     };
+    if(padWin) makeResizable(padWin);
     const openTerm=()=>{ const el=document.getElementById('terminal'); if(el){ el.style.display='flex'; makeDrag(el); runLogPaced(); } };
     const closeTerm=()=>{ if(termWin){ termWin.style.display='none'; } };
     const openPad=()=>{ const el=document.getElementById('pad'); if(el){ el.style.display='flex'; const term=document.getElementById('terminal'); if(term){ el.style.width = getComputedStyle(term).width; } makeDrag(el); makeResizable(el); } };
