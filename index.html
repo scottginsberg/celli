@@ -232,18 +232,18 @@ body.touch #hud{ display:none }
 #dpad{
   --dp:56px;
   position:fixed; right:24px; bottom:24px; z-index:20;
-  display:grid; 
+  display:grid;
   grid-template-columns: var(--dp) var(--dp) var(--dp);
   grid-template-rows: var(--dp) var(--dp) var(--dp);
   grid-template-areas:
     "grab up depthUp"
     "left center right"
-    ". down depthDown";
+    "present down depthDown";
   gap:10px;
 }
 #dpad .dp{
   width:var(--dp); height:var(--dp);
-  border:1px solid #2162df; 
+  border:1px solid #2162df;
   border-radius:12px; 
   background:var(--accent);
   color:#fff; 
@@ -260,6 +260,8 @@ body.touch #hud{ display:none }
 #dpad .depthUp{grid-area:depthUp}
 #dpad .depthDown{grid-area:depthDown}
 #dpad .center{grid-area:center; visibility:visible; font-size:14px}
+#dpad .present{grid-area:present; background:#fff; color:#1f2937; border:1px solid #d1d5e4; font-weight:700; display:flex; align-items:center; justify-content:center;}
+#dpad .present.active{background:var(--accent-2); border-color:#15803d; color:#fff;}
 #dpad .grab{grid-area:grab; width:calc(var(--dp)*0.7); height:calc(var(--dp)*0.7); align-self:center; justify-self:center; border:1px dashed #e5e7eb; background:#ffffffaa; color:#1f2937; font-size:14px; display:flex; align-items:center; justify-content:center; cursor:grab}
 #dpad .grab:active{cursor:grabbing}
 
@@ -537,6 +539,7 @@ document.addEventListener('click', function(e){
   <div class="dp left" data-dx="-1" data-dy="0" data-dz="0">←</div>
   <div class="dp center" title="Arrow mapping"><span style="display:inline-block;width:16px;height:12px;border:2px solid #fff;border-radius:3px"></span>&nbsp;<span id="depthMode">H</span></div>
   <div class="dp depthDown" data-dx="0" data-dy="0" data-dz="-1">↧</div>
+  <div class="dp present" role="button" data-action="present" aria-pressed="false" title="Enter Present Mode">▶</div>
   <div class="dp down" data-dx="0" data-dy="1" data-dz="0">↓</div>
   <div class="dp right" data-dx="1" data-dy="0" data-dz="0">→</div>
 </div>
@@ -14956,8 +14959,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       else if(e.key==='=') { UI.startDirectTyping('='); e.preventDefault(); }
       else if(e.key.length===1 && !e.ctrlKey && !e.altKey && !e.metaKey) { UI.startDirectTyping(e.key); e.preventDefault(); }
       else if(e.key==='f'||e.key==='F') UI.toggleFxPanel();
-      else if(e.key==='[') document.getElementById('zPrev').click();
-      else if(e.key===']') document.getElementById('zNext').click();
+      else if(e.key==='['){ UI.shiftZLayer?.(-1); e.preventDefault(); }
+      else if(e.key===']'){ UI.shiftZLayer?.(1); e.preventDefault(); }
       else if(e.key===' '||e.key==='Spacebar') Scene.handleJump();
     }
   }, true);
@@ -17870,7 +17873,6 @@ const UI = (()=>{
     physicsBtn:document.getElementById('physicsBtn'), reset:document.getElementById('reset'),
     status:document.getElementById('statusChip'),
     sheetTitle:document.getElementById('sheetTitle'),
-    zPrev:document.getElementById('zPrev'), zNext:document.getElementById('zNext'), zLabel:document.getElementById('zLabel'),
     rowHeaders:document.getElementById('rowHeaders'), colHeaders:document.getElementById('colHeaders'), grid:document.getElementById('grid'),
     direct:document.getElementById('directEdit')
   };
@@ -17994,6 +17996,23 @@ const UI = (()=>{
     els.presentToggle.textContent = state ? '🎨 Present: ON' : '🎨 Present: OFF';
     if(state){ els.presentToggle.classList.add('good'); }
     else { els.presentToggle.classList.remove('good'); }
+  }
+  function updateDpadPresent(state){
+    try{
+      const btn = document.querySelector('#dpad .dp.present');
+      if(!btn) return;
+      btn.classList.toggle('active', state);
+      btn.setAttribute('aria-pressed', state ? 'true' : 'false');
+      btn.textContent = state ? '■' : '▶';
+      btn.title = state ? 'Return to Create Mode' : 'Enter Present Mode';
+    }catch(e){ console.warn('Update D-pad present failed', e); }
+  }
+  function syncPresentUI(state){
+    const active = !!state;
+    updatePresentButton(active);
+    setGraphicsControlsEnabled(active);
+    syncGraphicsSettings();
+    updateDpadPresent(active);
   }
 
   let lastCrystalState = document.body?.classList?.contains('crystal-2d') || false;
@@ -18144,16 +18163,14 @@ const UI = (()=>{
     };
     if(els.toggleGrid) els.toggleGrid.onclick=Actions.toggleGrid;
     if(els.toggleAxes) els.toggleAxes.onclick=Actions.toggleAxes;
+    const presentInitial = Scene.isPresentEnabled ? Scene.isPresentEnabled() : false;
+    syncPresentUI(presentInitial);
     if(els.presentToggle){
-      updatePresentButton(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
       els.presentToggle.onclick=()=>{
         const state = Actions.togglePresentMode();
         const actual = Scene.isPresentEnabled ? Scene.isPresentEnabled() : state;
-        updatePresentButton(actual);
-        setGraphicsControlsEnabled(actual);
-        syncGraphicsSettings();
+        syncPresentUI(actual);
       };
-      setGraphicsControlsEnabled(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
     }
     applyCrystalStyle(Store.getState().ui?.crystal2D);
     if(els.crystalToggle){
@@ -18688,19 +18705,60 @@ const UI = (()=>{
       const nz=Math.max(0, Math.min(arr.size.z-1, s.focus.z + dz));
       Actions.setSelection(arr.id, {x:nx,y:ny,z:nz}, null, '3d');
     };
+    const presentBtn = dpad ? dpad.querySelector('.present') : null;
+    const syncPresentToggle=()=>{
+      if(!presentBtn) return;
+      try{
+        const active = Scene?.isPresentEnabled ? Scene.isPresentEnabled() : false;
+        presentBtn.classList.toggle('active', !!active);
+        presentBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        presentBtn.textContent = active ? '■' : '▶';
+        presentBtn.title = active ? 'Return to Create Mode' : 'Enter Present Mode';
+      }catch(e){ console.warn('Sync present toggle failed', e); }
+    };
+    const applyPresentPreset=()=>{
+      try{
+        Scene?.updateGraphicsSettings?.({
+          hdri:false,
+          lights:true,
+          bloomEnabled:false,
+          dofEnabled:false,
+          transmission:false,
+          mirror:false,
+          solidGround:false,
+          waveGrid:false,
+          fogEnabled:false,
+          darkBg:false,
+          motionEnabled:false
+        });
+      }catch(e){ console.warn('Applying present preset failed', e); }
+    };
+    const togglePresentFromDpad=()=>{
+      const state = Actions.togglePresentMode();
+      const actual = Scene?.isPresentEnabled ? Scene.isPresentEnabled() : state;
+      if(actual){ applyPresentPreset(); }
+      try{ UI?.syncPresentUI?.(actual); }catch(e){ console.warn('Sync present UI failed', e); }
+      syncPresentToggle();
+    };
     dpad.querySelectorAll('.dp').forEach(btn=>{
+      if(btn.classList.contains('grab')) return;
       btn.addEventListener('click',()=>{
-        const dx=+btn.getAttribute('data-dx')||0;
-        const dy=+btn.getAttribute('data-dy')||0;
-        const dz=+btn.getAttribute('data-dz')||0;
-        // D-pad buttons use their data attributes directly - no mode toggling
+        if(btn.classList.contains('present') || btn.dataset.action==='present'){
+          togglePresentFromDpad();
+          return;
+        }
+        const dx=parseInt(btn.dataset.dx||'0',10);
+        const dy=parseInt(btn.dataset.dy||'0',10);
+        const dz=parseInt(btn.dataset.dz||'0',10);
+        if(!(dx||dy||dz)) return;
         onDP(dx,dy,dz);
       });
     });
+    syncPresentToggle();
     // Reflect current arrow mapping (height vs depth) on center key
     const depthFlag = Store.getState().scene.arrowMapDepth;
     const dm = document.getElementById('depthMode'); if(dm) dm.textContent = depthFlag? 'D' : 'H';
-    // Z layer controls removed (redundant)
+    // Z layer controls handled via sheet header buttons
 
     // Next/Prev arrows: show only if an array with id>1 exists; render arrows around title
     const navUpdate=()=>{
@@ -19121,6 +19179,26 @@ const UI = (()=>{
   }
   function currentArray(){ const s=Store.getState().selection; return s.arrayId?Store.getState().arrays[s.arrayId]:Store.getState().arrays[1]||Store.getState().arrays[-1]; }
   function getZLayer(){ return Store.getState().ui.zLayer; } // parser hook
+  function clampLayerIndex(arr, idx){
+    const max = Math.max(0, ((arr?.size?.z)||1) - 1);
+    const value = Number.isFinite(idx) ? (idx|0) : 0;
+    return Math.max(0, Math.min(max, value));
+  }
+  function setZLayer(index){
+    const arr = currentArray();
+    const next = clampLayerIndex(arr, index);
+    const prev = getZLayer();
+    if(next === prev) return next;
+    Store.setState(s=>({ ui:{...s.ui, zLayer: next} }));
+    try{ renderSheet(); }catch(e){ console.warn('renderSheet after setZLayer failed', e); }
+    try{ highlightSheetCell(); }catch(e){ console.warn('highlight after setZLayer failed', e); }
+    return next;
+  }
+  function shiftZLayer(delta){
+    const step = Number.isFinite(delta) ? (delta|0) : 0;
+    if(!step) return getZLayer();
+    return setZLayer(getZLayer() + step);
+  }
   // Intro collapse trigger for onboarding
   function triggerIntroCollapse(){
     const sheetEl=document.getElementById('sheet');
@@ -19542,7 +19620,7 @@ const UI = (()=>{
     zPrevBtn.className = 'layer-btn';
     zPrevBtn.style.cssText = 'padding:0 4px; font-size:12px; min-width:20px;';
     zPrevBtn.disabled = (getZLayer() <= 0);
-    zPrevBtn.onclick = ()=> document.getElementById('zPrev')?.click();
+    zPrevBtn.onclick = ()=> shiftZLayer(-1);
     const zLabel = document.createElement('span');
     zLabel.textContent = greek(getZLayer());
     zLabel.style.cssText = 'font-weight:600; min-width:16px; text-align:center;';
@@ -19551,7 +19629,7 @@ const UI = (()=>{
     zNextBtn.className = 'layer-btn';
     zNextBtn.style.cssText = 'padding:0 4px; font-size:12px; min-width:20px;';
     zNextBtn.disabled = (getZLayer() >= (arr.size.z - 1));
-    zNextBtn.onclick = ()=> document.getElementById('zNext')?.click();
+    zNextBtn.onclick = ()=> shiftZLayer(1);
     zLayerWrap.appendChild(zPrevBtn);
     zLayerWrap.appendChild(zLabel);
     zLayerWrap.appendChild(zNextBtn);
@@ -20269,7 +20347,7 @@ const UI = (()=>{
     }catch(err){ console.warn('ensureIntroNote failed', err); }
   }
 
-  return {init, renderSheet, applyCrystalStyle, renderSheetCell, updateFocusChip, scrollSheetToSelection, openEditor, startDirectTyping, toggleFxPanel, getZLayer, updateStatus, getCell, triggerIntroCollapse, ensureIntroNote, hideIntroOverlay, debugIntroState, kickIntroSequence, startIntroExperience, inspect:(arr,pos)=>{ try{ const ch=arr.chunks[keyChunk(...Object.values(chunkOf(pos.x,pos.y,pos.z)))]; const c=ch?.cells?.find?.(t=>t.x===pos.x&&t.y===pos.y&&t.z===pos.z) || {value:'',formula:''}; const el=document.getElementById('inspect'); if(el) el.textContent=`Array #${arr.id} \"${arr.name}\"\nCell ${A1(pos.x)}${pos.y+1}${greek(pos.z)} @[${pos.x},${pos.y},${pos.z},${arr.id}]\nValue: ${JSON.stringify(c.value)}\nFormula: ${c.formula||''}`; }catch(e){ /* selection panel might be hidden */ } }};
+  return {init, renderSheet, applyCrystalStyle, renderSheetCell, updateFocusChip, scrollSheetToSelection, openEditor, startDirectTyping, toggleFxPanel, getZLayer, shiftZLayer, syncPresentUI, updateStatus, getCell, triggerIntroCollapse, ensureIntroNote, hideIntroOverlay, debugIntroState, kickIntroSequence, startIntroExperience, inspect:(arr,pos)=>{ try{ const ch=arr.chunks[keyChunk(...Object.values(chunkOf(pos.x,pos.y,pos.z)))]; const c=ch?.cells?.find?.(t=>t.x===pos.x&&t.y===pos.y&&t.z===pos.z) || {value:'',formula:''}; const el=document.getElementById('inspect'); if(el) el.textContent=`Array #${arr.id} \"${arr.name}\"\nCell ${A1(pos.x)}${pos.y+1}${greek(pos.z)} @[${pos.x},${pos.y},${pos.z},${arr.id}]\nValue: ${JSON.stringify(c.value)}\nFormula: ${c.formula||''}`; }catch(e){ /* selection panel might be hidden */ } }};
 })();
 
 // CRITICAL: Expose UI globally so window.UI?.renderSheetCell works
