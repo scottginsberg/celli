@@ -9975,10 +9975,31 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       cheekLeft,
       cheekRight,
       bowGroup,
-      lastSignature: null
+      lastSignature: null,
+      stretchState: null,
+      lastStretchSignature: null
     };
 
     return group;
+  }
+
+  function startSelectionCelliStretch(counts, center){
+    if(!selectionCelli) return;
+    const data = selectionCelli.userData || {};
+    const signature = `${counts.x||1}:${counts.y||1}:${counts.z||1}:${Math.round((center?.x||0)*10)}:${Math.round((center?.y||0)*10)}:${Math.round((center?.z||0)*10)}`;
+    if(data.lastStretchSignature === signature) return;
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    const from = new THREE.Vector3(
+      (counts.x||1) > 1 ? 0.4 : 1,
+      (counts.y||1) > 1 ? 0.4 : 1,
+      (counts.z||1) > 1 ? 0.7 : 1
+    );
+    const to = new THREE.Vector3(1,1,1);
+    data.stretchState = { start: now, duration: 320, from, to };
+    data.lastStretchSignature = signature;
+    selectionCelli.userData = data;
+    selectionCelli.scale.copy(from);
+    needsRender = true;
   }
 
   function drawRoundedRectPath(path, width, height, radius){
@@ -10032,9 +10053,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const cellWidth = Math.max(horizontalCount * scale, scale * 0.9);
     const cellHeight = Math.max(verticalCount * scale, scale * 0.9);
     const cellDepth = Math.max(depthCount * scale, scale * 0.9);
-    const pad = Math.max(scale * 0.1, 0.08);
-    const bodyBorder = Math.max(scale * 0.35, Math.min(cellWidth, cellHeight) * 0.12);
-    const mouthBorder = Math.max(scale * 0.12, Math.min(cellWidth, cellHeight) * 0.06);
+    const pad = Math.max(scale * 0.08, 0.06);
+    const bodyBorder = Math.max(scale * 0.22, Math.min(cellWidth, cellHeight) * 0.09);
+    const mouthBorder = Math.max(scale * 0.10, Math.min(cellWidth, cellHeight) * 0.05);
 
     const innerWidth = cellWidth + pad * 2;
     const innerHeight = cellHeight + pad * 2;
@@ -10047,9 +10068,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const bodyDepth = depth;
     const mouthDepth = Math.min(depth * 0.65, depth - scale * 0.05);
 
-    const outerRadius = Math.min(outerWidth, outerHeight) * 0.28;
-    const mouthOuterRadius = Math.min(mouthOuterWidth, mouthOuterHeight) * 0.24;
-    const mouthInnerRadius = Math.min(innerWidth, innerHeight) * 0.18;
+    const radiusRatio = 0.12;
+    const outerRadius = Math.min(outerWidth, outerHeight) * radiusRatio;
+    const mouthOuterRadius = Math.min(mouthOuterWidth, mouthOuterHeight) * radiusRatio;
+    const mouthInnerRadius = Math.min(innerWidth, innerHeight) * (radiusRatio * 0.85);
 
     data.bodyFrame.geometry?.dispose?.();
     data.bodyFrame.geometry = createRoundedFrameGeometry({
@@ -10076,16 +10098,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     data.mouthFrame.position.set(0,0,(bodyDepth - mouthDepth)/2);
 
     const faceZ = bodyDepth/2 + 0.02;
-    const eyeSpacing = Math.min(innerWidth * 0.35, outerWidth * 0.35);
-    const eyeHeight = Math.min(innerHeight * 0.22, outerHeight * 0.2);
+    const eyeSpacing = Math.max(scale * 0.16, Math.min(innerWidth * 0.38, outerWidth * 0.36));
+    const eyeHeightMargin = Math.max(scale * 0.18, Math.min(innerHeight * 0.28, outerHeight * 0.26));
+    const eyeHeight = Math.max(-innerHeight / 2, (innerHeight / 2) - eyeHeightMargin);
     const eyeScale = Math.max(0.6, Math.min(1.4, (innerWidth + innerHeight) / (scale * 4.5)));
     data.eyeLeft.scale.set(eyeScale, eyeScale, 1);
     data.eyeRight.scale.copy(data.eyeLeft.scale);
     data.eyeLeft.position.set(-eyeSpacing, eyeHeight, faceZ);
     data.eyeRight.position.set(eyeSpacing, eyeHeight, faceZ);
 
-    const cheekSpacing = Math.min(innerWidth * 0.38, outerWidth * 0.42);
-    const cheekHeight = -Math.min(innerHeight * 0.22, outerHeight * 0.2);
+    const cheekSpacing = Math.max(scale * 0.2, Math.min(outerWidth / 2 - Math.max(scale * 0.18, 0.18), outerWidth * 0.48));
+    const cheekHeight = Math.min(innerHeight * 0.08, outerHeight * 0.08);
     const cheekScale = Math.max(0.65, Math.min(1.5, (innerWidth + innerHeight) / (scale * 5.2)));
     data.cheekLeft.scale.set(cheekScale, cheekScale, 1);
     data.cheekRight.scale.copy(data.cheekLeft.scale);
@@ -10094,8 +10117,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
     const bowHeight = outerHeight/2 + Math.max(scale * 0.2, 0.2);
     const bowScale = Math.max(0.55, Math.min(1.6, outerWidth / 3.2));
-    data.bowGroup.position.set(0, bowHeight, bodyDepth/2 - mouthDepth/2 + 0.02);
+    data.bowGroup.position.set(0, bowHeight, bodyDepth/2 - mouthDepth/2 + 0.04);
+    data.bowGroup.rotation.x = -0.25;
     data.bowGroup.scale.setScalar(bowScale);
+
+    startSelectionCelliStretch(counts, center);
 
     const frameQuat = arr._frame ? arr._frame.getWorldQuaternion(new THREE.Quaternion()) : new THREE.Quaternion();
     const basisX = new THREE.Vector3(1,0,0).applyQuaternion(frameQuat);
@@ -12365,6 +12391,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     if(!sel.arrayId||!sel.focus){
       focusMarker.visible=false;
       selectionCelli.visible=false;
+      if(selectionCelli.userData){
+        selectionCelli.userData.stretchState = null;
+        selectionCelli.userData.lastStretchSignature = null;
+      }
+      selectionCelli.scale.set(1,1,1);
       if(lastFocusedArrayId){
         const prev = Store.getState().arrays[lastFocusedArrayId];
         clearOcclusion(prev);
@@ -12433,6 +12464,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       updateSelectionCelliHighlight(arr, center, counts, scale);
     } else {
       selectionCelli.visible = false;
+      if(selectionCelli.userData){
+        selectionCelli.userData.stretchState = null;
+        selectionCelli.userData.lastStretchSignature = null;
+      }
+      selectionCelli.scale.set(1,1,1);
       const geo=new THREE.BoxGeometry(dims.x*scale,dims.y*scale,dims.z*scale);
       if(focusMarker.geometry) focusMarker.geometry.dispose?.();
       focusMarker.geometry=geo;
@@ -13222,6 +13258,26 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       // Update avatars every frame for continuous camera tracking
       const sel = Store.getState().selection;
       if(sel) updateAvatars(sel);
+
+      if(selectionCelli?.visible){
+        const data = selectionCelli.userData;
+        if(data?.stretchState){
+          const state = data.stretchState;
+          const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+          const t = Math.min(1, (now - state.start) / Math.max(1, state.duration));
+          const eased = easeOutBack(t, 1.35);
+          selectionCelli.scale.set(
+            THREE.MathUtils.lerp(state.from.x, state.to.x, eased),
+            THREE.MathUtils.lerp(state.from.y, state.to.y, eased),
+            THREE.MathUtils.lerp(state.from.z, state.to.z, eased)
+          );
+          if(t >= 1){
+            selectionCelli.scale.copy(state.to);
+            data.stretchState = null;
+          }
+          needsRender = true;
+        }
+      }
 
       // Ensure controls remain enabled when physics is off
       const physicsEnabled = Store.getState().scene.physics;
@@ -14691,7 +14747,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const MAT_BODY  = new THREE.MeshLambertMaterial({ color: 0xf59e0b });
       const MAT_DARK  = new THREE.MeshLambertMaterial({ color: 0x374151 });
       const MAT_BLUSH = new THREE.MeshLambertMaterial({ color: 0xec4899 });
-      const MAT_WING  = new THREE.MeshLambertMaterial({ color: 0xf59e0b, side: THREE.DoubleSide });
+      const MAT_WING  = new THREE.MeshLambertMaterial({ color: 0xfbbf24, side: THREE.DoubleSide });
       const MAT_OUTLINE = new THREE.MeshBasicMaterial({ color: 0x111827 });
       MAT_OUTLINE.depthTest = true;
       MAT_OUTLINE.depthWrite = false;
@@ -14701,17 +14757,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       // Body
       const BW=.8, BH=.8, BD=.3;
       const bodyGroup = new THREE.Group();
-      const body = new THREE.Mesh(new RoundedBoxGeometry(BW, BH, BD, 6, .12), MAT_BODY);
+      const body = new THREE.Mesh(new RoundedBoxGeometry(BW, BH, BD, 6, .10), MAT_BODY);
       bodyGroup.add(body); bodyGroup.position.y = BH/2; root.add(bodyGroup);
       // Face cluster
       const faceGroup = new THREE.Group();
       const faceZ = BD/2 + 0.01;
       const eyeGeo = new THREE.SphereGeometry(0.05, 16, 12);
-      const eyeL = new THREE.Mesh(eyeGeo, MAT_DARK); eyeL.scale.set(1,2,.25); eyeL.position.set(-.12,.13,faceZ);
-      const eyeR = new THREE.Mesh(eyeGeo, MAT_DARK); eyeR.scale.set(1,2,.25); eyeR.position.set(.12,.13,faceZ);
+      const eyeL = new THREE.Mesh(eyeGeo, MAT_DARK); eyeL.scale.set(1,2,.25); eyeL.position.set(-.18,.24,faceZ);
+      const eyeR = new THREE.Mesh(eyeGeo, MAT_DARK); eyeR.scale.set(1,2,.25); eyeR.position.set(.18,.24,faceZ);
       const blushGeo = new THREE.SphereGeometry(0.05, 16, 12);
-      const cheekL = new THREE.Mesh(blushGeo, MAT_BLUSH); cheekL.scale.set(1.2,1,.2); cheekL.position.set(-.25,-.08,faceZ);
-      const cheekR = new THREE.Mesh(blushGeo, MAT_BLUSH); cheekR.scale.set(1.2,1,.2); cheekR.position.set(.25,-.08,faceZ);
+      const cheekL = new THREE.Mesh(blushGeo, MAT_BLUSH); cheekL.scale.set(1.2,1,.2); cheekL.position.set(-.32,.06,faceZ);
+      const cheekR = new THREE.Mesh(blushGeo, MAT_BLUSH); cheekR.scale.set(1.2,1,.2); cheekR.position.set(.32,.06,faceZ);
       const smileShape = new THREE.Shape();
       smileShape.moveTo(-0.12, -0.06);
       smileShape.quadraticCurveTo(0, -0.25, 0.12, -0.06);
@@ -14737,7 +14793,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       wingL.position.set(-0.18, 0, 0); wingR.position.set(0.18, 0, 0);
       const knot = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.06), MAT_BODY);
       bowGroup.add(wingL, wingR, knot);
-      bowGroup.position.set(0, BH + 0.15, 0);
+      bowGroup.position.set(0, BH + 0.12, BD/2 - 0.04);
+      bowGroup.rotation.x = -0.2;
       root.add(bowGroup);
       // Arms
       const armRadius = .055;
@@ -14786,7 +14843,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         const outline = new THREE.Mesh(mesh.geometry, MAT_OUTLINE);
         outline.name = `${mesh.name||'part'}_outline`;
         outline.userData.isAvatarOutline = true;
-        outline.scale.set(1.08,1.08,1.08);
+        outline.scale.set(1.03,1.03,1.03);
         outline.position.set(0,0,0);
         outline.castShadow = false;
         outline.receiveShadow = false;
