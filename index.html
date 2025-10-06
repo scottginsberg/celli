@@ -2122,27 +2122,82 @@ const Write = (() => {
   return { start, set, commit, rollback };
 })();
 
-function computeSelectionFaceHint(anchor, focus, range){
+function computeSelectionFaceHint(arrayId, anchor, focus, range){
   try{
     if(!anchor || !focus || !range) return null;
+
+    const axisKeys = ['x','y','z'];
     const center = {
       x: (range.x1 + range.x2) / 2,
       y: (range.y1 + range.y2) / 2,
       z: (range.z1 != null && range.z2 != null) ? ((range.z1 + range.z2) / 2) : ((anchor.z + focus.z) / 2)
     };
-    const vec = {
-      x: anchor.x - center.x,
-      y: anchor.y - center.y,
-      z: anchor.z - center.z
-    };
-    const abs = { x: Math.abs(vec.x), y: Math.abs(vec.y), z: Math.abs(vec.z) };
-    let axis = 'x';
-    let axisIndex = 0;
-    let best = abs.x;
-    if(abs.y > best){ axis = 'y'; axisIndex = 1; best = abs.y; }
-    if(abs.z > best){ axis = 'z'; axisIndex = 2; best = abs.z; }
-    if(best < 1e-5) return null;
-    const sign = vec[axis] >= 0 ? 1 : -1;
+
+    let axisIndex = null;
+    let sign = null;
+
+    if(Number.isFinite(arrayId) && Store?.getState){
+      try{
+        const arr = Store.getState().arrays?.[arrayId];
+        if(arr){
+          let facing = arr._facingState;
+          if(!facing || !Number.isInteger(facing.axis)){
+            if(arr._frame){ facing = facingFromCamera(arr._frame); }
+          }
+          if(facing){
+            if(Number.isInteger(facing.axis)){
+              axisIndex = Math.max(0, Math.min(2, facing.axis|0));
+            }
+            const hintedSign = Number(facing.sign);
+            if(Number.isFinite(hintedSign) && hintedSign !== 0){
+              sign = hintedSign > 0 ? 1 : -1;
+            }
+          }
+
+          if(arr._frame && Scene?.getCamera){
+            const cam = Scene.getCamera?.();
+            const worldCenter = Scene.worldPos?.(arr, center.x, center.y, center.z);
+            if(cam && worldCenter){
+              const toCamWorld = cam.position.clone().sub(worldCenter.clone());
+              const inv = new THREE.Matrix4().copy(arr._frame.matrixWorld).invert();
+              const toCamLocal = toCamWorld.applyMatrix3(new THREE.Matrix3().setFromMatrix4(inv)).normalize();
+              if(axisIndex === null){
+                const ax=Math.abs(toCamLocal.x), ay=Math.abs(toCamLocal.y), az=Math.abs(toCamLocal.z);
+                if(ax>=ay && ax>=az){ axisIndex = 0; sign = Math.sign(toCamLocal.x)||1; }
+                else if(ay>=ax && ay>=az){ axisIndex = 1; sign = Math.sign(toCamLocal.y)||1; }
+                else { axisIndex = 2; sign = Math.sign(toCamLocal.z)||1; }
+              } else if(sign === null){
+                const axisKey = axisKeys[axisIndex];
+                const comp = toCamLocal[axisKey];
+                if(Number.isFinite(comp) && comp !== 0){
+                  sign = comp > 0 ? 1 : -1;
+                }
+              }
+            }
+          }
+        }
+      }catch(e){ console.warn('computeSelectionFaceHint camera-based hint failed', e); }
+    }
+
+    if(axisIndex === null || sign === null){
+      const vec = {
+        x: anchor.x - center.x,
+        y: anchor.y - center.y,
+        z: anchor.z - center.z
+      };
+      const abs = { x: Math.abs(vec.x), y: Math.abs(vec.y), z: Math.abs(vec.z) };
+      axisIndex = 0;
+      let best = abs.x;
+      if(abs.y > best){ axisIndex = 1; best = abs.y; }
+      if(abs.z > best){ axisIndex = 2; best = abs.z; }
+      if(best < 1e-5) return null;
+      if(sign === null){
+        const axisKey = axisKeys[axisIndex];
+        sign = vec[axisKey] >= 0 ? 1 : -1;
+      }
+    }
+
+    const axis = axisKeys[axisIndex] || 'z';
     return { axis, axisIndex, sign };
   }catch(e){ console.warn('computeSelectionFaceHint failed', e); return null; }
 }
@@ -2630,7 +2685,7 @@ const Actions = {
     const zs=[anchor.z,focus.z].map(v=>Number.isFinite(v)?v:0).sort((a,b)=>a-b);
     const focusZ = Number.isFinite(focus.z) ? focus.z : (Number.isFinite(anchor.z) ? anchor.z : 0);
     const range={x1:xs[0],y1:ys[0],x2:xs[1],y2:ys[1],z:focusZ,z1:zs[0],z2:zs[1]};
-    const faceHint = computeSelectionFaceHint(anchor, focus, range);
+    const faceHint = computeSelectionFaceHint(arrayId, anchor, focus, range);
     Store.setState(s=>({ selection:{arrayId, focus, anchor, range, faceHint}, ui:{...s.ui, zLayer:focusZ, lastInteraction:interactionSource} }));
     Scene.updateFocus(Store.getState().selection);
     UI.updateFocusChip();
@@ -15142,7 +15197,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       else if(e.key==='['){ UI.shiftZLayer?.(-1); e.preventDefault(); }
       else if(e.key===']'){ UI.shiftZLayer?.(1); e.preventDefault(); }
       else if(e.key===' '||e.key==='Spacebar'){
-        if(!Scene.isPhysicsInputCaptured?.()) Scene.handleJump();
+        const physicsActive = !!Store.getState().scene?.physics;
+        if(physicsActive && !Scene.isPhysicsInputCaptured?.()){
+          e.preventDefault();
+          Scene.handleJump();
+        }
       }
     }
   }, true);
