@@ -2630,17 +2630,6 @@ const Actions = {
     const zs=[anchor.z,focus.z].map(v=>Number.isFinite(v)?v:0).sort((a,b)=>a-b);
     const focusZ = Number.isFinite(focus.z) ? focus.z : (Number.isFinite(anchor.z) ? anchor.z : 0);
     const range={x1:xs[0],y1:ys[0],x2:xs[1],y2:ys[1],z:focusZ,z1:zs[0],z2:zs[1]};
-    const arr = Store.getState().arrays[arrayId];
-    if(interactionSource==='3d' && arr){
-      try{
-        const info = Scene.getViewAxisForArray?.(arr, Scene.getCamera?.()?.position);
-        if(info && info.axis===1){
-          const maxZ = Math.max(0, ((arr.size?.z)||1) - 1);
-          range.z1 = 0;
-          range.z2 = maxZ;
-        }
-      }catch{}
-    }
     const faceHint = computeSelectionFaceHint(anchor, focus, range);
     Store.setState(s=>({ selection:{arrayId, focus, anchor, range, faceHint}, ui:{...s.ui, zLayer:focusZ, lastInteraction:interactionSource} }));
     Scene.updateFocus(Store.getState().selection);
@@ -17928,6 +17917,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
     physicsToggleInFlight = true;
     try{
+      try{
+        const active = document?.activeElement;
+        if(active && active.id === 'physicsBtn' && typeof active.blur === 'function'){
+          active.blur();
+        }
+      }catch{}
       const current = Store.getState().scene.physics;
       const next = !current;
       console.log(`[PHYSICS MODE TOGGLE] Current: ${current}, Next: ${next}`);
@@ -18455,7 +18450,14 @@ const UI = (()=>{
       graphicsClose._wired = true;
       graphicsClose.addEventListener('click',(e)=>{ e.preventDefault(); hideGraphicsPanel(); });
     }
-    if(els.physicsBtn) els.physicsBtn.onclick=Actions.togglePhysics;
+    if(els.physicsBtn && !els.physicsBtn._wired){
+      els.physicsBtn._wired = true;
+      els.physicsBtn.addEventListener('click',(ev)=>{
+        try{ ev?.preventDefault?.(); }catch{}
+        try{ els.physicsBtn.blur(); }catch{}
+        Actions.togglePhysics();
+      });
+    }
     // Render mode button removed - always simple mode
     if(els.reset) els.reset.onclick=()=>location.reload();
     // Toggle Chunk LOD manager
