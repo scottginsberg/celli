@@ -1035,7 +1035,7 @@ const Store = createStore((set,get)=>{
   console.log('[STORE INIT] Creating store with physics:false by default');
   return {
     arrays: {}, nextArrayId:1, lastCreatedArrayId:null,
-    selection:{arrayId:null, focus:null, anchor:null, range:null},
+    selection:{arrayId:null, focus:null, anchor:null, range:null, faceHint:null},
     scene:{physics:false, showGrid:true, showAxes:true, physicsDebugAll:false},
     ui:{zLayer:0, fxOpen:false, addressMode:'local', lastInteraction:'3d', viewMode:'standard', crystal2D:false},
     gridPhase:{x:null,y:null,z:null},
@@ -2122,6 +2122,31 @@ const Write = (() => {
   return { start, set, commit, rollback };
 })();
 
+function computeSelectionFaceHint(anchor, focus, range){
+  try{
+    if(!anchor || !focus || !range) return null;
+    const center = {
+      x: (range.x1 + range.x2) / 2,
+      y: (range.y1 + range.y2) / 2,
+      z: (range.z1 != null && range.z2 != null) ? ((range.z1 + range.z2) / 2) : ((anchor.z + focus.z) / 2)
+    };
+    const vec = {
+      x: anchor.x - center.x,
+      y: anchor.y - center.y,
+      z: anchor.z - center.z
+    };
+    const abs = { x: Math.abs(vec.x), y: Math.abs(vec.y), z: Math.abs(vec.z) };
+    let axis = 'x';
+    let axisIndex = 0;
+    let best = abs.x;
+    if(abs.y > best){ axis = 'y'; axisIndex = 1; best = abs.y; }
+    if(abs.z > best){ axis = 'z'; axisIndex = 2; best = abs.z; }
+    if(best < 1e-5) return null;
+    const sign = vec[axis] >= 0 ? 1 : -1;
+    return { axis, axisIndex, sign };
+  }catch(e){ console.warn('computeSelectionFaceHint failed', e); return null; }
+}
+
 const Actions = {
   // Batch write system for dependency propagation
   _batch: null,
@@ -2343,7 +2368,7 @@ const Actions = {
       if(sel.arrayId === arrId){
         const next = Object.values(Store.getState().arrays).find(a=>!a.hidden) || null;
         if(next) Actions.setSelection(next.id, {x:0,y:Math.max(0,next.size.y-1),z:0}, null, '3d');
-        else Store.setState(s=>({ selection:{ arrayId:null, focus:null, anchor:null, range:null } }));
+        else Store.setState(s=>({ selection:{ arrayId:null, focus:null, anchor:null, range:null, faceHint:null } }));
       }
       window.UI?.renderSheet?.();
     }catch{}
@@ -2567,7 +2592,7 @@ const Actions = {
   },
 
   setSelection:(arrayId, focus, anchor=null, interactionSource='3d')=>{
-    Store.setState(s=>({ selection:{arrayId, focus, anchor:anchor||focus, range:null}, ui:{...s.ui, zLayer:focus.z, lastInteraction:interactionSource} }));
+    Store.setState(s=>({ selection:{arrayId, focus, anchor:anchor||focus, range:null, faceHint:null}, ui:{...s.ui, zLayer:focus.z, lastInteraction:interactionSource} }));
     Scene.updateFocus(Store.getState().selection);
     Scene.resetContactCache?.();
     UI.updateFocusChip();
@@ -2599,10 +2624,25 @@ const Actions = {
     }
   },
 
-  setSelectionRange:(arrayId, anchor, focus)=>{
-    const xs=[anchor.x,focus.x].sort((a,b)=>a-b), ys=[anchor.y,focus.y].sort((a,b)=>a-b), zs=[anchor.z,focus.z].sort((a,b)=>a-b);
-    const range={x1:xs[0],y1:ys[0],x2:xs[1],y2:ys[1],z:focus.z,z1:zs[0],z2:zs[1]};
-    Store.setState(s=>({ selection:{arrayId, focus, anchor, range}, ui:{...s.ui, zLayer:focus.z} }));
+  setSelectionRange:(arrayId, anchor, focus, interactionSource='3d')=>{
+    const xs=[anchor.x,focus.x].map(v=>Number.isFinite(v)?v:0).sort((a,b)=>a-b);
+    const ys=[anchor.y,focus.y].map(v=>Number.isFinite(v)?v:0).sort((a,b)=>a-b);
+    const zs=[anchor.z,focus.z].map(v=>Number.isFinite(v)?v:0).sort((a,b)=>a-b);
+    const focusZ = Number.isFinite(focus.z) ? focus.z : (Number.isFinite(anchor.z) ? anchor.z : 0);
+    const range={x1:xs[0],y1:ys[0],x2:xs[1],y2:ys[1],z:focusZ,z1:zs[0],z2:zs[1]};
+    const arr = Store.getState().arrays[arrayId];
+    if(interactionSource==='3d' && arr){
+      try{
+        const info = Scene.getViewAxisForArray?.(arr, Scene.getCamera?.()?.position);
+        if(info && info.axis===1){
+          const maxZ = Math.max(0, ((arr.size?.z)||1) - 1);
+          range.z1 = 0;
+          range.z2 = maxZ;
+        }
+      }catch{}
+    }
+    const faceHint = computeSelectionFaceHint(anchor, focus, range);
+    Store.setState(s=>({ selection:{arrayId, focus, anchor, range, faceHint}, ui:{...s.ui, zLayer:focusZ, lastInteraction:interactionSource} }));
     Scene.updateFocus(Store.getState().selection);
     UI.updateFocusChip();
     UI.renderSheet();
@@ -2611,10 +2651,11 @@ const Actions = {
   moveSelection:(dx,dy,dz=0)=>{
     const s=Store.getState().selection; if(!s.arrayId||!s.focus) return;
     const arr=Store.getState().arrays[s.arrayId]; if(!arr) return;
+    const lastInteraction = Store.getState().ui?.lastInteraction || '3d';
     const newFocus={x:Math.max(0,Math.min(arr.size.x-1,s.focus.x+dx)), y:Math.max(0,Math.min(arr.size.y-1,s.focus.y+dy)), z:Math.max(0,Math.min(arr.size.z-1,s.focus.z+dz))};
     if(s.range){
       const newAnchor={x:Math.max(0,Math.min(arr.size.x-1,s.anchor.x+dx)), y:Math.max(0,Math.min(arr.size.y-1,s.anchor.y+dy)), z:Math.max(0,Math.min(arr.size.z-1,s.anchor.z+dz))};
-      Actions.setSelectionRange(s.arrayId, newAnchor, newFocus);
+      Actions.setSelectionRange(s.arrayId, newAnchor, newFocus, lastInteraction);
     } else {
       Actions.setSelection(s.arrayId, newFocus);
     }
@@ -8985,6 +9026,7 @@ const Scene = (()=>{
   let scene, camera, renderer, controls, grid, axesHelper;
   let baseLightsGroup = null;
 let rapierWorld=null, controller=null, playerBody=null, playerCollider=null, staticPhysicsBody=null;
+let physicsActivationPending = false;
 
 function updatePhysicsStatusChip(text){
   try{
@@ -10273,17 +10315,32 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     return {horizontal:0, vertical:1};
   }
 
-  function updateSelectionCelliHighlight(arr, center, counts, scale){
+  function updateSelectionCelliHighlight(arr, center, counts, scale, faceHint){
     if(!selectionCelli || !arr) return;
     const data = selectionCelli.userData || {};
     if(!data.bodyFrame || !data.mouthFrame) return;
 
-    const facing = facingFromCamera(arr._frame || { matrixWorld:new THREE.Matrix4() });
-    const axis = Number.isFinite(facing.axis) ? facing.axis : 2;
-    const sign = (facing.sign===0) ? 1 : (facing.sign||1);
+    const axisKeys = ['x','y','z'];
+    let axis = null;
+    let sign = null;
+    if(faceHint){
+      if(Number.isInteger(faceHint.axisIndex)){
+        axis = Math.max(0, Math.min(2, faceHint.axisIndex|0));
+      } else if(faceHint.axis && axisKeys.includes(faceHint.axis)){
+        axis = axisKeys.indexOf(faceHint.axis);
+      }
+      const hintedSign = Number(faceHint.sign);
+      if(Number.isFinite(hintedSign) && hintedSign !== 0){
+        sign = hintedSign > 0 ? 1 : -1;
+      }
+    }
+    if(axis===null || sign===null){
+      const facing = facingFromCamera(arr._frame || { matrixWorld:new THREE.Matrix4() });
+      if(axis===null) axis = Number.isFinite(facing.axis) ? facing.axis : 2;
+      if(sign===null) sign = (facing.sign===0) ? 1 : (facing.sign||1);
+    }
 
     const planeAxes = planeAxesForFace(axis);
-    const axisKeys = ['x','y','z'];
     const axisKey = axisKeys[axis];
     const horizontalCount = counts[axisKeys[planeAxes.horizontal]] || 1;
     const verticalCount = counts[axisKeys[planeAxes.vertical]] || 1;
@@ -12701,7 +12758,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       selectionCelli.visible = true;
       if(focusMarker.geometry){ focusMarker.geometry.dispose?.(); }
       focusMarker.visible = false;
-      updateSelectionCelliHighlight(arr, center, counts, scale);
+      updateSelectionCelliHighlight(arr, center, counts, scale, sel.faceHint);
     } else {
       selectionCelli.visible = false;
       if(selectionCelli.userData){
@@ -14547,7 +14604,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             }
           }
           if(!Number.isFinite(targetLayer)) targetLayer = clampLayer(dragState.start?.z ?? 0);
-          Actions.setSelectionRange(dragState.arrayId, dragState.start, {x:cel.x,y:cel.y,z:targetLayer});
+          Actions.setSelectionRange(dragState.arrayId, dragState.start, {x:cel.x,y:cel.y,z:targetLayer}, '3d');
         }
       }
     };
@@ -14846,6 +14903,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       }
     }catch(e){ console.warn('Platformer input sync failed', e); }
   }
+  function resetPhysicsInputState(){
+    input.f = 0; input.b = 0; input.l = 0; input.r = 0; input.j = 0;
+    platformerKeyState.left = false;
+    platformerKeyState.right = false;
+    platformerKeyState.up = false;
+    platformerKeyState.down = false;
+    platformerKeyState.jump = false;
+    try{ refreshPlatformerInput(Store.getState().globalState); }catch{}
+  }
   function handlePlatformerKey(key,isDown){
     const dir = PLATFORMER_KEY_BINDINGS[normalizePlatformerKey(key)];
     if(!dir) return false;
@@ -14906,21 +14972,24 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const typingElement = baseTypingElement && !(directFocused && !directOpen);
     const platformerMode = isPlatformerActive(s.globalState);
 
-    // Physics mode takes priority regardless of focused inputs
-    if(s.scene.physics){
+    const physicsCapturing = !!Scene.isPhysicsInputCaptured?.();
+    const physicsActive = !!s.scene.physics;
+    if(physicsCapturing){
       const typing = typingElement || directOpen;
       if(!typing && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Spacebar','w','a','s','d','W','A','S','D','Escape'].includes(e.key)){
         if(handlePlatformerKey(e.key, true)) refreshPlatformerInput(s.globalState);
         e.preventDefault();
-        if(e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.f=1;
-        if(e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.b=1;
-        if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.r=1;
-        if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.l=1;
-        if(e.key===' '||e.key==='Spacebar') input.j=1;
-        if(e.key==='Escape'){
-          console.log('[PHYSICS] ESC pressed - exiting physics mode');
-          Actions.togglePhysics();
-          return;
+        if(physicsActive){
+          if(e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.f=1;
+          if(e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.b=1;
+          if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.r=1;
+          if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.l=1;
+          if(e.key===' '||e.key==='Spacebar') input.j=1;
+          if(e.key==='Escape'){
+            console.log('[PHYSICS] ESC pressed - exiting physics mode');
+            Actions.togglePhysics();
+            return;
+          }
         }
         return;
       }
@@ -15066,7 +15135,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       else if(e.key==='f'||e.key==='F') UI.toggleFxPanel();
       else if(e.key==='['){ UI.shiftZLayer?.(-1); e.preventDefault(); }
       else if(e.key===']'){ UI.shiftZLayer?.(1); e.preventDefault(); }
-      else if(e.key===' '||e.key==='Spacebar') Scene.handleJump();
+      else if(e.key===' '||e.key==='Spacebar'){
+        if(!Scene.isPhysicsInputCaptured?.()) Scene.handleJump();
+      }
     }
   }, true);
   window.addEventListener('keyup',(e)=>{
@@ -17860,6 +17931,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const current = Store.getState().scene.physics;
       const next = !current;
       console.log(`[PHYSICS MODE TOGGLE] Current: ${current}, Next: ${next}`);
+      if(next){
+        physicsActivationPending = true;
+        updatePhysicsStatusChip('Physics: Loading...');
+      } else {
+        physicsActivationPending = false;
+      }
       const debugAll = !!Store.getState().scene.physicsDebugAll;
       let debugApplied = false;
       if(next && debugAll){
@@ -17873,6 +17950,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         updatePhysicsStatusChip('Physics: OFF');
         if(debugApplied){ applyDebugPhysicsOverrides(false); }
         ensurePlatformerActiveState(false);
+        resetPhysicsInputState();
+        physicsActivationPending = false;
         return;
       }
 
@@ -17883,6 +17962,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           updatePhysicsStatusChip(label);
           if(debugApplied){ applyDebugPhysicsOverrides(false); }
           ensurePlatformerActiveState(false);
+          resetPhysicsInputState();
+          physicsActivationPending = false;
           return;
         }
       }
@@ -17910,6 +17991,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             }
           }
         }catch{}
+        resetPhysicsInputState();
         // On enable: create player body and spawn at current selected cell
         if(RAPIER && rapierWorld && !playerBody){
           try{
@@ -17937,6 +18019,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             Store.setState(s=>({scene:{...s.scene, physics:false}}));
             ensurePlatformerActiveState(false);
             if(debugApplied){ applyDebugPhysicsOverrides(false); }
+            resetPhysicsInputState();
+            physicsActivationPending = false;
             return;
           }
         }
@@ -17980,18 +18064,23 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             console.log(`[PHYSICS] Initialized mouse look from camera direction`);
           }
         }catch{}
+        physicsActivationPending = false;
       } else {
+        physicsActivationPending = false;
+        resetPhysicsInputState();
         // On disable: destroy player body and release pointer lock
         if(playerBody && rapierWorld){
+          let removed = false;
           try{
             if(playerCollider) rapierWorld.removeCollider(playerCollider, false);
             rapierWorld.removeRigidBody(playerBody);
-            playerBody = null;
-            playerCollider = null;
-            console.log('[PHYSICS] Destroyed player body');
+            removed = true;
           }catch(e){
             console.warn('[PHYSICS] Failed to destroy player body:', e);
           }
+          playerBody = null;
+          playerCollider = null;
+          if(removed){ console.log('[PHYSICS] Destroyed player body'); }
         }
         ziplineState.active = false;
         ziplineState.velocity = 0;
@@ -18018,11 +18107,19 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }
       }
     } finally {
+      if(!Store.getState().scene.physics){ physicsActivationPending = false; }
       physicsToggleInFlight = false;
     }
   }
 
-return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, hydrateAll, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsDebugAll, setPhysicsCamera, resetContactCache, setPhysicsSpawn};
+ return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, hydrateAll, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsDebugAll, setPhysicsCamera, resetContactCache, setPhysicsSpawn, isPhysicsInputCaptured:()=>physicsActivationPending || Store.getState().scene.physics, getViewAxisForArray:(arrOrFrame, observer)=>{
+    try{
+      if(!arrOrFrame) return null;
+      const frame = arrOrFrame.matrixWorld ? arrOrFrame : (arrOrFrame._frame || null);
+      if(!frame) return null;
+      return viewAxisForArray(frame, observer);
+    }catch(e){ console.warn('getViewAxisForArray failed', e); return null; }
+  }};
 })();
 
 /* ===========================
@@ -19903,7 +20000,7 @@ const UI = (()=>{
             const wrap = document.querySelector('#sheet .grid-wrap');
             const wasTop = wrap ? wrap.scrollTop : 0;
             const wasLeft = wrap ? wrap.scrollLeft : 0;
-            Actions.setSelectionRange(arr.id, {x:dragStart.x,y:dragStart.y,z:dragStart.z}, {x:c,y:r,z:getZLayer()}); 
+            Actions.setSelectionRange(arr.id, {x:dragStart.x,y:dragStart.y,z:dragStart.z}, {x:c,y:r,z:getZLayer()}, '2d');
             // Maintain scroll after range update
             try{ if(wrap){ wrap.scrollTop = wasTop; wrap.scrollLeft = wasLeft; } }catch{}
           }
