@@ -60,8 +60,10 @@
 .glitch::after{ color:rgba(239,68,68,.9); transform:translate(-1px,0); animation:glitchB .5s steps(2,end) infinite; }
 @keyframes glitchA{ 0%{clip-path:inset(0 0 70% 0)} 50%{clip-path:inset(30% 0 40% 0)} 100%{clip-path:inset(60% 0 0 0)} }
 @keyframes glitchB{ 0%{clip-path:inset(60% 0 0 0)} 50%{clip-path:inset(30% 0 40% 0)} 100%{clip-path:inset(0 0 70% 0)} }
-#pad{ position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:480px; height:360px; background:rgba(17,24,39,.95); border:1px solid rgba(255,255,255,.12); border-radius:12px; box-shadow:0 25px 50px -12px rgb(0 0 0 / .5); z-index:10002; display:none; color:#e5e7eb; }
-#pad textarea{ width:100%; height:calc(100% - 40px); background:transparent; color:#e5e7eb; border:none; padding:10px; font-family:'Roboto Mono',monospace; outline:none }
+#pad{ position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:480px; height:360px; background:rgba(17,24,39,.95); border:1px solid rgba(255,255,255,.12); border-radius:20px; box-shadow:0 25px 50px -12px rgb(0 0 0 / .5); z-index:10002; display:none; color:#e5e7eb; overflow:hidden; flex-direction:column; backdrop-filter:blur(14px); }
+#pad textarea{ width:100%; flex:1; background:inherit; color:inherit; border:none; padding:18px 18px 36px; font-family:'Roboto Mono',monospace; outline:none; resize:none; border-radius:16px; }
+#pad .win-header{border-top-left-radius:20px; border-top-right-radius:20px;}
+#pad .pad-resizer{position:absolute; right:10px; bottom:10px; width:18px; height:18px; background:linear-gradient(135deg, rgba(59,130,246,0.4), rgba(59,130,246,0.9)); border-radius:6px; cursor:nwse-resize; box-shadow:0 6px 14px rgba(15,23,42,0.2); border:1px solid rgba(255,255,255,0.4);}
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;overscroll-behavior:none}
@@ -631,7 +633,15 @@ document.addEventListener('click', function(e){
   <textarea id="note" style="background:#ffffff; color:#111827">special thanks:
 - Stephen Lavelle (Increpare)
 - Arvi Teikari (Hempuli)
-- Jonathan Blow</textarea>
+- Jonathan Blow
+
+Hideo Kojima
+Alan Moore
+
+Synthesize what you love, make what you can.
+
+"I don't love all of you, but I would if I could." — increpare, 'Stephen's Sausage Roll'</textarea>
+  <div class="pad-resizer" aria-hidden="true"></div>
 </div>
 <div id="crash" style="display:none; position:fixed; inset:0; background:#0b1220; color:#eaeefb; padding:24px; white-space:pre-wrap; z-index:1000; overflow:auto"></div>
 
@@ -17711,6 +17721,7 @@ const UI = (()=>{
     const termOut=document.getElementById('term');
     const termClose=document.getElementById('term-close');
     const padWin=document.getElementById('pad');
+    if(padWin) makeResizable(padWin);
     // Ensure console windows are hidden on load
     try{ if(termWin) termWin.style.display='none'; if(padWin) padWin.style.display='none'; }catch{}
     const padClose=document.getElementById('pad-close');
@@ -17726,9 +17737,39 @@ const UI = (()=>{
       window.addEventListener('mousemove',e=>{ if(!down) return; const dx=e.clientX-sx, dy=e.clientY-sy; winEl.style.left=(sl+dx)+'px'; winEl.style.top=(st+dy)+'px'; winEl.style.transform='translate(0,0)'; });
       window.addEventListener('mouseup',()=>{ down=false; });
     };
+    const makeResizable=(winEl)=>{
+      if(!winEl) return;
+      const handle=winEl.querySelector('.pad-resizer');
+      if(!handle || handle._wired) return;
+      handle._wired=true;
+      handle.addEventListener('pointerdown', (e)=>{
+        e.preventDefault();
+        handle.setPointerCapture?.(e.pointerId);
+        const rect=winEl.getBoundingClientRect();
+        const startX=e.clientX, startY=e.clientY;
+        const startW=rect.width, startH=rect.height;
+        const minW=320, minH=220;
+        const move=(evt)=>{
+          const nextW=Math.max(minW, startW + (evt.clientX - startX));
+          const nextH=Math.max(minH, startH + (evt.clientY - startY));
+          winEl.style.width=nextW+'px';
+          winEl.style.height=nextH+'px';
+        };
+        const up=()=>{
+          try{ handle.releasePointerCapture && handle.hasPointerCapture && handle.hasPointerCapture(e.pointerId) && handle.releasePointerCapture(e.pointerId); }
+          catch{}
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          window.removeEventListener('pointercancel', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up, {once:true});
+        window.addEventListener('pointercancel', up, {once:true});
+      });
+    };
     const openTerm=()=>{ const el=document.getElementById('terminal'); if(el){ el.style.display='flex'; makeDrag(el); runLogPaced(); } };
     const closeTerm=()=>{ if(termWin){ termWin.style.display='none'; } };
-    const openPad=()=>{ const el=document.getElementById('pad'); if(el){ el.style.display='block'; const term=document.getElementById('terminal'); if(term){ el.style.width = getComputedStyle(term).width; } makeDrag(el); } };
+    const openPad=()=>{ const el=document.getElementById('pad'); if(el){ el.style.display='flex'; const term=document.getElementById('terminal'); if(term){ el.style.width = getComputedStyle(term).width; } makeDrag(el); makeResizable(el); } };
     const closePad=()=>{ if(padWin){ padWin.style.display='none'; } };
     const wireNarrative=()=>{
       const ti=document.getElementById('terminal-icon');
