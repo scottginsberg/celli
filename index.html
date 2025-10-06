@@ -9151,9 +9151,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   function setPhysicsDebugAll(enable){
     Store.setState(state=>({ scene:{ ...state.scene, physicsDebugAll: !!enable } }));
     if(enable){
-      if(Store.getState().scene.physics){
-        applyDebugPhysicsOverrides(true);
-      }
+      applyDebugPhysicsOverrides(true);
     } else {
       applyDebugPhysicsOverrides(false);
     }
@@ -14066,6 +14064,21 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   let dragState=null;
   let orbitSuspendDepth=0;
   let orbitPrevState=null;
+  const deletingArrayIds = new Set();
+  function normalizeArrayId(id){
+    if(id === undefined) return '__undefined__';
+    if(id === null) return '__null__';
+    return String(id);
+  }
+  function markArrayDeleting(arrId){
+    try{ deletingArrayIds.add(normalizeArrayId(arrId)); }catch{}
+  }
+  function unmarkArrayDeleting(arrId){
+    try{ deletingArrayIds.delete(normalizeArrayId(arrId)); }catch{}
+  }
+  function isArrayDeleting(arrId){
+    try{ return deletingArrayIds.has(normalizeArrayId(arrId)); }catch{ return false; }
+  }
   function suspendOrbitControls(){
     if(!controls) return;
     if(orbitSuspendDepth===0){
@@ -14094,7 +14107,6 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
   function onPick(e){
-    if(deleteInteractionLock) return;
     const rect=renderer.domElement.getBoundingClientRect();
     const mouse=new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1, -((e.clientY-rect.top)/rect.height)*2+1);
     const ray=new THREE.Raycaster(); ray.setFromCamera(mouse,camera);
@@ -14113,9 +14125,21 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     // Intersect both voxels and grab handles; prefer nearest, but allow grab when tied
     const hits=ray.intersectObjects([...layerPickMeshes, ...chunkPickMeshes, ...grabHandles],false);
     if(!hits.length) return;
+    const activeHits = deleteInteractionLock
+      ? hits.filter(h=>{
+          try{
+            const arrId = h?.object?.userData?.arrayId
+              ?? h?.object?.userData?.chunk?.arrayId
+              ?? h?.object?.userData?.chunk?.array?.id;
+            if(arrId == null) return true;
+            return !isArrayDeleting(arrId);
+          }catch{ return !deleteInteractionLock; }
+        })
+      : hits;
+    if(!activeHits.length) return;
     // Always prefer the grab handle if it is hit at all
-    const grabHit = hits.find(h => h.object?.userData?.type==='grab');
-    let hit = grabHit || hits.find(h => (h.object && h.object.isInstancedMesh && typeof h.instanceId === 'number')) || hits[0];
+    const grabHit = activeHits.find(h => h.object?.userData?.type==='grab');
+    let hit = grabHit || activeHits.find(h => (h.object && h.object.isInstancedMesh && typeof h.instanceId === 'number')) || activeHits[0];
     if(hit.object.userData?.type==='grab'){
       // begin array reposition drag
       const arr=Store.getState().arrays[hit.object.userData.arrayId];
@@ -15963,11 +15987,6 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   // Deletion explosion effect
   const deleteEffects = [];
   const pendingDatafallDeletes = new Map(); // arrId -> {count:number, finished:boolean}
-  const normalizeArrayId = (id)=>{
-    if(id === undefined) return '__undefined__';
-    if(id === null) return '__null__';
-    return String(id);
-  };
   const nowMs = ()=> (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   let deleteInteractionLock = false;
   let deletionControlState = null;
@@ -16220,6 +16239,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const finalizeNow = ()=>{
         console.log(`DELETE: Final cleanup for array #${arrId}`);
         pendingDatafallDeletes.delete(key);
+        unmarkArrayDeleting(arrId);
         try{ Actions.deleteArray(arrId); }catch{}
         releaseDeletionInteractions();
       };
@@ -16232,7 +16252,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         console.log(`DELETE: Immediate finalization for array #${arrId} (force:${force})`);
         finalizeNow();
       }
-    }catch{ releaseDeletionInteractions(); }
+    }catch{ unmarkArrayDeleting(arrId); releaseDeletionInteractions(); }
   }
 
   function makeCharSprite(ch, color = '#ffffff'){
@@ -16322,6 +16342,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     try{
       try{
         const rec = pendingDatafallDeletes.get(arrKey) || {count:0, finished:false, finalizing:false, deadlineTimer:null};
+        markArrayDeleting(parentArrId);
         rec.count = (rec.count||0) + 1;
         rec.arrId = rec.arrId ?? parentArrId;
         rec.startedAt = rec.startedAt ?? nowMs();
@@ -16513,6 +16534,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const waveDelay = totalCells <= 20 ? 160 : totalCells <= 100 ? 100 : 60; // Slower for small arrays
       const arrKey = normalizeArrayId(arr.id);
       pendingDatafallDeletes.set(arrKey, {count:0, finished:false, finalizing:false, arrId: arr.id, startedAt: nowMs(), lastActive: nowMs(), deadlineTimer:null});
+      markArrayDeleting(arr.id);
       scheduleDeletionDeadline(arr.id);
       if(items.length===0){
         try{
@@ -16759,6 +16781,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             try{ releaseDeletionInteractions(); }catch{}
             clearDeletionDeadline(rec);
             pendingDatafallDeletes.delete(key);
+            unmarkArrayDeleting(rec?.arrId ?? key);
           }
           return;
         }
@@ -16773,6 +16796,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
               try{ releaseDeletionInteractions(); }catch{}
               clearDeletionDeadline(rec);
               pendingDatafallDeletes.delete(key);
+              unmarkArrayDeleting(rec?.arrId ?? key);
             }
           }
         }
