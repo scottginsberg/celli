@@ -730,6 +730,8 @@ try {
 // Removed heavy AO/Vignette to keep the look clean and modern
 // Dynamic Rapier loader (optional)
 let RAPIER = null; let RAP_READY = false;
+let rapierLoadPromise = null;
+let rapierInitPromise = null;
 // Global intro flag to guarantee onboarding runs exactly once across handlers
 window.__INTRO_FIRED = window.__INTRO_FIRED || false;
 
@@ -865,21 +867,40 @@ try{
   if(coarse || (many && small)) document.body.classList.add('touch');
 }catch{}
 async function loadRapier(){
-  // Prefer ESM builds to avoid CommonJS globals like `exports`
-  const candidates = [
-    'https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.12.0/+esm',
-    'https://unpkg.com/@dimforge/rapier3d-compat@0.12.0/rapier.js',
-    'https://cdn.skypack.dev/@dimforge/rapier3d-compat'
-  ];
-  for(const url of candidates){
-    try{
-      const mod = await import(url);
-      RAPIER = mod?.default || mod;
-      if(RAPIER){ RAP_READY = true; return; }
-    }catch(e){ console.warn('Rapier load failed', url, e); }
+  if(RAPIER){ return RAPIER; }
+  if(rapierLoadPromise){ return rapierLoadPromise; }
+
+  rapierLoadPromise = (async ()=>{
+    // Prefer ESM builds to avoid CommonJS globals like `exports`
+    const candidates = [
+      'https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.12.0/+esm',
+      'https://unpkg.com/@dimforge/rapier3d-compat@0.12.0/rapier.js',
+      'https://cdn.skypack.dev/@dimforge/rapier3d-compat'
+    ];
+    for(const url of candidates){
+      try{
+        const mod = await import(url);
+        RAPIER = mod?.default || mod;
+        if(RAPIER){
+          RAP_READY = true;
+          return RAPIER;
+        }
+      }catch(e){ console.warn('Rapier load failed', url, e); }
+    }
+    console.warn('Rapier unavailable, continuing without physics');
+    RAPIER = null;
+    RAP_READY = false;
+    return null;
+  })();
+
+  try{
+    return await rapierLoadPromise;
+  }finally{
+    if(!RAPIER){
+      // Allow future attempts if the load failed
+      rapierLoadPromise = null;
+    }
   }
-  console.warn('Rapier unavailable, continuing without physics');
-  RAPIER=null; RAP_READY=false;
 }
 
 /* ===========================
@@ -2599,8 +2620,13 @@ const Actions = {
     }
   },
 
-  togglePhysics: ()=>{ 
-    Scene.togglePhysicsMode?.();
+  togglePhysics: ()=>{
+    try{
+      const result = Scene.togglePhysicsMode?.();
+      if(result && typeof result.catch === 'function'){
+        result.catch(e=>console.warn('[PHYSICS] togglePhysics failed', e));
+      }
+    }catch(e){ console.warn('[PHYSICS] togglePhysics threw', e); }
   },
   toggleGrid: ()=>{ Store.setState(s=>({scene:{...s.scene, showGrid:!s.scene.showGrid}})); Scene.setGridVisible(Store.getState().scene.showGrid); },
   toggleAxes: ()=>{ Store.setState(s=>({scene:{...s.scene, showAxes:!s.scene.showAxes}})); Scene.setAxesVisible(Store.getState().scene.showAxes); },
@@ -6873,7 +6899,15 @@ tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
   }
 
   if(effectiveEnabled && !physicsActiveBefore){
-    try{ Scene.togglePhysicsMode(); }catch{}
+    try{
+      const toggle = Scene.togglePhysicsMode;
+      if(typeof toggle === 'function'){
+        const res = toggle();
+        if(res && typeof res.catch === 'function'){
+          res.catch(err=>console.warn('[PHYSICS] CELLI_PHYS enable failed', err));
+        }
+      }
+    }catch(e){ console.warn('[PHYSICS] CELLI_PHYS enable threw', e); }
   }
 
   if(spawnTarget){
@@ -6882,7 +6916,15 @@ tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
   }
 
   if(!effectiveEnabled && Store.getState().scene.physics){
-    try{ Scene.togglePhysicsMode(); }catch{}
+    try{
+      const toggle = Scene.togglePhysicsMode;
+      if(typeof toggle === 'function'){
+        const res = toggle();
+        if(res && typeof res.catch === 'function'){
+          res.catch(err=>console.warn('[PHYSICS] CELLI_PHYS disable failed', err));
+        }
+      }
+    }catch(e){ console.warn('[PHYSICS] CELLI_PHYS disable threw', e); }
   }
 
   const stamp = effectiveEnabled ? '🤸 Avatar' : '🚶 Classic';
@@ -8943,6 +8985,57 @@ const Scene = (()=>{
   let scene, camera, renderer, controls, grid, axesHelper;
   let baseLightsGroup = null;
 let rapierWorld=null, controller=null, playerBody=null, playerCollider=null, staticPhysicsBody=null;
+
+function updatePhysicsStatusChip(text){
+  try{
+    const chip = document.getElementById('physChip');
+    if(chip) chip.textContent = text;
+  }catch{}
+}
+
+async function ensureRapierWorld(){
+  if(rapierWorld && RAPIER){
+    return { success:true };
+  }
+
+  try{
+    const mod = await loadRapier();
+    if(!mod){
+      return { success:false, reason:'unavailable' };
+    }
+
+    if(typeof RAPIER.init === 'function'){
+      if(!rapierInitPromise){
+        rapierInitPromise = RAPIER.init().catch(err=>{
+          rapierInitPromise = null;
+          throw err;
+        });
+      }
+      await rapierInitPromise;
+    }
+
+    rapierWorld = new RAPIER.World({x:0,y:-20,z:0});
+    try{
+      staticPhysicsBody = rapierWorld.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    }catch(e){
+      console.warn('[PHYSICS] Failed creating static world body', e);
+      staticPhysicsBody = null;
+    }
+    playerBody = null;
+    playerCollider = null;
+    cachedPlayerPos.set(0, 0, 0);
+    updatePhysicsStatusChip('Physics: OFF');
+    return { success:true };
+  }catch(error){
+    console.warn('[PHYSICS] Failed to initialize Rapier world', error);
+    rapierWorld = null;
+    staticPhysicsBody = null;
+    playerBody = null;
+    playerCollider = null;
+    rapierInitPromise = null;
+    return { success:false, reason:'error', error };
+  }
+}
   const chunkMeshes=new Map(); // legacy chunk meshes (still used for some visuals)
   const layerMeshes=new Map(); // `${arr.id}:${z}` -> {mesh, capacity, used, index2cell}
   const connections = new Map(); // aKey(anchor) -> { line, start, end, ... }
@@ -10875,22 +10968,16 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     // This old handler is disabled to prevent Rapier conflicts
 
     try{
-      await loadRapier();
-      if(RAP_READY){
-        await RAPIER.init();
-        rapierWorld=new RAPIER.World({x:0,y:-20,z:0}); // Stronger gravity for faster falling
-        try{
-          staticPhysicsBody = rapierWorld.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-        }catch(e){
-          console.warn('[PHYSICS] Failed creating static world body', e);
-          staticPhysicsBody = null;
-        }
+      const status = await ensureRapierWorld();
+      if(status?.success){
         console.log('[PHYSICS] Rapier world initialized (physics disabled by default)');
-        document.getElementById('physChip').textContent='Physics: OFF';
+        updatePhysicsStatusChip('Physics: OFF');
+      } else if(status?.reason === 'unavailable'){
+        updatePhysicsStatusChip('Physics: OFF (unavailable)');
       } else {
-        document.getElementById('physChip').textContent='Physics: OFF (unavailable)';
+        updatePhysicsStatusChip('Physics: OFF (error)');
       }
-    }catch(e){ document.getElementById('physChip').textContent='Physics: OFF (error)'; console.warn('Rapier failed; continuing without physics', e); }
+    }catch(e){ updatePhysicsStatusChip('Physics: OFF (error)'); console.warn('Rapier failed; continuing without physics', e); }
 
     // Settings and render-order debug UI removed
 
@@ -13738,7 +13825,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             console.warn('Physics step failed:', e);
             // Disable physics on repeated failures
             Store.setState(s => ({scene: {...s.scene, physics: false}}));
-            document.getElementById('physChip').textContent = 'Physics: OFF (error)';
+            updatePhysicsStatusChip('Physics: OFF (error)');
             applyDebugPhysicsOverrides(false);
           }
         }
@@ -14193,6 +14280,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
   let dragState=null;
+  let physicsToggleInFlight = false;
   let orbitSuspendDepth=0;
   let orbitPrevState=null;
   const deletingArrayIds = new Set();
@@ -14430,20 +14518,35 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         if(aid===dragState.arrayId){
           const arrForDrag = Store.getState().arrays[dragState.arrayId];
           const maxLayer = Math.max(0, (arrForDrag?.size?.z||1) - 1);
+          const clampLayer = (val)=>Math.min(maxLayer, Math.max(0, Math.round(val)));
           let targetLayer = dragState.lockZ;
+          const applyCandidate = (candidate)=>{
+            if(Number.isFinite(candidate)){
+              targetLayer = clampLayer(candidate);
+              return true;
+            }
+            return false;
+          };
           if(dragState.viewLock){
-            try{
-              const viewLayer = Store.getState().ui?.zLayer;
-              if(Number.isFinite(viewLayer)){
-                targetLayer = Math.min(maxLayer, Math.max(0, Math.round(viewLayer)));
-              }
-            }catch{}
-          } else if(Number.isFinite(cel?.z)){
-            targetLayer = Math.min(maxLayer, Math.max(0, Math.round(cel.z)));
-          } else if(Number.isFinite(z)){
-            targetLayer = Math.min(maxLayer, Math.max(0, Math.round(z)));
+            let applied = false;
+            applied = applyCandidate(cel?.z) || applyCandidate(z);
+            if(!applied){
+              try{
+                const viewLayer = Store.getState().ui?.zLayer;
+                if(Number.isFinite(viewLayer)){
+                  applied = applyCandidate(viewLayer);
+                }
+              }catch{}
+            }
+            if(!applied && Number.isFinite(dragState.start?.z)){
+              targetLayer = clampLayer(dragState.start.z);
+            }
+          } else {
+            if(!applyCandidate(cel?.z)){
+              applyCandidate(z);
+            }
           }
-          if(!Number.isFinite(targetLayer)) targetLayer = dragState.start?.z ?? 0;
+          if(!Number.isFinite(targetLayer)) targetLayer = clampLayer(dragState.start?.z ?? 0);
           Actions.setSelectionRange(dragState.arrayId, dragState.start, {x:cel.x,y:cel.y,z:targetLayer});
         }
       }
@@ -15092,24 +15195,26 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const handGeo = new THREE.SphereGeometry(armRadius, 16, 12);
       const shoulderX = BW * 0.38;
       const shoulderY = BH * 0.52;
-      const armTilt = THREE.MathUtils.degToRad(-6);
-      const armSweep = THREE.MathUtils.degToRad(14);
-      const armTuck = THREE.MathUtils.degToRad(-12);
+      const shoulderZ = BD * 0.5 - armRadius * 0.4;
+      const armTilt = THREE.MathUtils.degToRad(-8);
+      const armSweep = THREE.MathUtils.degToRad(26);
+      const armTuck = THREE.MathUtils.degToRad(-4);
       function makeArm(sign=1){
         const armRoot = new THREE.Group();
         const armCurve = new THREE.QuadraticBezierCurve3(
-          new THREE.Vector3(0, 0, 0),
-          new THREE.Vector3(0.08 * sign, -0.18, 0.04),
-          new THREE.Vector3(0.02 * sign, -0.34, 0)
+          new THREE.Vector3(0, -0.02, 0.02),
+          new THREE.Vector3(0.16 * sign, -0.18, 0.06),
+          new THREE.Vector3(0.20 * sign, -0.36, 0.02)
         );
         const armGeo = new THREE.TubeGeometry(armCurve, 28, armRadius, 12, false);
         const upper = new THREE.Mesh(armGeo, MAT_BODY); addOutline(upper, 1.04);
         const handGroup = new THREE.Group();
         const hand = new THREE.Mesh(handGeo, MAT_BODY); addOutline(hand, 1.04);
         hand.position.copy(armCurve.getPoint(1));
+        handGroup.position.add(new THREE.Vector3(sign * 0.015, -0.01, 0.01));
         handGroup.add(hand);
         armRoot.add(upper, handGroup);
-        armRoot.position.set(sign * shoulderX, shoulderY, 0);
+        armRoot.position.set(sign * (shoulderX + armRadius * 0.6), shoulderY - 0.02, shoulderZ * 0.4);
         armRoot.rotation.set(armTilt, sign * armSweep, sign * armTuck);
         return { armRoot, handGroup };
       }
@@ -17196,7 +17301,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     try{ centerOnArray(arr); }catch{}
     const physicsActive = !!Store.getState().scene?.physics;
     if(physicsActive){
-      try{ togglePhysicsMode(); }catch{}
+      try{
+        const res = togglePhysicsMode();
+        if(res && typeof res.catch === 'function'){
+          res.catch(err=>console.warn('[PHYSICS] Exit auto-toggle failed', err));
+        }
+      }catch(e){ console.warn('[PHYSICS] Exit auto-toggle threw', e); }
     }
     return true;
   }
@@ -17491,7 +17601,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(!physicsEnabled){
         try{ Actions.setSelection(hit.arr.id, {x:hit.coord.x,y:hit.coord.y,z:hit.coord.z}, null, '3d'); }catch{}
         if(Store.getState().scene.physics){
-          try{ Scene.togglePhysicsMode(); }catch{}
+          try{
+            const toggle = Scene.togglePhysicsMode;
+            if(typeof toggle === 'function'){
+              const res = toggle();
+              if(res && typeof res.catch === 'function'){
+                res.catch(err=>console.warn('[PHYSICS] Land handler toggle failed', err));
+              }
+            }
+          }catch(e){ console.warn('[PHYSICS] Land handler toggle threw', e); }
         }
         try{ Scene.centerOnArray?.(hit.arr); }catch{}
       }
@@ -17729,126 +17847,156 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     label.lookAt(camera.position);
   }
 
-  function togglePhysicsMode(){
-    const current = Store.getState().scene.physics;
-    const next = !current;
-    console.log(`[PHYSICS MODE TOGGLE] Current: ${current}, Next: ${next}`);
-    const debugAll = !!Store.getState().scene.physicsDebugAll;
-    if(next && debugAll){
-      applyDebugPhysicsOverrides(true);
-    }
-    const avatarCfg = Store.getState().avatarPhysics || {};
-    if(next && avatarCfg.enabled === false){
-      showToast?.('Avatar physics disabled by CELLI_PHYS');
-      Store.setState(s=>({scene:{...s.scene, physics:false}}));
-      document.getElementById('physChip').textContent='Physics: OFF';
-      applyDebugPhysicsOverrides(false);
-      ensurePlatformerActiveState(false);
+  async function togglePhysicsMode(){
+    if(physicsToggleInFlight){
+      console.warn('[PHYSICS] Toggle already in progress');
       return;
     }
-    Store.setState(s=>({scene:{...s.scene, physics:next}}));
-    ensurePlatformerActiveState(next);
+    physicsToggleInFlight = true;
+    try{
+      const current = Store.getState().scene.physics;
+      const next = !current;
+      console.log(`[PHYSICS MODE TOGGLE] Current: ${current}, Next: ${next}`);
+      const debugAll = !!Store.getState().scene.physicsDebugAll;
+      let debugApplied = false;
+      if(next && debugAll){
+        applyDebugPhysicsOverrides(true);
+        debugApplied = true;
+      }
+      const avatarCfg = Store.getState().avatarPhysics || {};
+      if(next && avatarCfg.enabled === false){
+        showToast?.('Avatar physics disabled by CELLI_PHYS');
+        Store.setState(s=>({scene:{...s.scene, physics:false}}));
+        updatePhysicsStatusChip('Physics: OFF');
+        if(debugApplied){ applyDebugPhysicsOverrides(false); }
+        ensurePlatformerActiveState(false);
+        return;
+      }
 
-    if(next){
-      // On enable: create player body and spawn at current selected cell
-      if(RAPIER && rapierWorld && !playerBody){
-        try{
-          const avatarCfg = Store.getState().avatarPhysics || {};
-          const momentumMode = (avatarCfg.momentumMode|0) === 1 ? 1 : 0;
-          const rb=RAPIER.RigidBodyDesc.dynamic();
-          rb.setTranslation(0, 0.7, 0);
-          rb.lockRotations(true, true);
-          rb.setCanSleep(false);
-          rb.setLinearDamping(momentumMode === 1 ? 1.5 : 5.0);
-          rb.setAngularDamping(1.0);
-          rb.setCcdEnabled(true);
-          playerBody=rapierWorld.createRigidBody(rb);
-          const capsuleDesc = RAPIER.ColliderDesc.capsule(0.35, 0.25);
-          capsuleDesc.setRestitution(0.0);
-          capsuleDesc.setFriction(0.7);
-          capsuleDesc.setDensity(1.5);
-          playerCollider=rapierWorld.createCollider(capsuleDesc, playerBody);
-          cachedPlayerPos.set(0, 0.7, 0);
-          console.log('[PHYSICS] Created player body');
-          document.getElementById('physChip').textContent='Physics: ON';
-        }catch(e){
-          console.warn('[PHYSICS] Failed to create player body:', e);
+      if(next){
+        const status = await ensureRapierWorld();
+        if(!status?.success){
+          const label = status?.reason === 'unavailable' ? 'Physics: OFF (unavailable)' : 'Physics: OFF (error)';
+          updatePhysicsStatusChip(label);
+          if(debugApplied){ applyDebugPhysicsOverrides(false); }
+          ensurePlatformerActiveState(false);
+          return;
         }
       }
-      const sel = Store.getState().selection;
-      let spawnPos = {x: 0, y: 1, z: 0}; // Default spawn position
-      const selectedArr = sel?.arrayId ? Store.getState().arrays[sel.arrayId] : null;
-      if(selectedArr && sel?.focus){
-        const pos = worldPos(selectedArr, sel.focus.x, sel.focus.y, sel.focus.z);
-        const arrScale = arrayVoxelScale(selectedArr);
-        const perch = avatarPerchOffset(arrScale);
-        spawnPos = {x: pos.x, y: pos.y + perch, z: pos.z};
-        spawnPlayerAt(spawnPos.x, spawnPos.y, spawnPos.z);
-        console.log(`[PHYSICS] Spawned Celli at cell (${sel.focus.x},${sel.focus.y},${sel.focus.z}) -> world (${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)})`);
-      } else {
-        // No selection, spawn at default position
-        spawnPlayerAt(spawnPos.x, spawnPos.y, spawnPos.z);
-      }
-      resetJumpBudget(selectedArr || null);
-      // Position camera to show Celli from a good platformer angle
-      if(camera && controls){
-        // Target Celli's position (slightly above ground)
-        const targetPos = {x: spawnPos.x, y: spawnPos.y + 1.5, z: spawnPos.z};
-        controls.target.set(targetPos.x, targetPos.y, targetPos.z);
-        // Camera behind and above for good platformer view
-        const camDistance = 8;
-        const camHeight = 4;
-        camera.position.set(targetPos.x - 3, targetPos.y + camHeight, targetPos.z + camDistance);
-        controls.update();
-        console.log(`[PHYSICS] Camera positioned at (${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)}) targeting (${targetPos.x.toFixed(2)}, ${targetPos.y.toFixed(2)}, ${targetPos.z.toFixed(2)})`);
-      }
-      try{ setPhysicsCamera(physicsCameraConfig.mode, physicsCameraConfig.distance, physicsCameraConfig.allowRotation); }catch{}
-      // Build colliders for all arrays
-      Object.values(Store.getState().arrays).forEach(a=>debounceColliderRebuild(a));
-      // Initialize mouse look angles from current camera
-      try{
-        if(camera){
-          const dir = new THREE.Vector3();
-          camera.getWorldDirection(dir);
-          mouseYaw = Math.atan2(-dir.x, -dir.z);
-          mousePitch = Math.asin(dir.y);
-          console.log(`[PHYSICS] Initialized mouse look from camera direction`);
+
+      Store.setState(s=>({scene:{...s.scene, physics:next}}));
+      ensurePlatformerActiveState(next);
+
+      if(next){
+        // On enable: create player body and spawn at current selected cell
+        if(RAPIER && rapierWorld && !playerBody){
+          try{
+            const cfg = Store.getState().avatarPhysics || {};
+            const momentumMode = (cfg.momentumMode|0) === 1 ? 1 : 0;
+            const rb=RAPIER.RigidBodyDesc.dynamic();
+            rb.setTranslation(0, 0.7, 0);
+            rb.lockRotations(true, true);
+            rb.setCanSleep(false);
+            rb.setLinearDamping(momentumMode === 1 ? 1.5 : 5.0);
+            rb.setAngularDamping(1.0);
+            rb.setCcdEnabled(true);
+            playerBody=rapierWorld.createRigidBody(rb);
+            const capsuleDesc = RAPIER.ColliderDesc.capsule(0.35, 0.25);
+            capsuleDesc.setRestitution(0.0);
+            capsuleDesc.setFriction(0.7);
+            capsuleDesc.setDensity(1.5);
+            playerCollider=rapierWorld.createCollider(capsuleDesc, playerBody);
+            cachedPlayerPos.set(0, 0.7, 0);
+            console.log('[PHYSICS] Created player body');
+            updatePhysicsStatusChip('Physics: ON');
+          }catch(e){
+            console.warn('[PHYSICS] Failed to create player body:', e);
+            updatePhysicsStatusChip('Physics: OFF (error)');
+            Store.setState(s=>({scene:{...s.scene, physics:false}}));
+            ensurePlatformerActiveState(false);
+            if(debugApplied){ applyDebugPhysicsOverrides(false); }
+            return;
+          }
         }
-      }catch{}
-    } else {
-      // On disable: destroy player body and release pointer lock
-      if(playerBody && rapierWorld){
-        try{
-          if(playerCollider) rapierWorld.removeCollider(playerCollider, false);
-          rapierWorld.removeRigidBody(playerBody);
-          playerBody = null;
-          playerCollider = null;
-          console.log('[PHYSICS] Destroyed player body');
-        }catch(e){
-          console.warn('[PHYSICS] Failed to destroy player body:', e);
-        }
-      }
-      ziplineState.active = false;
-      ziplineState.velocity = 0;
-      try{
-        if(document.pointerLockElement){
-          document.exitPointerLock();
-        }
-        mouseLookEnabled = false;
-      }catch{}
-      // Explicitly re-enable orbit controls when physics is disabled
-      if(controls){
-        if(orbitSuspendDepth === 0){
-          controls.enableRotate = true;
-          controls.enablePan = true;
-          controls.enabled = true;
-          console.log('[PHYSICS] Orbit controls re-enabled');
+        const sel = Store.getState().selection;
+        let spawnPos = {x: 0, y: 1, z: 0}; // Default spawn position
+        const selectedArr = sel?.arrayId ? Store.getState().arrays[sel.arrayId] : null;
+        if(selectedArr && sel?.focus){
+          const pos = worldPos(selectedArr, sel.focus.x, sel.focus.y, sel.focus.z);
+          const arrScale = arrayVoxelScale(selectedArr);
+          const perch = avatarPerchOffset(arrScale);
+          spawnPos = {x: pos.x, y: pos.y + perch, z: pos.z};
+          spawnPlayerAt(spawnPos.x, spawnPos.y, spawnPos.z);
+          console.log(`[PHYSICS] Spawned Celli at cell (${sel.focus.x},${sel.focus.y},${sel.focus.z}) -> world (${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)})`);
         } else {
-          console.log('[PHYSICS] Orbit controls remain suspended (depth:', orbitSuspendDepth, ')');
+          // No selection, spawn at default position
+          spawnPlayerAt(spawnPos.x, spawnPos.y, spawnPos.z);
+        }
+        resetJumpBudget(selectedArr || null);
+        // Position camera to show Celli from a good platformer angle
+        if(camera && controls){
+          // Target Celli's position (slightly above ground)
+          const targetPos = {x: spawnPos.x, y: spawnPos.y + 1.5, z: spawnPos.z};
+          controls.target.set(targetPos.x, targetPos.y, targetPos.z);
+          // Camera behind and above for good platformer view
+          const camDistance = 8;
+          const camHeight = 4;
+          camera.position.set(targetPos.x - 3, targetPos.y + camHeight, targetPos.z + camDistance);
+          controls.update();
+          console.log(`[PHYSICS] Camera positioned at (${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)}) targeting (${targetPos.x.toFixed(2)}, ${targetPos.y.toFixed(2)}, ${targetPos.z.toFixed(2)})`);
+        }
+        try{ setPhysicsCamera(physicsCameraConfig.mode, physicsCameraConfig.distance, physicsCameraConfig.allowRotation); }catch{}
+        // Build colliders for all arrays
+        Object.values(Store.getState().arrays).forEach(a=>debounceColliderRebuild(a));
+        // Initialize mouse look angles from current camera
+        try{
+          if(camera){
+            const dir = new THREE.Vector3();
+            camera.getWorldDirection(dir);
+            mouseYaw = Math.atan2(-dir.x, -dir.z);
+            mousePitch = Math.asin(dir.y);
+            console.log(`[PHYSICS] Initialized mouse look from camera direction`);
+          }
+        }catch{}
+      } else {
+        // On disable: destroy player body and release pointer lock
+        if(playerBody && rapierWorld){
+          try{
+            if(playerCollider) rapierWorld.removeCollider(playerCollider, false);
+            rapierWorld.removeRigidBody(playerBody);
+            playerBody = null;
+            playerCollider = null;
+            console.log('[PHYSICS] Destroyed player body');
+          }catch(e){
+            console.warn('[PHYSICS] Failed to destroy player body:', e);
+          }
+        }
+        ziplineState.active = false;
+        ziplineState.velocity = 0;
+        try{
+          if(document.pointerLockElement){
+            document.exitPointerLock();
+          }
+          mouseLookEnabled = false;
+        }catch{}
+        // Explicitly re-enable orbit controls when physics is disabled
+        if(controls){
+          if(orbitSuspendDepth === 0){
+            controls.enableRotate = true;
+            controls.enablePan = true;
+            controls.enabled = true;
+            console.log('[PHYSICS] Orbit controls re-enabled');
+          } else {
+            console.log('[PHYSICS] Orbit controls remain suspended (depth:', orbitSuspendDepth, ')');
+          }
+        }
+        updatePhysicsStatusChip('Physics: OFF');
+        if(debugApplied || debugAll){
+          applyDebugPhysicsOverrides(false);
         }
       }
-      document.getElementById('physChip').textContent='Physics: OFF';
-      applyDebugPhysicsOverrides(false);
+    } finally {
+      physicsToggleInFlight = false;
     }
   }
 
