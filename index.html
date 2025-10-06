@@ -1115,6 +1115,7 @@ const Store = createStore((set,get)=>{
             waitEnd: Number.isFinite(+timed.waitEnd) ? (+timed.waitEnd|0) : 0,
             hostId: Number.isFinite(+timed.hostId) ? (+timed.hostId|0) : null,
             scope,
+            activeHostIds: Array.isArray(timed.activeHostIds) ? timed.activeHostIds.map(n=> Number.isFinite(+n)?(+n|0):null).filter(n=>n!=null) : [],
             t: 0,
             dir: (timed.dir===-1)?-1:1
           };
@@ -1340,7 +1341,8 @@ const Store = createStore((set,get)=>{
             scope,
             t: Number.isFinite(+timed.t) ? (+timed.t|0) : 0,
             dir: (timed.dir===-1)?-1:1,
-            _waitCounter: 0
+            _waitCounter: 0,
+            activeHostIds: Array.isArray(timed.activeHostIds) ? timed.activeHostIds.map(n=> Number.isFinite(+n)?(+n|0):null).filter(n=>n!=null) : []
           };
         };
         const restoreTimedPreviewState=()=>{
@@ -7785,20 +7787,60 @@ tag('PREVIEW',["SCENE"],(anchor,arr,ast)=>{
     }
     const G = (typeof Scene!=='undefined' && Scene.ensureTimed3D) ? Scene.ensureTimed3D() : ((Store.getState().scene.timed3D=Store.getState().scene.timed3D||{configured:false,preview:false}), Store.getState().scene.timed3D);
     const was3DPreviewing = !!G?.preview;
+    const arrIdRaw = Number.isFinite(arr?.id) ? arr.id : (Number.isFinite(anchor?.arrId) ? anchor.arrId : null);
+    const arrId = Number.isFinite(arrIdRaw) ? Math.trunc(arrIdRaw) : null;
+    const normalizedScope = scopeConfig ? {
+      mode: scopeConfig.mode || 'host',
+      ids: Array.isArray(scopeConfig.ids) ? scopeConfig.ids.map(n=> Number.isFinite(+n)?(Math.trunc(+n)):null).filter(n=>n!=null) : []
+    } : null;
     if(G){
-      if(scopeConfig){
-        G.scope = { mode: scopeConfig.mode, ids: Array.from(scopeConfig.ids||[]) };
-      } else if(!G.scope){
-        try{
-          const fallback = parseArrayScopeArg(null, anchor, arr);
-          G.scope = { mode: fallback.mode, ids: Array.from(fallback.ids||[]) };
-        }catch{}
+      const sanitizeIds=(list)=> Array.from(new Set((Array.isArray(list)?list:[]).map(n=> Number.isFinite(+n)?(Math.trunc(+n)):null).filter(n=>n!=null)));
+      let activeIds = sanitizeIds(G.activeHostIds);
+      if(enable3D){
+        if(arrId!=null && !activeIds.includes(arrId)) activeIds.push(arrId);
+        G.activeHostIds = activeIds;
+        if(normalizedScope){
+          G.scope = normalizedScope;
+        } else if(G.scope && G.scope.mode === 'all'){
+          // keep existing 'all' scope
+        } else {
+          const merged = new Set(activeIds);
+          if(G.scope && (G.scope.mode === 'limit' || G.scope.mode === 'host')){
+            sanitizeIds(G.scope.ids).forEach(id=>merged.add(id));
+          }
+          if(merged.size===0 && arrId!=null) merged.add(arrId);
+          G.scope = { mode:'limit', ids:Array.from(merged) };
+        }
+        if(arrId!=null){ G.hostId = arrId; }
+        else if(Number.isFinite(+G.hostId)){ G.hostId = Math.trunc(+G.hostId); }
+        else if(activeIds.length){ G.hostId = activeIds[0]; }
+        G.preview = true;
+      } else {
+        if(arrId!=null){
+          activeIds = activeIds.filter(id=>id!==arrId);
+        }
+        G.activeHostIds = activeIds;
+        if(normalizedScope){
+          G.scope = normalizedScope;
+        } else if(G.scope && G.scope.mode === 'all'){
+          // keep existing 'all' scope
+        } else {
+          G.scope = activeIds.length ? { mode:'limit', ids:[...activeIds] } : null;
+        }
+        if(activeIds.length){
+          const currentHost = Number.isFinite(+G.hostId) ? Math.trunc(+G.hostId) : null;
+          if(currentHost!=null && activeIds.includes(currentHost)){ G.hostId = currentHost; }
+          else { G.hostId = activeIds[0]; }
+          G.preview = true;
+        } else {
+          G.hostId = null;
+          G.preview = false;
+        }
       }
-      G.hostId = arr?.id ?? anchor?.arrId ?? null;
-      G.preview = enable3D;
     }
-    // If global preview is being disabled, immediately restore arrays to their captured base transforms
-    if(G && was3DPreviewing && !enable3D){
+    const previewStillActive = !!G?.preview;
+    // If global preview transitioned to OFF, immediately restore arrays to their captured base transforms
+    if(G && was3DPreviewing && !previewStillActive){
       try{
         const arrays = Object.values(Store.getState().arrays||{});
         arrays.forEach(a=>{
@@ -7817,6 +7859,7 @@ tag('PREVIEW',["SCENE"],(anchor,arr,ast)=>{
         });
         // Reset wait counter so next enable starts fresh
         try{ G._waitCounter = 0; }catch{}
+        try{ G.activeHostIds = []; }catch{}
       }catch{}
     }
     Actions.setCell(arr.id, anchor, `Preview:${enableIn?1:0}/${enable3D?1:0}`, ast.raw, true);
@@ -12638,7 +12681,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const S=Store.getState();
     const sceneState = S.scene || ({});
     if(!sceneState.timed3D){
-      sceneState.timed3D = { configured:false, ticks:60, repeat:false, reverse:false, reverseTicks:null, t:0, dir:1, preview:false, waitStart:0, waitEnd:0, _waitCounter:0, scope:null, hostId:null };
+      sceneState.timed3D = { configured:false, ticks:60, repeat:false, reverse:false, reverseTicks:null, t:0, dir:1, preview:false, waitStart:0, waitEnd:0, _waitCounter:0, scope:null, hostId:null, activeHostIds:[] };
       Store.setState(s=>({scene:{...s.scene, timed3D: sceneState.timed3D}}));
     } else {
       if(typeof sceneState.timed3D.waitStart!=='number') sceneState.timed3D.waitStart = 0;
@@ -12646,6 +12689,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(typeof sceneState.timed3D._waitCounter!=='number') sceneState.timed3D._waitCounter = 0;
       if(!sceneState.timed3D.hasOwnProperty('scope')) sceneState.timed3D.scope = null;
       if(!sceneState.timed3D.hasOwnProperty('hostId')) sceneState.timed3D.hostId = null;
+      if(!Array.isArray(sceneState.timed3D.activeHostIds)) sceneState.timed3D.activeHostIds = [];
     }
     return sceneState.timed3D;
   }
