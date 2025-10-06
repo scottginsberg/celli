@@ -9816,6 +9816,219 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     return { thickness, colorHex, opacity };
   }
   const focusMarker=new THREE.Mesh(new THREE.BoxGeometry(1.06,1.06,1.06),new THREE.MeshBasicMaterial({color:COLORS.focus,wireframe:true}));
+  const selectionCelli = createSelectionCelliHighlight();
+
+  function createSelectionCelliHighlight(){
+    const group = new THREE.Group();
+    group.name = 'SelectionCelliHighlight';
+
+    const MAT_BODY = new THREE.MeshBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.92 });
+    const MAT_MOUTH = new THREE.MeshBasicMaterial({ color: 0x111827, transparent: true, opacity: 0.95, side: THREE.DoubleSide });
+    const MAT_EYE = new THREE.MeshBasicMaterial({ color: 0x111827, transparent: false });
+    const MAT_CHEEK = new THREE.MeshBasicMaterial({ color: 0xec4899, transparent: true, opacity: 0.9 });
+    const MAT_BOW = new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.92, side: THREE.DoubleSide });
+    MAT_BODY.toneMapped = false;
+    MAT_MOUTH.toneMapped = false;
+    MAT_EYE.toneMapped = false;
+    MAT_CHEEK.toneMapped = false;
+    MAT_BOW.toneMapped = false;
+
+    const bodyFrame = new THREE.Mesh(new THREE.BufferGeometry(), MAT_BODY);
+    bodyFrame.material.side = THREE.DoubleSide;
+    bodyFrame.name = 'CelliBodyFrame';
+    group.add(bodyFrame);
+
+    const mouthFrame = new THREE.Mesh(new THREE.BufferGeometry(), MAT_MOUTH);
+    mouthFrame.name = 'CelliMouthFrame';
+    group.add(mouthFrame);
+
+    const eyeGeo = new THREE.CircleGeometry(0.12, 24);
+    const eyeLeft = new THREE.Mesh(eyeGeo, MAT_EYE);
+    const eyeRight = eyeLeft.clone();
+    eyeLeft.name = 'CelliEyeLeft';
+    eyeRight.name = 'CelliEyeRight';
+    group.add(eyeLeft, eyeRight);
+
+    const cheekGeo = new THREE.CircleGeometry(0.16, 24);
+    const cheekLeft = new THREE.Mesh(cheekGeo, MAT_CHEEK);
+    const cheekRight = cheekLeft.clone();
+    cheekLeft.name = 'CelliCheekLeft';
+    cheekRight.name = 'CelliCheekRight';
+    group.add(cheekLeft, cheekRight);
+
+    const bowGroup = new THREE.Group();
+    bowGroup.name = 'CelliBow';
+    const bowWingGeo = new THREE.ShapeGeometry(new THREE.Shape([new THREE.Vector2(0.18,0), new THREE.Vector2(-0.1,0.18), new THREE.Vector2(-0.1,-0.18)]));
+    const bowWingLeft = new THREE.Mesh(bowWingGeo, MAT_BOW);
+    bowWingLeft.position.set(-0.12, 0, 0);
+    const bowWingRight = bowWingLeft.clone();
+    bowWingRight.scale.x = -1;
+    bowWingRight.position.set(0.12, 0, 0);
+    const bowKnot = new THREE.Mesh(new THREE.CircleGeometry(0.08, 20), MAT_BOW);
+    bowKnot.position.set(0,0,0.005);
+    bowGroup.add(bowWingLeft, bowWingRight, bowKnot);
+    group.add(bowGroup);
+
+    group.userData = {
+      bodyFrame,
+      mouthFrame,
+      eyeLeft,
+      eyeRight,
+      cheekLeft,
+      cheekRight,
+      bowGroup,
+      lastSignature: null
+    };
+
+    return group;
+  }
+
+  function drawRoundedRectPath(path, width, height, radius){
+    const hw = width / 2;
+    const hh = height / 2;
+    const r = Math.min(radius, hw, hh);
+    path.moveTo(-hw + r, -hh);
+    path.lineTo(hw - r, -hh);
+    path.quadraticCurveTo(hw, -hh, hw, -hh + r);
+    path.lineTo(hw, hh - r);
+    path.quadraticCurveTo(hw, hh, hw - r, hh);
+    path.lineTo(-hw + r, hh);
+    path.quadraticCurveTo(-hw, hh, -hw, hh - r);
+    path.lineTo(-hw, -hh + r);
+    path.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+    path.closePath();
+  }
+
+  function createRoundedFrameGeometry({ outerWidth, outerHeight, innerWidth, innerHeight, outerRadius, innerRadius, depth }){
+    const shape = new THREE.Shape();
+    drawRoundedRectPath(shape, outerWidth, outerHeight, outerRadius);
+    const hole = new THREE.Path();
+    drawRoundedRectPath(hole, innerWidth, innerHeight, innerRadius);
+    shape.holes.push(hole);
+    const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled:false, steps:1 });
+    geo.center();
+    return geo;
+  }
+
+  function planeAxesForFace(axis){
+    if(axis===0) return {horizontal:2, vertical:1};
+    if(axis===1) return {horizontal:0, vertical:2};
+    return {horizontal:0, vertical:1};
+  }
+
+  function updateSelectionCelliHighlight(arr, center, counts, scale){
+    if(!selectionCelli || !arr) return;
+    const data = selectionCelli.userData || {};
+    if(!data.bodyFrame || !data.mouthFrame) return;
+
+    const facing = facingFromCamera(arr._frame || { matrixWorld:new THREE.Matrix4() });
+    const axis = Number.isFinite(facing.axis) ? facing.axis : 2;
+    const sign = (facing.sign===0) ? 1 : (facing.sign||1);
+
+    const planeAxes = planeAxesForFace(axis);
+    const axisKeys = ['x','y','z'];
+    const horizontalCount = counts[axisKeys[planeAxes.horizontal]] || 1;
+    const verticalCount = counts[axisKeys[planeAxes.vertical]] || 1;
+    const depthCount = counts[axisKeys[axis]] || 1;
+
+    const cellWidth = Math.max(horizontalCount * scale, scale * 0.9);
+    const cellHeight = Math.max(verticalCount * scale, scale * 0.9);
+    const cellDepth = Math.max(depthCount * scale, scale * 0.9);
+    const pad = Math.max(scale * 0.1, 0.08);
+    const bodyBorder = Math.max(scale * 0.35, Math.min(cellWidth, cellHeight) * 0.12);
+    const mouthBorder = Math.max(scale * 0.12, Math.min(cellWidth, cellHeight) * 0.06);
+
+    const innerWidth = cellWidth + pad * 2;
+    const innerHeight = cellHeight + pad * 2;
+    const mouthOuterWidth = innerWidth + mouthBorder * 2;
+    const mouthOuterHeight = innerHeight + mouthBorder * 2;
+    const outerWidth = mouthOuterWidth + bodyBorder * 2;
+    const outerHeight = mouthOuterHeight + bodyBorder * 2;
+
+    const depth = cellDepth + Math.max(scale * 0.6, 0.6);
+    const bodyDepth = depth;
+    const mouthDepth = Math.min(depth * 0.65, depth - scale * 0.05);
+
+    const outerRadius = Math.min(outerWidth, outerHeight) * 0.28;
+    const mouthOuterRadius = Math.min(mouthOuterWidth, mouthOuterHeight) * 0.24;
+    const mouthInnerRadius = Math.min(innerWidth, innerHeight) * 0.18;
+
+    data.bodyFrame.geometry?.dispose?.();
+    data.bodyFrame.geometry = createRoundedFrameGeometry({
+      outerWidth,
+      outerHeight,
+      innerWidth: mouthOuterWidth,
+      innerHeight: mouthOuterHeight,
+      outerRadius,
+      innerRadius: mouthOuterRadius,
+      depth: bodyDepth
+    });
+    data.bodyFrame.position.set(0,0,0);
+
+    data.mouthFrame.geometry?.dispose?.();
+    data.mouthFrame.geometry = createRoundedFrameGeometry({
+      outerWidth: mouthOuterWidth,
+      outerHeight: mouthOuterHeight,
+      innerWidth,
+      innerHeight,
+      outerRadius: mouthOuterRadius,
+      innerRadius: mouthInnerRadius,
+      depth: mouthDepth
+    });
+    data.mouthFrame.position.set(0,0,(bodyDepth - mouthDepth)/2);
+
+    const faceZ = bodyDepth/2 + 0.02;
+    const eyeSpacing = Math.min(innerWidth * 0.35, outerWidth * 0.35);
+    const eyeHeight = Math.min(innerHeight * 0.22, outerHeight * 0.2);
+    const eyeScale = Math.max(0.6, Math.min(1.4, (innerWidth + innerHeight) / (scale * 4.5)));
+    data.eyeLeft.scale.set(eyeScale, eyeScale, 1);
+    data.eyeRight.scale.copy(data.eyeLeft.scale);
+    data.eyeLeft.position.set(-eyeSpacing, eyeHeight, faceZ);
+    data.eyeRight.position.set(eyeSpacing, eyeHeight, faceZ);
+
+    const cheekSpacing = Math.min(innerWidth * 0.38, outerWidth * 0.42);
+    const cheekHeight = -Math.min(innerHeight * 0.22, outerHeight * 0.2);
+    const cheekScale = Math.max(0.65, Math.min(1.5, (innerWidth + innerHeight) / (scale * 5.2)));
+    data.cheekLeft.scale.set(cheekScale, cheekScale, 1);
+    data.cheekRight.scale.copy(data.cheekLeft.scale);
+    data.cheekLeft.position.set(-cheekSpacing, cheekHeight, faceZ - 0.01);
+    data.cheekRight.position.set(cheekSpacing, cheekHeight, faceZ - 0.01);
+
+    const bowHeight = outerHeight/2 + Math.max(scale * 0.2, 0.2);
+    const bowScale = Math.max(0.55, Math.min(1.6, outerWidth / 3.2));
+    data.bowGroup.position.set(0, bowHeight, bodyDepth/2 - mouthDepth/2 + 0.02);
+    data.bowGroup.scale.setScalar(bowScale);
+
+    const frameQuat = arr._frame ? arr._frame.getWorldQuaternion(new THREE.Quaternion()) : new THREE.Quaternion();
+    const basisX = new THREE.Vector3(1,0,0).applyQuaternion(frameQuat);
+    const basisY = new THREE.Vector3(0,-1,0).applyQuaternion(frameQuat);
+    const basisZ = new THREE.Vector3(0,0,1).applyQuaternion(frameQuat);
+    const bases = [basisX, basisY, basisZ];
+
+    const forward = bases[axis].clone().multiplyScalar(sign).normalize();
+    let right = bases[planeAxes.horizontal].clone().normalize();
+    let desiredUp = bases[planeAxes.vertical].clone().normalize();
+
+    // Gram-Schmidt to ensure orthonormal basis
+    right.sub(forward.clone().multiplyScalar(right.dot(forward))).normalize();
+    let up = new THREE.Vector3().crossVectors(forward, right).normalize();
+    if(up.lengthSq() < 1e-5){
+      up = desiredUp.clone();
+    }
+    if(up.dot(desiredUp) < 0){
+      up.negate();
+    }
+    right = new THREE.Vector3().crossVectors(up, forward).normalize();
+
+    const rotMatrix = new THREE.Matrix4().makeBasis(right, up, forward);
+    selectionCelli.setRotationFromMatrix(rotMatrix);
+
+    const pos = worldPos(arr, center.x, center.y, center.z);
+    selectionCelli.position.copy(pos);
+    selectionCelli.visible = true;
+    selectionCelli.userData.lastSignature = `${arr.id}:${center.x},${center.y},${center.z}:${counts.x},${counts.y},${counts.z}:${axis}:${sign}`;
+    needsRender = true;
+  }
   
   // Singleton geometries and materials for performance
   const GEO_VOXEL = new RoundedBoxGeometry(0.9, 0.9, 0.9, 2, 0.1);
@@ -10339,6 +10552,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     axesHelper=new THREE.AxesHelper(6); scene.add(axesHelper);
 
     scene.add(focusMarker); focusMarker.visible=false;
+    scene.add(selectionCelli); selectionCelli.visible=false;
     // Dependency overlay group
     depGroup = new THREE.Group(); depGroup.visible=false; depGroup.userData.kind='depGroup'; scene.add(depGroup);
     initAvatars();
@@ -12052,6 +12266,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   function updateFocus(sel){
     if(!sel.arrayId||!sel.focus){
       focusMarker.visible=false;
+      selectionCelli.visible=false;
       if(lastFocusedArrayId){
         const prev = Store.getState().arrays[lastFocusedArrayId];
         clearOcclusion(prev);
@@ -12064,7 +12279,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
     const arr=Store.getState().arrays[sel.arrayId];
     // Skip if array is being deleted
-    if(arr?._deleting) return;
+    if(arr?._deleting){
+      focusMarker.visible=false;
+      selectionCelli.visible=false;
+      return;
+    }
     const scale = arrayVoxelScale(arr);
     
     // One-time occlusion clear when focus array changes; do not repeatedly clear
@@ -12075,11 +12294,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
     lastFocusedArrayId = sel.arrayId;
     
-    // Camera-facing highlight box (no .abs() calls on Vector3)
     const camDir=new THREE.Vector3(); camera.getWorldDirection(camDir);
     const ax=Math.abs(camDir.x), ay=Math.abs(camDir.y), az=Math.abs(camDir.z);
     let dims={x:1.06,y:1.06,z:1.06};
     let center={...sel.focus};
+    let counts={x:1,y:1,z:1};
     if(sel.range){
       const {x1,x2,y1,y2}=sel.range;
       const zStart = sel.range.z1 ?? sel.range.z ?? sel.focus.z;
@@ -12087,6 +12306,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const countX = (x2 - x1 + 1);
       const countY = (y2 - y1 + 1);
       const countZ = (zEnd - zStart + 1);
+      counts = {x:countX,y:countY,z:countZ};
       dims={
         x: countX + 0.06,
         y: countY + 0.06,
@@ -12105,12 +12325,24 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       else if(ay>az) dims.y=0.04;
       else dims.z=0.04;
     }
-    const geo=new THREE.BoxGeometry(dims.x*scale,dims.y*scale,dims.z*scale);
-    if(focusMarker.geometry) focusMarker.geometry.dispose?.();
-    focusMarker.geometry=geo;
 
-    focusMarker.visible=true; const p=worldPos(arr,center.x,center.y,center.z);
-    focusMarker.position.copy(p);
+    const hasRange = !!sel.range;
+    const isMulti = hasRange && (counts.x>1 || counts.y>1 || counts.z>1);
+    if(isMulti){
+      selectionCelli.visible = true;
+      if(focusMarker.geometry){ focusMarker.geometry.dispose?.(); }
+      focusMarker.visible = false;
+      updateSelectionCelliHighlight(arr, center, counts, scale);
+    } else {
+      selectionCelli.visible = false;
+      const geo=new THREE.BoxGeometry(dims.x*scale,dims.y*scale,dims.z*scale);
+      if(focusMarker.geometry) focusMarker.geometry.dispose?.();
+      focusMarker.geometry=geo;
+
+      focusMarker.visible=true;
+      const p=worldPos(arr,center.x,center.y,center.z);
+      focusMarker.position.copy(p);
+    }
     updateAvatars(sel);
     // Promote detailed window around selection immediately for performance/fidelity
     try{
@@ -13626,8 +13858,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         FancyGraphics.passes.bokeh.uniforms.focus.value = camera.position.distanceTo(controls.target);
       }
       if(FancyGraphics.passes.outline){
-        if(FancyGraphics.settings.outlineEnabled && focusMarker.visible){
-          FancyGraphics.passes.outline.selectedObjects = [focusMarker];
+        const highlightObj = selectionCelli.visible ? selectionCelli : (focusMarker.visible ? focusMarker : null);
+        if(FancyGraphics.settings.outlineEnabled && highlightObj){
+          FancyGraphics.passes.outline.selectedObjects = [highlightObj];
         } else {
           FancyGraphics.passes.outline.selectedObjects = [];
         }
