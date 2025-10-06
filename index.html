@@ -14897,10 +14897,13 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   }, true);
   window.addEventListener('keydown',(e)=>{
     const s=Store.getState();
-    const activeTag = (document.activeElement?.tagName||'').toUpperCase();
+    const activeEl = document.activeElement;
+    const activeTag = (activeEl?.tagName||'').toUpperCase();
     const direct = document.getElementById('directEdit');
     const directOpen = !!(direct && direct.style.display==='block');
-    const typingElement = (activeTag==='INPUT' || activeTag==='TEXTAREA');
+    const directFocused = !!(direct && activeEl === direct);
+    const baseTypingElement = (activeTag==='INPUT' || activeTag==='TEXTAREA');
+    const typingElement = baseTypingElement && !(directFocused && !directOpen);
     const platformerMode = isPlatformerActive(s.globalState);
 
     // Physics mode takes priority regardless of focused inputs
@@ -15202,16 +15205,16 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       function makeArm(sign=1){
         const armRoot = new THREE.Group();
         const armCurve = new THREE.QuadraticBezierCurve3(
-          new THREE.Vector3(0, -0.02, 0.02),
-          new THREE.Vector3(0.16 * sign, -0.18, 0.06),
-          new THREE.Vector3(0.20 * sign, -0.36, 0.02)
+          new THREE.Vector3(0, -0.015, 0.02),
+          new THREE.Vector3(0.12 * sign, -0.16, 0.05),
+          new THREE.Vector3(0.16 * sign, -0.28, 0.015)
         );
         const armGeo = new THREE.TubeGeometry(armCurve, 28, armRadius, 12, false);
         const upper = new THREE.Mesh(armGeo, MAT_BODY); addOutline(upper, 1.04);
         const handGroup = new THREE.Group();
         const hand = new THREE.Mesh(handGeo, MAT_BODY); addOutline(hand, 1.04);
         hand.position.copy(armCurve.getPoint(1));
-        handGroup.position.add(new THREE.Vector3(sign * 0.015, -0.01, 0.01));
+        handGroup.position.add(new THREE.Vector3(sign * 0.012, -0.008, 0.01));
         handGroup.add(hand);
         armRoot.add(upper, handGroup);
         armRoot.position.set(sign * (shoulderX + armRadius * 0.6), shoulderY - 0.02, shoulderZ * 0.4);
@@ -17888,6 +17891,25 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       ensurePlatformerActiveState(next);
 
       if(next){
+        try{
+          const directEl = document.getElementById('directEdit');
+          if(directEl){
+            if(directEl.style.display === 'block'){
+              directEl.style.display = 'none';
+            }
+            if(typeof directEl.blur === 'function' && document.activeElement === directEl){
+              directEl.blur();
+            }
+            directEl._closedAt = Date.now();
+          }
+          const active = document.activeElement;
+          if(active && typeof active.blur === 'function'){
+            const tag = (active.tagName||'').toUpperCase();
+            if(tag === 'INPUT' || tag === 'TEXTAREA'){
+              active.blur();
+            }
+          }
+        }catch{}
         // On enable: create player body and spawn at current selected cell
         if(RAPIER && rapierWorld && !playerBody){
           try{
@@ -20035,6 +20057,9 @@ const UI = (()=>{
     } 
     
     els.direct.style.display='none';
+    if(document.activeElement === els.direct){
+      try{ els.direct.blur(); }catch{}
+    }
     els.direct._closedAt = Date.now(); // Track when editor was closed to prevent rapid re-open
     els.fx.value = ''; // Clear formula box
     updateFocusChip(); // Refresh UI
@@ -20043,14 +20068,28 @@ const UI = (()=>{
   document.addEventListener('keydown',(e)=>{
     const edit=els.direct; if(edit.style.display!=='block') return;
     if(e.key==='Enter'){ e.preventDefault(); e.stopPropagation(); commitEditor(); }
-    if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); edit.style.display='none'; els.fx.value=''; }
+    if(e.key==='Escape'){
+      e.preventDefault(); e.stopPropagation();
+      edit.style.display='none';
+      if(document.activeElement === edit){
+        try{ edit.blur(); }catch{}
+      }
+      edit._closedAt = Date.now();
+      els.fx.value='';
+    }
   }, true);
   // Hide editor on any sheet click when not double-clicking to re-open
   document.getElementById('sheet')?.addEventListener('mousedown',(e)=>{
     const edit=els.direct; 
     if(edit.style.display==='block'){
       const justOpened = (Date.now() - (edit._openedAt||0)) < 200;
-      if(!justOpened){ edit.style.display='none'; }
+      if(!justOpened){
+        edit.style.display='none';
+        if(document.activeElement === edit){
+          try{ edit.blur(); }catch{}
+        }
+        edit._closedAt = Date.now();
+      }
     }
   }, true);
   els.direct.addEventListener('input',()=>{ 
