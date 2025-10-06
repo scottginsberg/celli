@@ -10125,9 +10125,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
     const planeAxes = planeAxesForFace(axis);
     const axisKeys = ['x','y','z'];
+    const axisKey = axisKeys[axis];
     const horizontalCount = counts[axisKeys[planeAxes.horizontal]] || 1;
     const verticalCount = counts[axisKeys[planeAxes.vertical]] || 1;
-    const depthCount = counts[axisKeys[axis]] || 1;
+    const depthCount = counts[axisKey] || 1;
 
     const cellWidth = Math.max(horizontalCount * scale, scale * 0.9);
     const cellHeight = Math.max(verticalCount * scale, scale * 0.9);
@@ -10215,29 +10216,29 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const bases = [basisX, basisY, basisZ];
 
     const forward = bases[axis].clone().multiplyScalar(sign).normalize();
-    let right = bases[planeAxes.horizontal].clone().normalize();
-    let desiredUp = bases[planeAxes.vertical].clone().normalize();
-
-    // Gram-Schmidt to ensure orthonormal basis
-    right.sub(forward.clone().multiplyScalar(right.dot(forward))).normalize();
-    let up = new THREE.Vector3().crossVectors(forward, right).normalize();
-    if(up.lengthSq() < 1e-5){
-      up = desiredUp.clone();
-    }
-    if(up.dot(desiredUp) < 0){
-      up.negate();
-    }
     const worldUp = new THREE.Vector3(0,1,0);
-    if(up.dot(worldUp) < 0){
-      up.negate();
+    let up = worldUp.clone();
+    if(Math.abs(up.dot(forward)) > 0.98){
+      up = new THREE.Vector3(0,0,1);
     }
-    right = new THREE.Vector3().crossVectors(forward, up).normalize();
+    up.sub(forward.clone().multiplyScalar(up.dot(forward))).normalize();
+    let right = new THREE.Vector3().crossVectors(forward, up).normalize();
+    if(right.lengthSq() < 1e-6){
+      right = bases[planeAxes.horizontal].clone().normalize();
+      right.sub(forward.clone().multiplyScalar(right.dot(forward))).normalize();
+    }
     up = new THREE.Vector3().crossVectors(right, forward).normalize();
+
+    const halfDepth = Math.max(0, (depthCount - 1) * 0.5);
+    const faceCenter = { ...center };
+    if(halfDepth > 0){
+      faceCenter[axisKey] = center[axisKey] + sign * halfDepth;
+    }
 
     const rotMatrix = new THREE.Matrix4().makeBasis(right, up, forward);
     selectionCelli.setRotationFromMatrix(rotMatrix);
 
-    const pos = worldPos(arr, center.x, center.y, center.z);
+    const pos = worldPos(arr, faceCenter.x, faceCenter.y, faceCenter.z);
     selectionCelli.position.copy(pos);
     selectionCelli.visible = true;
     selectionCelli.userData.lastSignature = `${arr.id}:${center.x},${center.y},${center.z}:${counts.x},${counts.y},${counts.z}:${axis}:${sign}`;
