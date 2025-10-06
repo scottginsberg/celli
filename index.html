@@ -12795,7 +12795,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             w: dims.w,
             h: dims.h,
             d: dims.d,
-            op: entry.opText || entry.op || ''
+            op: entry.opText || entry.op || '',
+            onComplete: ()=>{
+              try{ burstSet.delete(burstKey); }
+              catch{}
+            }
           });
         }
       }
@@ -13045,7 +13049,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       reverse=false,
       reverseTicks=null,
       op='',
-      type=null
+      type=null,
+      onComplete=null
     } = cfg||{};
     const group = new THREE.Group();
     group.userData.kind = 'procAnim';
@@ -13126,7 +13131,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
 
     // Build visuals per type
-    const record = { group, arrId:arr.id, anchor:{...safeAnchor}, ticks:Math.max(1,ticks|0), repeat:!!repeat, reverse:!!reverse, reverseTicks: (reverseTicks==null? null : Math.max(1, reverseTicks|0)), t:0, dir:1, type:animType, params, _built:false };
+    const record = { group, arrId:arr.id, anchor:{...safeAnchor}, ticks:Math.max(1,ticks|0), repeat:!!repeat, reverse:!!reverse, reverseTicks: (reverseTicks==null? null : Math.max(1, reverseTicks|0)), t:0, dir:1, type:animType, params, _built:false, onDone: (typeof onComplete==='function') ? onComplete : null };
 
     if(animType==='translate'){
       const cube = makeCell(); cube.position.copy(startPos); group.add(cube);
@@ -13935,6 +13940,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           // Done
           let handled = false;
           try{ if(a.cleanup) handled = !!a.cleanup(); }catch{}
+          try{ a.onDone?.(); }catch{}
           if(!handled){ try{ a.group.parent?.remove(a.group); }catch{} }
           proceduralAnims.splice(i,1);
         }
