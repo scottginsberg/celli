@@ -986,6 +986,28 @@ const createStore = (init)=>{
   state = init(setState,getState);
   return {getState,setState,subscribe};
 };
+const PHYSICS_DEBUG_STORAGE_KEY = 'celli.physicsDebugAll';
+function readPersistedPhysicsDebug(){
+  try{
+    return typeof localStorage !== 'undefined' && localStorage.getItem(PHYSICS_DEBUG_STORAGE_KEY) === '1';
+  }catch(e){
+    console.warn('Physics debug persistence read failed', e);
+    return false;
+  }
+}
+function persistPhysicsDebugFlag(enabled){
+  try{
+    if(typeof localStorage === 'undefined') return;
+    if(enabled){
+      localStorage.setItem(PHYSICS_DEBUG_STORAGE_KEY, '1');
+    } else {
+      localStorage.removeItem(PHYSICS_DEBUG_STORAGE_KEY);
+    }
+  }catch(e){
+    console.warn('Physics debug persistence write failed', e);
+  }
+}
+
 const Store = createStore((set,get)=>{
   console.log('[STORE INIT] Creating store with physics:false by default');
   return {
@@ -2216,6 +2238,11 @@ const Actions = {
         if(remain.length !== St.pendingMeta.length){ try{ UI.renderSheet?.(); }catch{} }
       }
     }catch{}
+    try{
+      if(Store.getState().scene?.physicsDebugAll){
+        Scene.setPhysicsDebugAll(true);
+      }
+    }catch(e){ console.warn('Reapplying physics debug overrides for new array failed', e); }
       return arr;
     },
 
@@ -9077,37 +9104,72 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
   function applyDebugPhysicsOverrides(enable){
     if(enable){
-      if(debugPhysicsSnapshot) return;
-      const snapshot = {
-        avatar: clonePhysicsConfig(Store.getState().avatarPhysics) || null,
-        arrays: new Map()
-      };
       const arraysToRebuild = [];
-      Store.setState(state=>{
-        const arrays = { ...state.arrays };
-        Object.entries(arrays).forEach(([id, arr])=>{
-          if(!arr) return;
-          const nextParams = { ...(arr.params || {}) };
-          const prevPhysics = clonePhysicsConfig(nextParams.physics);
-          snapshot.arrays.set(id, prevPhysics ?? null);
-          const debugPhysics = { ...(nextParams.physics || {}), enabled:true, __debugOverride:true };
-          const sources = { ...(debugPhysics.__sources || {}) };
-          sources.enabled = Number.POSITIVE_INFINITY;
-          debugPhysics.__sources = sources;
-          nextParams.physics = debugPhysics;
-          const nextArr = { ...arr, params: nextParams };
-          arrays[id] = nextArr;
-          arraysToRebuild.push(nextArr);
-        });
-        debugPhysicsSnapshot = snapshot;
-        const avatarPhysics = {
-          ...state.avatarPhysics,
-          enabled:true,
-          jumpCount: Number.POSITIVE_INFINITY,
-          __debugOverride:true
+      if(!debugPhysicsSnapshot){
+        const snapshot = {
+          avatar: clonePhysicsConfig(Store.getState().avatarPhysics) || null,
+          arrays: new Map()
         };
-        return { arrays, avatarPhysics };
-      });
+        Store.setState(state=>{
+          const arrays = { ...state.arrays };
+          Object.entries(arrays).forEach(([id, arr])=>{
+            if(!arr) return;
+            const nextParams = { ...(arr.params || {}) };
+            const prevPhysics = clonePhysicsConfig(nextParams.physics);
+            snapshot.arrays.set(id, prevPhysics ?? null);
+            const debugPhysics = { ...(nextParams.physics || {}), enabled:true, __debugOverride:true };
+            const sources = { ...(debugPhysics.__sources || {}) };
+            sources.enabled = Number.POSITIVE_INFINITY;
+            debugPhysics.__sources = sources;
+            nextParams.physics = debugPhysics;
+            const nextArr = { ...arr, params: nextParams };
+            arrays[id] = nextArr;
+            arraysToRebuild.push(nextArr);
+          });
+          debugPhysicsSnapshot = snapshot;
+          const avatarPhysics = {
+            ...state.avatarPhysics,
+            enabled:true,
+            jumpCount: Number.POSITIVE_INFINITY,
+            __debugOverride:true
+          };
+          return { arrays, avatarPhysics };
+        });
+      } else {
+        Store.setState(state=>{
+          const arrays = { ...state.arrays };
+          let arraysChanged = false;
+          Object.entries(arrays).forEach(([id, arr])=>{
+            if(!arr) return;
+            const alreadyLocked = arr.params?.physics?.__debugOverride;
+            if(alreadyLocked && debugPhysicsSnapshot.arrays.has(id)) return;
+            const nextParams = { ...(arr.params || {}) };
+            const prevPhysics = clonePhysicsConfig(nextParams.physics);
+            if(!debugPhysicsSnapshot.arrays.has(id)){
+              debugPhysicsSnapshot.arrays.set(id, prevPhysics ?? null);
+            }
+            const debugPhysics = { ...(nextParams.physics || {}), enabled:true, __debugOverride:true };
+            const sources = { ...(debugPhysics.__sources || {}) };
+            sources.enabled = Number.POSITIVE_INFINITY;
+            debugPhysics.__sources = sources;
+            nextParams.physics = debugPhysics;
+            const nextArr = { ...arr, params: nextParams };
+            arrays[id] = nextArr;
+            arraysToRebuild.push(nextArr);
+            arraysChanged = true;
+          });
+          const avatarPhysics = {
+            ...state.avatarPhysics,
+            enabled:true,
+            jumpCount: Number.POSITIVE_INFINITY,
+            __debugOverride:true
+          };
+          if(arraysChanged){
+            return { arrays, avatarPhysics };
+          }
+          return { avatarPhysics };
+        });
+      }
       arraysToRebuild.forEach(arr=>{
         try{ debounceColliderRebuild(arr); }catch{}
       });
@@ -9149,12 +9211,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   }
 
   function setPhysicsDebugAll(enable){
-    Store.setState(state=>({ scene:{ ...state.scene, physicsDebugAll: !!enable } }));
-    if(enable){
+    const next = !!enable;
+    Store.setState(state=>({ scene:{ ...state.scene, physicsDebugAll: next } }));
+    if(next){
       applyDebugPhysicsOverrides(true);
     } else {
       applyDebugPhysicsOverrides(false);
     }
+    persistPhysicsDebugFlag(next);
   }
 
   function cloneColorOrNull(color){
@@ -14859,12 +14923,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
       const armRadius = .055;
       const armCurve = new THREE.QuadraticBezierCurve3(
-        new THREE.Vector3(0, 0.02, 0),
-        new THREE.Vector3(0.12, -0.08, 0.05),
-        new THREE.Vector3(0.16, -0.20, 0)
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0.08, -0.18, 0.04),
+        new THREE.Vector3(0.02, -0.34, 0)
       );
       const armGeo = new THREE.TubeGeometry(armCurve, 28, armRadius, 12, false);
       const handGeo = new THREE.SphereGeometry(armRadius, 16, 12);
+      const shoulderX = BW * 0.38;
+      const shoulderY = BH * 0.52;
+      const armTilt = THREE.MathUtils.degToRad(-6);
+      const armSweep = THREE.MathUtils.degToRad(8);
+      const armTuck = THREE.MathUtils.degToRad(-18);
       function makeArm(sign=1){
         const armRoot = new THREE.Group();
         const upper = new THREE.Mesh(armGeo, MAT_BODY); addOutline(upper, 1.04);
@@ -14873,10 +14942,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         hand.position.copy(armCurve.getPoint(1));
         handGroup.add(hand);
         armRoot.add(upper, handGroup);
-        armRoot.position.set(sign*(BW/2), BH*.90, 0);
+        armRoot.position.set(sign * shoulderX, shoulderY, 0);
         armRoot.scale.x *= sign;
-        armRoot.rotation.z = sign * (Math.PI/180) * 6;
-        armRoot.rotation.x = (Math.PI/180) * -10;
+        armRoot.rotation.set(armTilt, sign * armSweep, sign * armTuck);
         return { armRoot, handGroup };
       }
       const L = makeArm(-1), R = makeArm(+1);
@@ -20051,21 +20119,26 @@ window.UI = UI;
 (async ()=>{
   try {
     console.log('Starting immediate initialization...');
-    
+    const restoreDebug = readPersistedPhysicsDebug();
+
     // Load state if present; otherwise fresh init
     try {
       const has = localStorage.getItem('celliOsState');
       if (has) {
         await Scene.init(document.getElementById('view'));
+        if(restoreDebug){ try{ Scene.setPhysicsDebugAll?.(true); }catch(e){ console.warn('Restore physics debug (pre-load) failed', e); } }
         await Store.getState().actions.loadState();
+        if(restoreDebug){ try{ Scene.setPhysicsDebugAll?.(true); }catch(e){ console.warn('Restore physics debug (post-load) failed', e); } }
         try{ UI.init?.(); UI.renderSheet?.(); }catch{}
       } else {
-    await Store.getState().actions.init();
+        await Store.getState().actions.init();
+        if(restoreDebug){ try{ Scene.setPhysicsDebugAll?.(true); }catch(e){ console.warn('Restore physics debug (fresh init) failed', e); } }
       }
     } catch {
       await Store.getState().actions.init();
+      if(restoreDebug){ try{ Scene.setPhysicsDebugAll?.(true); }catch(e){ console.warn('Restore physics debug (fallback init) failed', e); } }
     }
-    
+
     console.log('Initialization complete');
   } catch(e) {
     console.error('Initialization failed:', e);
