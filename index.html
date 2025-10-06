@@ -10794,12 +10794,13 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         if(meshGhost){ tempM.identity(); tempM.makeScale(0,0,0); meshGhost.setMatrixAt(i, tempM); }
         // colors
         try{
-          const fresh = Formula.getCell({arrId:arr.id, x:c.x, y:c.y, z:c.z}) || {};
+          const fresh = getCellFast(arr.id, c) || {};
           const isFormula = !!fresh.formula;
           const hasValue = (fresh.value!=='' && fresh.value!==null && fresh.value!==undefined);
           const emitted = !!(Store.getState().sourceByCell && Store.getState().sourceByCell.get && Store.getState().sourceByCell.get(`${arr.id}:${c.x},${c.y},${c.z}`));
           let hex; if(isFormula) hex = baseHexForTypeKey('formula'); else if(emitted) hex = baseHexForTypeKey('emitted'); else hex = hasValue ? baseHexForTypeKey('value') : baseHexForTypeKey('empty');
-          const col = new THREE.Color(hex).convertSRGBToLinear();
+          const custom = fresh?.meta?.color;
+          const col = new THREE.Color(custom || hex).convertSRGBToLinear();
           meshSolid.setColorAt(i, col);
           if(meshGhost) meshGhost.setColorAt(i, ghostColorLinear);
           if(meshShell){ const sc = col.clone(); sc.offsetHSL(0,0,-0.22); meshShell.setColorAt(i, sc); }
@@ -14443,18 +14444,28 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         mesh.add(outline);
       });
       // Ensure overlay rendering above voxels
+      const BASE_RENDER_ORDER = 10500;
       root.traverse(n=>{
         if(!n.isMesh) return;
         const isOutline = !!n.userData?.isAvatarOutline;
-        if(n.material && !n.material.transparent){
-          n.material.transparent = true;
-          n.material.opacity = 1;
+        if(n.material){
+          if(!n.material.transparent){
+            n.material.transparent = true;
+            n.material.opacity = 1;
+          }
+          n.material.depthTest = true;
+          n.material.depthWrite = !isOutline;
+          if(isOutline){
+            n.material.polygonOffset = true;
+            n.material.polygonOffsetFactor = -1;
+            n.material.polygonOffsetUnits = -1;
+          } else if(n.material.polygonOffset){
+            n.material.polygonOffset = false;
+          }
+          if(n.material.toneMapped !== false) n.material.toneMapped = false;
           try{ n.material.needsUpdate = true; }catch{}
         }
-        n.material.depthTest = false;
-        n.material.depthWrite = false;
-        if(n.material.toneMapped !== false) n.material.toneMapped = false;
-        n.renderOrder = isOutline ? 10499 : 10500;
+        n.renderOrder = isOutline ? (BASE_RENDER_ORDER - 1) : BASE_RENDER_ORDER;
       });
       return root;
     }
@@ -14752,7 +14763,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       featureMat.colorWrite = true; // Ensure they render
       const eyeL = new THREE.Mesh(eyeGeo, featureMat.clone());
       const eyeR = new THREE.Mesh(eyeGeo, featureMat.clone());
-      const smile = new THREE.Mesh(smileGeo, featureMat.clone());
+      const smileMat = featureMat.clone();
+      smileMat.side = THREE.DoubleSide;
+      smileMat.needsUpdate = true;
+      const smile = new THREE.Mesh(smileGeo, smileMat);
       eyeL.castShadow = eyeR.castShadow = smile.castShadow = false;
       eyeL.receiveShadow = eyeR.receiveShadow = smile.receiveShadow = false;
       // Set render order so faces render on top of body segments
@@ -14887,15 +14901,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           placeEye(eyeL, -1);
           placeEye(eyeR, 1);
 
-          const smileInset = 0.002;
+          const smileInset = 0.006;
           const offUp = -0.02;
           smile.quaternion.setFromRotationMatrix(basis);
           smile.position.set(
-            facePos.x + offUp*upVec.x - smileInset*normalVec.x,
-            facePos.y + offUp*upVec.y - smileInset*normalVec.y,
-            facePos.z + offUp*upVec.z - smileInset*normalVec.z
+            facePos.x + offUp*upVec.x + smileInset*normalVec.x,
+            facePos.y + offUp*upVec.y + smileInset*normalVec.y,
+            facePos.z + offUp*upVec.z + smileInset*normalVec.z
           );
-          smile.scale.set(1,1,0.55);
+          smile.scale.set(1,1,0.72);
 
           this.headOffset.copy(facePos);
           aggregateBox.makeEmpty();
