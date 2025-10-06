@@ -7784,6 +7784,7 @@ tag('PREVIEW',["SCENE"],(anchor,arr,ast)=>{
       try{ if(typeof Scene!=='undefined' && Scene.maskArrayForPreview) Scene.maskArrayForPreview(arr, false); }catch{}
     }
     const G = (typeof Scene!=='undefined' && Scene.ensureTimed3D) ? Scene.ensureTimed3D() : ((Store.getState().scene.timed3D=Store.getState().scene.timed3D||{configured:false,preview:false}), Store.getState().scene.timed3D);
+    const was3DPreviewing = !!G?.preview;
     if(G){
       if(scopeConfig){
         G.scope = { mode: scopeConfig.mode, ids: Array.from(scopeConfig.ids||[]) };
@@ -7797,7 +7798,7 @@ tag('PREVIEW',["SCENE"],(anchor,arr,ast)=>{
       G.preview = enable3D;
     }
     // If global preview is being disabled, immediately restore arrays to their captured base transforms
-    if(G && !enable3D){
+    if(G && was3DPreviewing && !enable3D){
       try{
         const arrays = Object.values(Store.getState().arrays||{});
         arrays.forEach(a=>{
