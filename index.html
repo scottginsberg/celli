@@ -6622,8 +6622,11 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
   }
 
   const { targets, scope } = resolveArrayScopeTargets(arr, anchor, scopeArg);
+  const debugForceAll = !!Store.getState().scene?.physicsDebugAll;
   let targetList;
-  if(scope.mode === 'all'){
+  if(debugForceAll){
+    targetList = Object.values(Store.getState().arrays || {}).filter(Boolean);
+  } else if(scope.mode === 'all'){
     targetList = targets.filter(Boolean);
   } else {
     targetList = arr ? [arr] : targets.filter(Boolean);
@@ -6838,6 +6841,15 @@ tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
   Store.setState(state => ({
     avatarPhysics: { ...state.avatarPhysics, ...updates }
   }));
+
+  try{
+    const g = Store.getState().globalState;
+    if(g && typeof g.set === 'function'){
+      g.set('platformer.active', !!effectiveEnabled);
+      g.set('platformer.input', 'none');
+      g.set('platformer.jump', 0);
+    }
+  }catch{}
 
   let spawnTarget = null;
   if(effectiveEnabled && !prevEnabled){
@@ -9102,13 +9114,63 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   const PRESENT_LIGHT_BG = new THREE.Color(0xf6f7fb);
   const PRESENT_DARK_BG = new THREE.Color(0x0f172a);
 
+  function capturePlatformerGlobals(){
+    try{
+      const g = Store.getState().globalState;
+      if(!g) return {};
+      if(typeof g.get !== 'function') return {};
+      return {
+        active: g.get('platformer.active'),
+        input: g.get('platformer.input'),
+        jump: g.get('platformer.jump')
+      };
+    }catch{ return {}; }
+  }
+  function ensurePlatformerActiveState(active){
+    try{
+      const g = Store.getState().globalState;
+      if(!g || typeof g.set !== 'function') return;
+      g.set('platformer.active', !!active);
+      if(typeof g.set === 'function'){
+        g.set('platformer.input', 'none');
+        g.set('platformer.jump', 0);
+      }
+    }catch(e){ console.warn('Platformer state update failed', e); }
+  }
+  function restorePlatformerGlobals(snapshot){
+    try{
+      const g = Store.getState().globalState;
+      if(!g || typeof g.set !== 'function') return;
+      if(snapshot && Object.prototype.hasOwnProperty.call(snapshot, 'active')){
+        g.set('platformer.active', snapshot.active);
+      } else if(typeof g.delete === 'function'){
+        g.delete('platformer.active');
+      }
+      if(snapshot && Object.prototype.hasOwnProperty.call(snapshot, 'input')){
+        g.set('platformer.input', snapshot.input);
+      } else if(typeof g.delete === 'function'){
+        g.delete('platformer.input');
+      } else {
+        g.set('platformer.input', 'none');
+      }
+      if(snapshot && Object.prototype.hasOwnProperty.call(snapshot, 'jump')){
+        g.set('platformer.jump', snapshot.jump);
+      } else if(typeof g.delete === 'function'){
+        g.delete('platformer.jump');
+      } else {
+        g.set('platformer.jump', 0);
+      }
+    }catch(e){ console.warn('Platformer state restore failed', e); }
+  }
+
   function applyDebugPhysicsOverrides(enable){
     if(enable){
       const arraysToRebuild = [];
       if(!debugPhysicsSnapshot){
         const snapshot = {
           avatar: clonePhysicsConfig(Store.getState().avatarPhysics) || null,
-          arrays: new Map()
+          arrays: new Map(),
+          global: capturePlatformerGlobals()
         };
         Store.setState(state=>{
           const arrays = { ...state.arrays };
@@ -9174,6 +9236,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         try{ debounceColliderRebuild(arr); }catch{}
       });
       resetJumpBudget();
+      ensurePlatformerActiveState(true);
       return;
     }
 
@@ -9208,6 +9271,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       return { arrays, avatarPhysics };
     });
     resetJumpBudget();
+    restorePlatformerGlobals(snapshot.global || {});
   }
 
   function setPhysicsDebugAll(enable){
@@ -14321,16 +14385,20 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }catch{}
 
     // Start drag-select in 3D with playful click feedback (scale pulse)
-    let startLayer=cell.z;
+    const maxLayer = Math.max(0, (arr.size?.z||1) - 1);
+    let startLayer = Number.isFinite(cell?.z) ? Math.round(cell.z) : 0;
+    let viewLocked = false;
     try{
-      const viewLayer=Store.getState().ui?.zLayer;
-      if(arr && typeof viewLayer==='number' && Number.isFinite(viewLayer)){
-        const maxZ=Math.max(0,(arr.size?.z||1)-1);
-        startLayer=Math.min(maxZ, Math.max(0, Math.round(viewLayer)));
+      const viewLayer = Store.getState().ui?.zLayer;
+      if(Number.isFinite(viewLayer)){
+        startLayer = Math.round(viewLayer);
+        viewLocked = true;
       }
     }catch{}
-    dragState={arrayId:arr.id, start:{x:cell.x,y:cell.y,z:startLayer}};
-    Actions.setSelection(arr.id, {x:cell.x,y:cell.y,z:cell.z}, null, '3d');
+    if(!Number.isFinite(startLayer)) startLayer = 0;
+    startLayer = Math.min(maxLayer, Math.max(0, startLayer));
+    dragState={arrayId:arr.id, start:{x:cell.x,y:cell.y,z:startLayer}, lockZ:startLayer, viewLock:viewLocked};
+    Actions.setSelection(arr.id, {x:cell.x,y:cell.y,z:startLayer}, null, '3d');
     try{ pulseCell(arr, cell, z); }catch{}
     // Freeze orbit while dragging
     suspendOrbitControls();
@@ -14358,7 +14426,23 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }
         if(!cel) return;
         if(aid===dragState.arrayId){
-          Actions.setSelectionRange(dragState.arrayId, dragState.start, {x:cel.x,y:cel.y,z:z}); 
+          const arrForDrag = Store.getState().arrays[dragState.arrayId];
+          const maxLayer = Math.max(0, (arrForDrag?.size?.z||1) - 1);
+          let targetLayer = dragState.lockZ;
+          if(dragState.viewLock){
+            try{
+              const viewLayer = Store.getState().ui?.zLayer;
+              if(Number.isFinite(viewLayer)){
+                targetLayer = Math.min(maxLayer, Math.max(0, Math.round(viewLayer)));
+              }
+            }catch{}
+          } else if(Number.isFinite(cel?.z)){
+            targetLayer = Math.min(maxLayer, Math.max(0, Math.round(cel.z)));
+          } else if(Number.isFinite(z)){
+            targetLayer = Math.min(maxLayer, Math.max(0, Math.round(z)));
+          }
+          if(!Number.isFinite(targetLayer)) targetLayer = dragState.start?.z ?? 0;
+          Actions.setSelectionRange(dragState.arrayId, dragState.start, {x:cel.x,y:cel.y,z:targetLayer});
         }
       }
     };
@@ -14602,7 +14686,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
   // keyboard for physics locomotion
   const input={f:0,b:0,l:0,r:0,j:0};
-  const platformerKeyState={left:false,right:false,up:false,down:false};
+  const platformerKeyState={left:false,right:false,up:false,down:false,jump:false};
   const PLATFORMER_KEY_BINDINGS={
     arrowleft:'left',
     a:'left',
@@ -14611,7 +14695,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     arrowup:'up',
     w:'up',
     arrowdown:'down',
-    s:'down'
+    s:'down',
+    ' ':'jump',
+    space:'jump',
+    spacebar:'jump'
   };
   function normalizePlatformerKey(key){
     if(!key) return '';
@@ -14636,6 +14723,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     try{
       const g = global || Store.getState().globalState;
       if(!g || typeof g.set !== 'function' || typeof g.get !== 'function') return;
+      const jumpActive = !!platformerKeyState.jump;
       let dir='none';
       if(platformerKeyState.left) dir='left';
       else if(platformerKeyState.right) dir='right';
@@ -14643,6 +14731,13 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       else if(platformerKeyState.down) dir='down';
       if(g.get('platformer.input') !== dir){
         g.set('platformer.input', dir);
+      }
+      if(typeof g.set === 'function'){
+        const prevJump = typeof g.get === 'function' ? g.get('platformer.jump') : undefined;
+        const nextJump = jumpActive ? 1 : 0;
+        if(prevJump !== nextJump){
+          g.set('platformer.jump', nextJump);
+        }
       }
     }catch(e){ console.warn('Platformer input sync failed', e); }
   }
@@ -17646,10 +17741,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       Store.setState(s=>({scene:{...s.scene, physics:false}}));
       document.getElementById('physChip').textContent='Physics: OFF';
       applyDebugPhysicsOverrides(false);
+      ensurePlatformerActiveState(false);
       return;
     }
     Store.setState(s=>({scene:{...s.scene, physics:next}}));
-    
+    ensurePlatformerActiveState(next);
+
     if(next){
       // On enable: create player body and spawn at current selected cell
       if(RAPIER && rapierWorld && !playerBody){
