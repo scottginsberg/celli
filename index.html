@@ -10052,7 +10052,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
     const cellWidth = Math.max(horizontalCount * scale, scale * 0.9);
     const cellHeight = Math.max(verticalCount * scale, scale * 0.9);
-    const cellDepth = Math.max(depthCount * scale, scale * 0.9);
+    const cellDepth = Math.max(scale, scale * 0.9);
     const pad = Math.max(scale * 0.08, 0.06);
     const bodyBorder = Math.max(scale * 0.22, Math.min(cellWidth, cellHeight) * 0.09);
     const mouthBorder = Math.max(scale * 0.10, Math.min(cellWidth, cellHeight) * 0.05);
@@ -10064,9 +10064,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const outerWidth = mouthOuterWidth + bodyBorder * 2;
     const outerHeight = mouthOuterHeight + bodyBorder * 2;
 
-    const depth = cellDepth + Math.max(scale * 0.6, 0.6);
+    const thicknessBase = Math.max(scale * 1.5, 1.05);
+    const depth = thicknessBase;
     const bodyDepth = depth;
-    const mouthDepth = Math.min(depth * 0.65, depth - scale * 0.05);
+    const mouthDepth = Math.max(thicknessBase * 0.58, 0.62);
 
     const radiusRatio = 0.12;
     const outerRadius = Math.min(outerWidth, outerHeight) * radiusRatio;
@@ -10098,25 +10099,26 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     data.mouthFrame.position.set(0,0,(bodyDepth - mouthDepth)/2);
 
     const faceZ = bodyDepth/2 + 0.02;
-    const eyeSpacing = Math.max(scale * 0.16, Math.min(innerWidth * 0.38, outerWidth * 0.36));
-    const eyeHeightMargin = Math.max(scale * 0.18, Math.min(innerHeight * 0.28, outerHeight * 0.26));
-    const eyeHeight = Math.max(-innerHeight / 2, (innerHeight / 2) - eyeHeightMargin);
-    const eyeScale = Math.max(0.6, Math.min(1.4, (innerWidth + innerHeight) / (scale * 4.5)));
+    const featureSpan = Math.min(innerWidth, innerHeight);
+    const eyeSpacing = Math.min(Math.max(scale * 0.28, featureSpan * 0.32), outerWidth * 0.34);
+    const eyeVerticalOffset = Math.min(Math.max(scale * 0.12, featureSpan * 0.18), outerHeight * 0.22);
+    const eyeHeight = Math.max(-innerHeight * 0.05, (innerHeight / 2) - eyeVerticalOffset);
+    const eyeScale = Math.max(0.8, Math.min(1.25, featureSpan * 0.32));
     data.eyeLeft.scale.set(eyeScale, eyeScale, 1);
     data.eyeRight.scale.copy(data.eyeLeft.scale);
     data.eyeLeft.position.set(-eyeSpacing, eyeHeight, faceZ);
     data.eyeRight.position.set(eyeSpacing, eyeHeight, faceZ);
 
-    const cheekSpacing = Math.max(scale * 0.2, Math.min(outerWidth / 2 - Math.max(scale * 0.18, 0.18), outerWidth * 0.48));
-    const cheekHeight = Math.min(innerHeight * 0.08, outerHeight * 0.08);
-    const cheekScale = Math.max(0.65, Math.min(1.5, (innerWidth + innerHeight) / (scale * 5.2)));
+    const cheekSpacing = Math.min(Math.max(scale * 0.34, featureSpan * 0.38), outerWidth * 0.4);
+    const cheekHeight = -Math.min(Math.max(scale * 0.05, featureSpan * 0.08), outerHeight * 0.12);
+    const cheekScale = Math.max(0.85, Math.min(1.35, featureSpan * 0.34));
     data.cheekLeft.scale.set(cheekScale, cheekScale, 1);
     data.cheekRight.scale.copy(data.cheekLeft.scale);
     data.cheekLeft.position.set(-cheekSpacing, cheekHeight, faceZ - 0.01);
     data.cheekRight.position.set(cheekSpacing, cheekHeight, faceZ - 0.01);
 
-    const bowHeight = outerHeight/2 + Math.max(scale * 0.2, 0.2);
-    const bowScale = Math.max(0.55, Math.min(1.6, outerWidth / 3.2));
+    const bowHeight = outerHeight/2 + Math.max(scale * 0.16, 0.22);
+    const bowScale = Math.max(0.6, Math.min(1.45, outerWidth / 3.4));
     data.bowGroup.position.set(0, bowHeight, bodyDepth/2 - mouthDepth/2 + 0.04);
     data.bowGroup.rotation.x = -0.25;
     data.bowGroup.scale.setScalar(bowScale);
@@ -10142,7 +10144,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     if(up.dot(desiredUp) < 0){
       up.negate();
     }
-    right = new THREE.Vector3().crossVectors(up, forward).normalize();
+    const worldUp = new THREE.Vector3(0,1,0);
+    if(up.dot(worldUp) < 0){
+      up.negate();
+    }
+    right = new THREE.Vector3().crossVectors(forward, up).normalize();
+    up = new THREE.Vector3().crossVectors(right, forward).normalize();
 
     const rotMatrix = new THREE.Matrix4().makeBasis(right, up, forward);
     selectionCelli.setRotationFromMatrix(rotMatrix);
@@ -14763,16 +14770,16 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const faceGroup = new THREE.Group();
       const faceZ = BD/2 + 0.01;
       const eyeGeo = new THREE.SphereGeometry(0.05, 16, 12);
-      const eyeL = new THREE.Mesh(eyeGeo, MAT_DARK); eyeL.scale.set(1,2,.25); eyeL.position.set(-.18,.24,faceZ);
-      const eyeR = new THREE.Mesh(eyeGeo, MAT_DARK); eyeR.scale.set(1,2,.25); eyeR.position.set(.18,.24,faceZ);
+      const eyeL = new THREE.Mesh(eyeGeo, MAT_DARK); eyeL.scale.set(1.05,2.2,.25); eyeL.position.set(-.18,.18,faceZ);
+      const eyeR = new THREE.Mesh(eyeGeo, MAT_DARK); eyeR.scale.set(1.05,2.2,.25); eyeR.position.set(.18,.18,faceZ);
       const blushGeo = new THREE.SphereGeometry(0.05, 16, 12);
-      const cheekL = new THREE.Mesh(blushGeo, MAT_BLUSH); cheekL.scale.set(1.2,1,.2); cheekL.position.set(-.32,.06,faceZ);
-      const cheekR = new THREE.Mesh(blushGeo, MAT_BLUSH); cheekR.scale.set(1.2,1,.2); cheekR.position.set(.32,.06,faceZ);
+      const cheekL = new THREE.Mesh(blushGeo, MAT_BLUSH); cheekL.scale.set(1.35,1.05,.22); cheekL.position.set(-.30,0.0,faceZ);
+      const cheekR = new THREE.Mesh(blushGeo, MAT_BLUSH); cheekR.scale.set(1.35,1.05,.22); cheekR.position.set(.30,0.0,faceZ);
       const smileShape = new THREE.Shape();
       smileShape.moveTo(-0.12, -0.06);
       smileShape.quadraticCurveTo(0, -0.25, 0.12, -0.06);
       smileShape.quadraticCurveTo(0, -0.20, -0.12, -0.06);
-      const smile = new THREE.Mesh(new THREE.ShapeGeometry(smileShape), MAT_DARK); smile.position.z = faceZ;
+      const smile = new THREE.Mesh(new THREE.ShapeGeometry(smileShape), MAT_DARK); smile.position.set(0,-0.06,faceZ);
       faceGroup.add(eyeL, eyeR, cheekL, cheekR, smile);
       bodyGroup.add(faceGroup);
       // Bow
@@ -14799,7 +14806,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       // Arms
       const armRadius = .055;
       const armCurve = new THREE.QuadraticBezierCurve3(
-        new THREE.Vector3(-0.016, 0, 0), new THREE.Vector3(0.046, -0.016, 0.012), new THREE.Vector3(0.028, -0.10, 0)
+        new THREE.Vector3(0, 0.04, 0),
+        new THREE.Vector3(0.15, -0.04, 0.08),
+        new THREE.Vector3(0.20, -0.22, 0)
       );
       const armGeo = new THREE.TubeGeometry(armCurve, 28, armRadius, 12, false);
       const handGeo = new THREE.SphereGeometry(armRadius, 16, 12);
@@ -14810,8 +14819,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         const hand = new THREE.Mesh(handGeo, MAT_BODY);
         hand.position.copy(armCurve.getPoint(1)); handGroup.add(hand);
         armRoot.add(upper, handGroup);
-        armRoot.position.set(sign*(BW/2), BH*.90, 0);
+        armRoot.position.set(sign*(BW/2 - 0.02), BH*.56, 0);
         armRoot.scale.x *= sign;
+        armRoot.rotation.z = sign * (Math.PI/180) * 8;
         return { armRoot, handGroup };
       }
       const L = makeArm(-1), R = makeArm(+1);
