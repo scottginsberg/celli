@@ -14479,9 +14479,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     let startLayer = Number.isFinite(cell?.z) ? Math.round(cell.z) : 0;
     let viewLocked = false;
     try{
-      const viewLayer = Store.getState().ui?.zLayer;
-      if(Number.isFinite(viewLayer)){
-        startLayer = Math.round(viewLayer);
+      const uiState = Store.getState().ui || {};
+      if(uiState.lastInteraction === '2d' && Number.isFinite(uiState.zLayer)){
+        startLayer = Math.round(uiState.zLayer);
         viewLocked = true;
       }
     }catch{}
@@ -14542,9 +14542,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
               targetLayer = clampLayer(dragState.start.z);
             }
           } else {
-            if(!applyCandidate(cel?.z)){
-              applyCandidate(z);
-            }
+            targetLayer = Number.isFinite(dragState.lockZ)
+              ? clampLayer(dragState.lockZ)
+              : clampLayer(dragState.start?.z ?? 0);
           }
           if(!Number.isFinite(targetLayer)) targetLayer = clampLayer(dragState.start?.z ?? 0);
           Actions.setSelectionRange(dragState.arrayId, dragState.start, {x:cel.x,y:cel.y,z:targetLayer});
