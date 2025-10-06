@@ -6032,140 +6032,195 @@ function astToString(node, top=true){
   }
   return '""';
 }
-function remapFormulaIds(f, ids, idIndexOf, varsIdExprStr){
+function remapFormulaIds(f, idMap){
   let out=String(f||'');
-  ids.forEach(oldId=>{
-    const idx = idIndexOf.get(oldId);
-    if(idx===undefined) return;
-    const valueAtCall = `VALUE_AT(${idx},0,0, ${varsIdExprStr})`;
-    // ^<oldId>
-    out = out.replace(new RegExp(`\\^${oldId}\\b`,'g'), `^" & ${valueAtCall} & "`);
-    // @[x,y,z,<oldId>]
-    out = out.replace(new RegExp(`@\\[(-?\\d+),(-?\\d+),(-?\\d+),${oldId}\\]`,'g'), `@[" & $1 & "," & $2 & "," & $3 & "," & ${valueAtCall} & "]`);
+  idMap.forEach((newId, oldId)=>{
+    const escOld = String(oldId).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    out = out.replace(new RegExp(`\\^${escOld}\\b`,'g'), `^${newId}`);
+    out = out.replace(new RegExp(`@\\[(-?\\d+),(-?\\d+),(-?\\d+),${escOld}\\]`,'g'), `@[$1,$2,$3,${newId}]`);
   });
   return out;
 }
 
-// FORMULIZE: Build a DO(...) program using AST and serialize once
+// FORMULIZE: Build a DO{ ... } program that clones reachable arrays
 tag('FORMULIZE',["ACTION"],(anchor,arr,ast)=>{
   try{
     const S=Store.getState();
-    // 1) Collect reachable array ids via BFS based on formula references
-    const startId = arr.id;
-    const seen=new Set(); const q=[startId]; seen.add(startId);
-    const refRe = /@\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\]/g; // capture arrId at group 4
+
+    const resolveRef=(arg)=>{
+      if(!arg) return null;
+      if(arg.kind==='ref') return arg;
+      if(arg.kind==='range' && Array.isArray(arg.cells) && arg.cells.length) return arg.cells[0];
+      try{
+        const raw = Formula.valOf(arg);
+        if(raw && typeof raw==='string'){
+          const parsed = parseAlt(raw, anchor) || parseA1g(raw, arr.id);
+          if(parsed) return parsed;
+          const n = +raw; if(Number.isFinite(n)) return {arrId:n,x:0,y:0,z:0};
+        } else {
+          const n = +raw; if(Number.isFinite(n)) return {arrId:n,x:0,y:0,z:0};
+        }
+      }catch{}
+      return null;
+    };
+
+    const startRef = resolveRef(ast.args?.[0]) || anchor;
+    const startId = startRef.arrId ?? arr.id;
+    if(!Number.isInteger(startId) || startId<=0 || !S.arrays[startId]){
+      Actions.setCell(arr.id, anchor, '!ERR:TARGET', ast.raw, true);
+      return;
+    }
+
+    const seen=new Set([startId]);
+    const queue=[startId];
+    const refRe = /@\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\]/g;
     const caretRe = /\^(\-?\d+)\b/g;
-    while(q.length){
-      const aid=q.shift(); const A=S.arrays[aid]; if(!A) continue;
+    while(queue.length){
+      const aid=queue.shift();
+      const A=S.arrays[aid];
+      if(!A) continue;
       Object.values(A.chunks||{}).forEach(ch=>{
-        (ch.cells||[]).forEach(c=>{
-          const f=c.formula||''; let m;
-          while((m=refRe.exec(f))){ const id=+m[4]; if(Number.isFinite(id) && !seen.has(id)){ seen.add(id); q.push(id);} }
-          while((m=caretRe.exec(f))){ const id=+m[1]; if(Number.isFinite(id) && !seen.has(id)){ seen.add(id); q.push(id);} }
+        (ch.cells||[]).forEach(cell=>{
+          const text=cell.formula||'';
+          let m;
+          while((m=refRe.exec(text))){ const id=+m[4]; if(Number.isInteger(id) && id>0 && !seen.has(id) && S.arrays[id]){ seen.add(id); queue.push(id);} }
+          while((m=caretRe.exec(text))){ const id=+m[1]; if(Number.isInteger(id) && id>0 && !seen.has(id) && S.arrays[id]){ seen.add(id); queue.push(id);} }
         });
       });
     }
-    const ids=[...seen];
 
-    // 2) Prepare index map for oldId -> vars cell index
-    const idIndexOf = new Map();
-    ids.forEach((id,i)=> idIndexOf.set(id,i));
+    const ids=[...seen].filter(id=>Number.isInteger(id) && id>0 && S.arrays[id]).sort((a,b)=>a-b);
+    if(ids.length===0){
+      Actions.setCell(arr.id, anchor, '!ERR:FORMULIZE_EMPTY', ast.raw, true);
+      return;
+    }
 
-    // 3) Build commands AST
-    const commands=[]; // FNode[]
-
-    // Seed: store base next-id on the builder anchor for later reference (N)
-    commands.push( F('SET', F('SELF'), F('GET_NEXT_ID')) );
-    // Also store into a temporary global key for robust retrieval in nested VALUE_AT
-    commands.push( F('SET_GLOBAL', V('FORMULIZE_BASE_ID'), F('SELF')) );
-
-    // Create VARS array with explicit id = base N captured at anchor
-    const varsW = ids.length, varsH = 1, varsD = 1;
-    const varsIdExpr = F('VALUE_AT', V(anchor.x+1), V(anchor.y+1), V(anchor.z+1), V(anchor.arrId));
-    commands.push( F('CREATE', V(varsW), V(varsH), V(varsD), V('FORMULIZE_VARS'), varsIdExpr) );
-
-    // Populate mapping cells with upcoming ids (GET_NEXT_ID() will advance as we CREATE later)
-    ids.forEach((oldId, idx)=>{
-      const innerText = astToString( F('SET', F('SELF'), F('GET_NEXT_ID')) );
-      commands.push( F('EXEC_AT', V(idx), V(0), V(0), varsIdExpr, V(innerText)) );
-    });
-
-    const varsIdCallStr = astToString(varsIdExpr, true).slice(1); // strip leading '=' for string interpolation context
-
-    // CREATE arrays with size, name, and explicit id read from VARS[idx]
-    ids.forEach((oldId, idx)=>{
-      const A=S.arrays[oldId]; if(!A) return; const name=A.name||'Array';
-      const explicitIdExpr = F('VALUE_AT', V(idx), V(0), V(0), varsIdExpr);
-      commands.push( F('CREATE', V(A.size.x), V(A.size.y), V(A.size.z), V(name), explicitIdExpr) );
-    });
-
-    // Helper to exec at a coordinate on target array id held in global
-    const execAt = (oldId, x,y,z, nestedFormulaText)=>{
-      commands.push( F('EXEC_AT', V(x), V(y), V(z), F('GET_GLOBAL', V(idMap.get(oldId))), V(nestedFormulaText) ) );
+    const usedIds=new Set(Object.values(S.arrays).map(a=>a.id).filter(id=>Number.isInteger(id)));
+    let nextId=Math.max(1, S.nextArrayId || 1);
+    const allocateId=()=>{
+      while(nextId<=0 || usedIds.has(nextId)) nextId++;
+      const assigned=nextId;
+      usedIds.add(assigned);
+      nextId++;
+      return assigned;
     };
 
-    // 4) Populate scalar values (no formulas) and replicate color meta
-    ids.forEach((oldId, idx)=>{
+    const idMap=new Map();
+    ids.forEach(oldId=>{ idMap.set(oldId, allocateId()); });
+
+    const commands=[];
+
+    ids.forEach(oldId=>{
       const A=S.arrays[oldId]; if(!A) return;
+      const newId=idMap.get(oldId);
+      commands.push( F('CREATE', V(A.size.x), V(A.size.y), V(A.size.z), V(A.name||'Array'), V(newId)) );
+    });
+
+    const valueFillAst=(val)=>{
+      if(val && typeof val==='object' && !Array.isArray(val)){
+        try{ return V(JSON.stringify(val)); }
+        catch(_){ return V(String(val)); }
+      }
+      return V(val);
+    };
+
+    ids.forEach(oldId=>{
+      const A=S.arrays[oldId]; if(!A) return;
+      const newId=idMap.get(oldId);
+      const W=A.size.x, H=A.size.y, D=A.size.z;
+      const occ=new Map();
       Object.values(A.chunks||{}).forEach(ch=>{
-        (ch.cells||[]).forEach(c=>{
-          const hasValue = (c.value!=='' && c.value!==null && c.value!==undefined);
-          if(hasValue && !c.formula){
-            const innerSet = F('SET', F('SELF'), V(c.value));
-            const hasColor = !!(c.meta && c.meta.color);
-            const innerAst = hasColor
-              ? F('DO', innerSet, F('COLOR', V(String(c.meta.color||'#ffffff')), F('SELF')))
-              : innerSet;
-            const innerText = astToString(innerAst); // "=SET(SELF(), ...)" or DO(...)
-            const targetIdExpr = F('VALUE_AT', V(idx), V(0), V(0), varsIdExpr);
-            commands.push( F('EXEC_AT', V(c.x), V(c.y), V(c.z), targetIdExpr, V(innerText)) );
+        (ch.cells||[]).forEach(c=>{ occ.set(`${c.x},${c.y},${c.z}`, {v:c.value, f:c.formula}); });
+      });
+      const visited=new Set();
+      const key=(x,y,z)=>`${x},${y},${z}`;
+      const inBounds=(x,y,z)=> x>=0&&y>=0&&z>=0&&x<W&&y<H&&z<D;
+
+      const emitFill=(x1,y1,z1,x2,y2,z2,val)=>{
+        const fillAst = F('ARRAY', V('fill'), V(x2-x1+1), V(y2-y1+1), V(z2-z1+1), valueFillAst(val));
+        const fillText = astToString(fillAst);
+        commands.push( F('EXEC_AT', V(x1), V(y1), V(z1), V(newId), V(fillText)) );
+      };
+
+      for(let z=0; z<D; z++){
+        for(let y=0; y<H; y++){
+          for(let x=0; x<W; x++){
+            const k=key(x,y,z);
+            if(visited.has(k)) continue;
+            const cell=occ.get(k)||{v:'',f:null};
+            if(cell.f || cell.v==='' || cell.v===null || cell.v===undefined){ continue; }
+            let x2=x;
+            while(inBounds(x2+1,y,z)){
+              const c=occ.get(key(x2+1,y,z))||{v:'',f:null};
+              if(visited.has(key(x2+1,y,z)) || c.f || c.v!==cell.v) break;
+              x2++;
+            }
+            let y2=y;
+            outerY: while(inBounds(x,y2+1,z)){
+              for(let xi=x; xi<=x2; xi++){
+                const c=occ.get(key(xi,y2+1,z))||{v:'',f:null};
+                if(visited.has(key(xi,y2+1,z)) || c.f || c.v!==cell.v){ break outerY; }
+              }
+              y2++;
+            }
+            let z2=z;
+            outerZ: while(inBounds(x,y,z2+1)){
+              for(let yi=y; yi<=y2; yi++){
+                for(let xi=x; xi<=x2; xi++){
+                  const c=occ.get(key(xi,yi,z2+1))||{v:'',f:null};
+                  if(visited.has(key(xi,yi,z2+1)) || c.f || c.v!==cell.v){ break outerZ; }
+                }
+              }
+              z2++;
+            }
+            for(let zz=z; zz<=z2; zz++) for(let yy=y; yy<=y2; yy++) for(let xx=x; xx<=x2; xx++) visited.add(key(xx,yy,zz));
+            emitFill(x,y,z,x2,y2,z2,cell.v);
           }
-        });
-      });
+        }
+      }
     });
 
-    // 5) Stamp formulas with id remapping
-    ids.forEach((oldId, idx)=>{
+    ids.forEach(oldId=>{
       const A=S.arrays[oldId]; if(!A) return;
+      const newId=idMap.get(oldId);
       Object.values(A.chunks||{}).forEach(ch=>{
         (ch.cells||[]).forEach(c=>{
-          const f=c.formula; if(!f) return;
-          const remapped = remapFormulaIds(f, ids, idIndexOf, varsIdCallStr);
-          const formulaText = remapped.startsWith('=') ? remapped : ('='+remapped);
-          const targetIdExpr = F('VALUE_AT', V(idx), V(0), V(0), varsIdExpr);
-          commands.push( F('EXEC_AT', V(c.x), V(c.y), V(c.z), targetIdExpr, V(formulaText)) );
+          if(!c.formula) return;
+          const remapped = remapFormulaIds(c.formula, idMap);
+          const formulaText = remapped.startsWith('=') ? remapped : `=${remapped}`;
+          commands.push( F('EXEC_AT', V(c.x), V(c.y), V(c.z), V(newId), V(formulaText)) );
         });
       });
     });
 
-    // 6) Apply color metadata via COLOR() so visual styling survives
-    ids.forEach((oldId, idx)=>{
+    ids.forEach(oldId=>{
       const A=S.arrays[oldId]; if(!A) return;
+      const newId=idMap.get(oldId);
       Object.values(A.chunks||{}).forEach(ch=>{
         (ch.cells||[]).forEach(c=>{
           const color = c?.meta?.color;
           if(!color) return;
-          const targetIdExpr = F('VALUE_AT', V(idx), V(0), V(0), varsIdExpr);
           const colorText = astToString( F('COLOR', V(String(color))) );
-          commands.push( F('EXEC_AT', V(c.x), V(c.y), V(c.z), targetIdExpr, V(colorText)) );
+          commands.push( F('EXEC_AT', V(c.x), V(c.y), V(c.z), V(newId), V(colorText)) );
         });
       });
     });
 
-    // 6) Restore world positions
-    ids.forEach((oldId, idx)=>{
-      const A=S.arrays[oldId]; if(!A) return; const off=A.offset||{x:0,y:0,z:0};
-      const targetIdExpr = F('VALUE_AT', V(idx), V(0), V(0), varsIdExpr);
-      commands.push( F('SET_ARRAY_POS', targetIdExpr, V(Math.round(off.x||0)), V(Math.round(off.y||0)), V(Math.round(off.z||0))) );
+    ids.forEach(oldId=>{
+      const A=S.arrays[oldId]; if(!A) return;
+      const newId=idMap.get(oldId);
+      const off=A.offset||{x:0,y:0,z:0};
+      commands.push( F('SET_ARRAY_POS', V(newId), V(Math.round(off.x||0)), V(Math.round(off.y||0)), V(Math.round(off.z||0))) );
     });
 
-    // 7) Self-cleanup: clear the builder cell value
     commands.push( F('SET', F('SELF'), V('')) );
 
-    // 8) Serialize in one DO(...) payload and stamp
-    const doArgs = commands.map(cmd=> V(astToString(cmd, true)));
-    const doAst = F('DO', ...doArgs);
-    const out = astToString(doAst);
+    const statements = commands.map(cmd=>{
+      const text = astToString(cmd, true);
+      return text.startsWith('=') ? text.slice(1) : text;
+    });
+    const body = statements.length ? `  ${statements.join(';\n  ')};\n` : '';
+    const out = `=DO{\n${body}} WITH atomic:1`;
     Actions.setCell(arr.id, anchor, out, ast.raw, true);
   }catch(e){
     Actions.setCell(arr.id, anchor, `!ERR:${e.message}`, ast.raw, true);
