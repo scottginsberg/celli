@@ -14602,6 +14602,56 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
   // keyboard for physics locomotion
   const input={f:0,b:0,l:0,r:0,j:0};
+  const platformerKeyState={left:false,right:false,up:false,down:false};
+  const PLATFORMER_KEY_BINDINGS={
+    arrowleft:'left',
+    a:'left',
+    arrowright:'right',
+    d:'right',
+    arrowup:'up',
+    w:'up',
+    arrowdown:'down',
+    s:'down'
+  };
+  function normalizePlatformerKey(key){
+    if(!key) return '';
+    if(key === ' ') return 'space';
+    return key.length===1 ? key.toLowerCase() : key.toLowerCase();
+  }
+  function isPlatformerActive(global){
+    try{
+      const g = global || Store.getState().globalState;
+      if(!g) return false;
+      if(typeof g.has === 'function'){
+        if(g.has('platformer.active')) return !!g.get('platformer.active');
+        if(g.has('platformer.pos')) return true;
+      }
+      const active = g.get ? g.get('platformer.active') : null;
+      if(active != null) return !!active;
+      const pos = g.get ? g.get('platformer.pos') : undefined;
+      return pos !== undefined;
+    }catch{return false;}
+  }
+  function refreshPlatformerInput(global){
+    try{
+      const g = global || Store.getState().globalState;
+      if(!g || typeof g.set !== 'function' || typeof g.get !== 'function') return;
+      let dir='none';
+      if(platformerKeyState.left) dir='left';
+      else if(platformerKeyState.right) dir='right';
+      else if(platformerKeyState.up) dir='up';
+      else if(platformerKeyState.down) dir='down';
+      if(g.get('platformer.input') !== dir){
+        g.set('platformer.input', dir);
+      }
+    }catch(e){ console.warn('Platformer input sync failed', e); }
+  }
+  function handlePlatformerKey(key,isDown){
+    const dir = PLATFORMER_KEY_BINDINGS[normalizePlatformerKey(key)];
+    if(!dir) return false;
+    platformerKeyState[dir] = !!isDown;
+    return true;
+  }
   let mouseLookEnabled = false;
   let mouseYaw = 0; // Camera rotation around Y axis
   let mousePitch = 0; // Camera rotation around X axis
@@ -14647,12 +14697,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   }, true);
   window.addEventListener('keydown',(e)=>{
     const s=Store.getState();
+    const activeTag = (document.activeElement?.tagName||'').toUpperCase();
+    const direct = document.getElementById('directEdit');
+    const directOpen = !!(direct && direct.style.display==='block');
+    const typingElement = (activeTag==='INPUT' || activeTag==='TEXTAREA');
+    const platformerMode = isPlatformerActive(s.globalState);
+
     // Physics mode takes priority regardless of focused inputs
     if(s.scene.physics){
-      const activeTag = document.activeElement?.tagName;
-      const direct = document.getElementById('directEdit');
-      const typing = (activeTag==='INPUT' || activeTag==='TEXTAREA' || (direct && direct.style.display==='block'));
+      const typing = typingElement || directOpen;
       if(!typing && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Spacebar','w','a','s','d','W','A','S','D','Escape'].includes(e.key)){
+        if(handlePlatformerKey(e.key, true)) refreshPlatformerInput(s.globalState);
         e.preventDefault();
         if(e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.f=1;
         if(e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.b=1;
@@ -14669,14 +14724,19 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(e.key==='p'||e.key==='P'){ Actions.togglePhysics(); return; }
     }
 
-    // If a text input is focused (formula textbox or universal editor), do nothing; their handlers manage Enter/Esc/typing
-    const activeTag = document.activeElement?.tagName;
-    const direct = document.getElementById('directEdit');
-    if(['INPUT','TEXTAREA'].includes(activeTag)) return;
-    if(direct && direct.style.display==='block') return;
+    if(platformerMode && !typingElement && !directOpen){
+      if(handlePlatformerKey(e.key, true)){
+        refreshPlatformerInput(s.globalState);
+        e.preventDefault();
+        return;
+      }
+    }
+
+    if(typingElement) return;
+    if(directOpen) return;
 
     // Universal input: Enter always opens the editor. If no selection, select a default cell first.
-    if(e.key==='Enter'){
+    if(e.key==='Enter' && !platformerMode){
       e.preventDefault();
       const state=Store.getState();
       const sel=state.selection;
@@ -14700,23 +14760,23 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(e.shiftKey){ e.preventDefault(); Actions.redoUI(); return; }
       else { e.preventDefault(); Actions.undoUI(); return; }
     }
-    
+
     // Backspace: clear cell and enter input mode
-    if(e.key==='Backspace' && s.selection?.focus){
-      e.preventDefault(); 
+    if(e.key==='Backspace' && !platformerMode && s.selection?.focus){
+      e.preventDefault();
       const sel = s.selection;
       const anchor = {arrId: sel.arrayId, ...sel.focus};
       Actions.setCell(sel.arrayId, sel.focus, '', null, true);
       // Do not open the inline editor on backspace; just clear
       return;
     }
-    
+
     // Realtime typing: printable char when a cell is focused starts editor with that char
-    if(s.selection?.focus && e.key.length===1 && !e.ctrlKey && !e.metaKey && !e.altKey){
+    if(s.selection?.focus && e.key.length===1 && !e.ctrlKey && !e.metaKey && !e.altKey && !platformerMode){
       e.preventDefault(); UI.startDirectTyping(e.key); return;
     }
     if(e.key==='p'||e.key==='P'){ Actions.togglePhysics(); return; }
-    if(!s.scene.physics){
+    if(!s.scene.physics && !platformerMode){
       // Ensure we have a selection; default to Array 1 A1α if none
       let sel=s.selection;
       if(!sel.focus){
@@ -14793,10 +14853,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }
       }
       // Immediate typing: Enter resumes, other printable keys clear and start typing
-      if(e.key==='Enter') { 
+      if(e.key==='Enter') {
         // Don't re-open if editor was just closed (prevents clearing cell on rapid Enter presses)
         const timeSinceClose = Date.now() - (els.direct._closedAt || 0);
-        if(timeSinceClose > 300) UI.openEditor(); 
+        if(timeSinceClose > 300) UI.openEditor();
       }
       else if(e.key==='=') { UI.startDirectTyping('='); e.preventDefault(); }
       else if(e.key.length===1 && !e.ctrlKey && !e.altKey && !e.metaKey) { UI.startDirectTyping(e.key); e.preventDefault(); }
@@ -14808,6 +14868,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   }, true);
   window.addEventListener('keyup',(e)=>{
     const s=Store.getState();
+    const platformerMode = isPlatformerActive(s.globalState);
+    const platformerHandled = handlePlatformerKey(e.key, false);
+    if(platformerHandled && platformerMode){
+      refreshPlatformerInput(s.globalState);
+    }
     if(s.scene.physics){
       if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Spacebar','w','a','s','d','W','A','S','D'].includes(e.key)){
         e.preventDefault();
@@ -14818,6 +14883,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         if(e.key===' '||e.key==='Spacebar') input.j=0; 
         return;
       }
+    }
+    if(platformerHandled && platformerMode){
+      e.preventDefault();
+      return;
     }
     if(e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.f=0; if(e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.b=0; if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.r=0; if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.l=0; if(e.key===' '||e.key==='Spacebar') input.j=0; 
   },true);
@@ -14923,20 +14992,20 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       bowGroup.position.set(0, BH + 0.15, 0);
 
       const armRadius = .055;
-      const armCurve = new THREE.QuadraticBezierCurve3(
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(0.08, -0.18, 0.04),
-        new THREE.Vector3(0.02, -0.34, 0)
-      );
-      const armGeo = new THREE.TubeGeometry(armCurve, 28, armRadius, 12, false);
       const handGeo = new THREE.SphereGeometry(armRadius, 16, 12);
       const shoulderX = BW * 0.38;
       const shoulderY = BH * 0.52;
       const armTilt = THREE.MathUtils.degToRad(-6);
-      const armSweep = THREE.MathUtils.degToRad(8);
-      const armTuck = THREE.MathUtils.degToRad(-18);
+      const armSweep = THREE.MathUtils.degToRad(14);
+      const armTuck = THREE.MathUtils.degToRad(-12);
       function makeArm(sign=1){
         const armRoot = new THREE.Group();
+        const armCurve = new THREE.QuadraticBezierCurve3(
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Vector3(0.08 * sign, -0.18, 0.04),
+          new THREE.Vector3(0.02 * sign, -0.34, 0)
+        );
+        const armGeo = new THREE.TubeGeometry(armCurve, 28, armRadius, 12, false);
         const upper = new THREE.Mesh(armGeo, MAT_BODY); addOutline(upper, 1.04);
         const handGroup = new THREE.Group();
         const hand = new THREE.Mesh(handGeo, MAT_BODY); addOutline(hand, 1.04);
@@ -14944,15 +15013,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         handGroup.add(hand);
         armRoot.add(upper, handGroup);
         armRoot.position.set(sign * shoulderX, shoulderY, 0);
-        armRoot.scale.x *= sign;
         armRoot.rotation.set(armTilt, sign * armSweep, sign * armTuck);
         return { armRoot, handGroup };
       }
       const L = makeArm(-1), R = makeArm(+1);
-      R.armRoot.position.set(Math.abs(L.armRoot.position.x), L.armRoot.position.y, L.armRoot.position.z);
-      R.armRoot.rotation.set(L.armRoot.rotation.x, -L.armRoot.rotation.y, -L.armRoot.rotation.z);
-      R.armRoot.scale.y = L.armRoot.scale.y;
-      R.armRoot.scale.z = -L.armRoot.scale.z;
 
       const legRadius = .06;
       const legCurve = new THREE.CatmullRomCurve3([
