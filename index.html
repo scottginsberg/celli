@@ -1010,6 +1010,54 @@ const createStore = (init)=>{
   return {getState,setState,subscribe};
 };
 const PHYSICS_DEBUG_STORAGE_KEY = 'celli.physicsDebugAll';
+
+function parseArrayIdFromKey(key){
+  if(key === undefined || key === null) return null;
+  const str = typeof key === 'string' ? key : String(key);
+  const idx = str.indexOf(':');
+  if(idx <= 0) return null;
+  const id = Number(str.slice(0, idx));
+  return Number.isFinite(id) ? id : null;
+}
+
+function gatherFormulaActiveArrayIds(sourceByCell, depsByAnchor, extraIds=[]){
+  const active = new Set();
+  try{
+    if(Array.isArray(extraIds)){
+      extraIds.forEach(id=>{
+        const num = Number(id);
+        if(Number.isFinite(num)) active.add(num);
+      });
+    }
+  }catch{}
+  try{
+    if(sourceByCell && typeof sourceByCell.forEach === 'function'){
+      sourceByCell.forEach((_src, cellKey)=>{
+        const id = parseArrayIdFromKey(cellKey);
+        if(id!=null) active.add(id);
+      });
+    }
+  }catch{}
+  try{
+    if(depsByAnchor && typeof depsByAnchor.forEach === 'function'){
+      depsByAnchor.forEach((_deps, anchorKey)=>{
+        const id = parseArrayIdFromKey(anchorKey);
+        if(id!=null) active.add(id);
+      });
+    }
+  }catch{}
+  return active;
+}
+
+function getFormulaActiveArrayIds(){
+  try{
+    if(typeof Store === 'undefined' || !Store?.getState) return new Set();
+    const state = Store.getState();
+    return gatherFormulaActiveArrayIds(state.sourceByCell, state.depsByAnchor);
+  }catch{
+    return new Set();
+  }
+}
 function readPersistedPhysicsDebug(){
   try{
     return typeof localStorage !== 'undefined' && localStorage.getItem(PHYSICS_DEBUG_STORAGE_KEY) === '1';
@@ -17715,49 +17763,6 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       }
       connections.delete(key);
     }
-  }
-
-  function parseArrayIdFromKey(key){
-    if(key === undefined || key === null) return null;
-    const str = typeof key === 'string' ? key : String(key);
-    const idx = str.indexOf(':');
-    if(idx <= 0) return null;
-    const id = Number(str.slice(0, idx));
-    return Number.isFinite(id) ? id : null;
-  }
-
-  function gatherFormulaActiveArrayIds(sourceByCell, depsByAnchor, extraIds=[]){
-    const active = new Set();
-    try{
-      if(Array.isArray(extraIds)){
-        extraIds.forEach(id=>{
-          const num = Number(id);
-          if(Number.isFinite(num)) active.add(num);
-        });
-      }
-    }catch{}
-    try{
-      if(sourceByCell && typeof sourceByCell.forEach === 'function'){
-        sourceByCell.forEach((_src, cellKey)=>{
-          const id = parseArrayIdFromKey(cellKey);
-          if(id!=null) active.add(id);
-        });
-      }
-    }catch{}
-    try{
-      if(depsByAnchor && typeof depsByAnchor.forEach === 'function'){
-        depsByAnchor.forEach((_deps, anchorKey)=>{
-          const id = parseArrayIdFromKey(anchorKey);
-          if(id!=null) active.add(id);
-        });
-      }
-    }catch{}
-    return active;
-  }
-
-  function getFormulaActiveArrayIds(){
-    const state = Store.getState();
-    return gatherFormulaActiveArrayIds(state.sourceByCell, state.depsByAnchor);
   }
 
   function determineCollisionMode(arr, cell=null, opts={}){
