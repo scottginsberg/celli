@@ -19869,6 +19869,7 @@ const UI = (()=>{
       try{ UI?.syncPresentUI?.(actual); }catch(e){ console.warn('Sync present UI failed', e); }
       syncPresentToggle();
     };
+    let lastDpadTouchTime = 0;
     dpad.querySelectorAll('.dp').forEach(btn=>{
       if(btn.classList.contains('grab')) return;
       const clickHandler = ()=>{
@@ -19888,8 +19889,18 @@ const UI = (()=>{
         if(!direction) return;
         onDP(direction);
       };
-      btn.addEventListener('click', clickHandler);
-      btn.addEventListener('touchend', (e)=>{ e.preventDefault(); clickHandler(); }, {passive:false});
+      btn.addEventListener('click', (e)=>{
+        if(Date.now() - lastDpadTouchTime < 400){
+          console.log('[DPAD] Ignoring click synthesized from touch');
+          return;
+        }
+        clickHandler();
+      });
+      btn.addEventListener('touchend', (e)=>{
+        lastDpadTouchTime = Date.now();
+        e.preventDefault();
+        clickHandler();
+      }, {passive:false});
     });
     syncPresentToggle();
     // Reflect current arrow mapping (height vs depth) on center key
