@@ -1167,11 +1167,13 @@ const Store = createStore((set,get)=>{
         };
 
         // Enhanced state preservation - keep ALL meaningful data
+        const hostedByFormula = gatherFormulaActiveArrayIds(s.sourceByCell, s.depsByAnchor);
+        const debugMode = !!s.scene?.physicsDebugAll;
         const arrays = {};
         Object.values(s.arrays).forEach(a=>{
           const outA = {
             id:a.id, name:a.name, size:a.size, hidden:a.hidden, sealed:a.sealed, offset:a.offset,
-            collisionMode: a.collisionMode === 'physics' ? 'physics' : 'edit',
+            collisionMode: determineCollisionMode(a, null, { debugMode, formulaHostedSet: hostedByFormula }),
             fnPolicy: a.fnPolicy ? {
               mode: a.fnPolicy.mode,
               allow: Array.from(a.fnPolicy.allow || []),
@@ -1523,10 +1525,12 @@ const Store = createStore((set,get)=>{
             arrays[a.id].collisionMode = 'physics';
           }
 
+          let hasFormulaCell = false;
           Object.entries(a.chunks||{}).forEach(([k,ch])=>{
             const C = new Scene.Chunk(arrays[a.id], ch.coord);
             C.cells = (ch.cells||[]).map(c=>{
               const meta = normalizeMetaKeys(c.meta||{});
+              if(c.formula) hasFormulaCell = true;
               return {
                 x:c.x, y:c.y, z:c.z,
                 value:c.value,
@@ -1555,6 +1559,7 @@ const Store = createStore((set,get)=>{
                   }
             }catch{}
           });
+          arrays[a.id]._hasFormulaCell = hasFormulaCell;
           // Ensure chunks exist for all regions and are populated with empties where missing
           try{
             const arrRef = arrays[a.id];
@@ -1604,6 +1609,22 @@ const Store = createStore((set,get)=>{
             });
           });
         }catch{}
+
+        const extraFormulaIds = [];
+        Object.values(arrays).forEach(arr=>{
+          if(arr && arr._hasFormulaCell){
+            extraFormulaIds.push(arr.id);
+          }
+        });
+        const combinedHosted = gatherFormulaActiveArrayIds(sourceByCell, null, extraFormulaIds);
+        Object.values(arrays).forEach(arr=>{
+          if(!arr) return;
+          const mode = determineCollisionMode(arr, null, { debugMode:false, formulaHostedSet: combinedHosted });
+          arr.collisionMode = mode;
+          if(Object.prototype.hasOwnProperty.call(arr, '_hasFormulaCell')){
+            delete arr._hasFormulaCell;
+          }
+        });
 
         // Restore full state (including rebuilt emission maps)
         const restoredUi = {...get().ui, ...(data.ui||{})};
@@ -13028,9 +13049,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     // Check if this array should have colliders (debug mode enables all, or physics enabled)
     const debugMode = !!Store.getState().scene?.physicsDebugAll;
     const hasPhysicsParam = !!arr?.params?.physics?.enabled;
+    const effectiveMode = determineCollisionMode(arr, null, { debugMode });
     const physicsEnabled = debugMode || hasPhysicsParam;
-    
-    console.log(`[PHYSICS] rebuildCollidersForArray: array=${arr.id} "${arr.name}", debug=${debugMode}, hasPhysicsParam=${hasPhysicsParam}, physicsEnabled=${physicsEnabled}`);
+
+    console.log(`[PHYSICS] rebuildCollidersForArray: array=${arr.id} "${arr.name}", debug=${debugMode}, hasPhysicsParam=${hasPhysicsParam}, effectiveMode=${effectiveMode}`);
     
     arr._colliders = arr._colliders || [];
     arr._rigidBodies = arr._rigidBodies || [];
@@ -13041,6 +13063,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     // Skip building if physics not enabled (unless debug mode)
     if(!physicsEnabled){
       console.log(`[PHYSICS] ✗ Skipping collider build for array #${arr.id} "${arr.name}" (not physics-enabled)`);
+      return;
+    }
+
+    if(!debugMode && effectiveMode !== 'physics'){
+      console.log(`[PHYSICS] ✗ Skipping collider build for array #${arr.id} "${arr.name}" (effective mode=${effectiveMode})`);
       return;
     }
     console.log(`[PHYSICS] ✓ Building colliders for array #${arr.id} "${arr.name}"`);
@@ -17685,10 +17712,73 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
 
+  function parseArrayIdFromKey(key){
+    if(key === undefined || key === null) return null;
+    const str = typeof key === 'string' ? key : String(key);
+    const idx = str.indexOf(':');
+    if(idx <= 0) return null;
+    const id = Number(str.slice(0, idx));
+    return Number.isFinite(id) ? id : null;
+  }
+
+  function gatherFormulaActiveArrayIds(sourceByCell, depsByAnchor, extraIds=[]){
+    const active = new Set();
+    try{
+      if(Array.isArray(extraIds)){
+        extraIds.forEach(id=>{
+          const num = Number(id);
+          if(Number.isFinite(num)) active.add(num);
+        });
+      }
+    }catch{}
+    try{
+      if(sourceByCell && typeof sourceByCell.forEach === 'function'){
+        sourceByCell.forEach((_src, cellKey)=>{
+          const id = parseArrayIdFromKey(cellKey);
+          if(id!=null) active.add(id);
+        });
+      }
+    }catch{}
+    try{
+      if(depsByAnchor && typeof depsByAnchor.forEach === 'function'){
+        depsByAnchor.forEach((_deps, anchorKey)=>{
+          const id = parseArrayIdFromKey(anchorKey);
+          if(id!=null) active.add(id);
+        });
+      }
+    }catch{}
+    return active;
+  }
+
+  function getFormulaActiveArrayIds(){
+    const state = Store.getState();
+    return gatherFormulaActiveArrayIds(state.sourceByCell, state.depsByAnchor);
+  }
+
+  function determineCollisionMode(arr, cell=null, opts={}){
+    if(!arr) return 'edit';
+    const baseMode = arr.collisionMode === 'physics' ? 'physics' : 'edit';
+    const debugMode = Object.prototype.hasOwnProperty.call(opts, 'debugMode')
+      ? !!opts.debugMode
+      : !!Store.getState().scene?.physicsDebugAll;
+    if(debugMode) return baseMode;
+    if(baseMode !== 'physics') return 'edit';
+    if(!arr.params || !arr.params.physics || arr.params.physics.enabled !== true) return 'edit';
+    const hostedSet = opts.formulaHostedSet || getFormulaActiveArrayIds();
+    if(hostedSet.has(arr.id)) return 'physics';
+    if(cell && (cell.formula || (cell.meta && (cell.meta.generated || cell.meta.emitter)))){
+      return 'physics';
+    }
+    return 'edit';
+  }
+
   function locateArrayCollision(worldVec, {preferSelection=true}={}){
     if(!worldVec) return null;
-    const arrays = Store.getState().arrays || {};
-    const sel = Store.getState().selection;
+    const state = Store.getState();
+    const arrays = state.arrays || {};
+    const sel = state.selection;
+    const debugMode = !!state.scene?.physicsDebugAll;
+    const formulaHostedSet = getFormulaActiveArrayIds();
     const consider = (arr)=>{
       if(!arr || arr._deleting) return null;
       let coord;
@@ -17702,7 +17792,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(!center) return null;
       const distSq = center.distanceToSquared(worldVec);
       const cell = Formula.getCell({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z});
-      const collisionMode = arr?.collisionMode === 'physics' ? 'physics' : 'edit';
+      const collisionMode = determineCollisionMode(arr, cell, { debugMode, formulaHostedSet });
       return { arr, coord, cell, center, distSq, collisionMode };
     };
 
@@ -17724,15 +17814,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     if(!hit || !hit.arr) return false;
     const arr = hit.arr;
     // In debug mode, treat all arrays as physics enabled
-    const sceneState = Store.getState().scene;
+    const state = Store.getState();
+    const sceneState = state.scene;
     const debugMode = !!sceneState?.physicsDebugAll;
-    const collisionMode = arr?.collisionMode === 'physics' ? 'physics' : 'edit';
-    const enabled = collisionMode === 'physics';
+    const formulaHostedSet = getFormulaActiveArrayIds();
+    const effectiveMode = determineCollisionMode(arr, hit.cell, { debugMode, formulaHostedSet });
     const arrPhysicsEnabled = !!arr?.params?.physics?.enabled;
     console.log(`[PHYSICS] exitPhysicsOnNonEnabledArray ENTRY: array=${arr.id}`);
     console.log(`[PHYSICS]   scene.physicsDebugAll=${sceneState?.physicsDebugAll}`);
     console.log(`[PHYSICS]   debugMode=${debugMode}`);
-    console.log(`[PHYSICS]   arr.collisionMode=${collisionMode}`);
+    console.log(`[PHYSICS]   arr.collisionMode=${arr?.collisionMode}`);
+    console.log(`[PHYSICS]   effectiveCollisionMode=${effectiveMode}`);
     console.log(`[PHYSICS]   arr.params.physics.enabled=${arrPhysicsEnabled}`);
     console.log(`[PHYSICS]   arr.params.physics.__debugOverride=${!!arr?.params?.physics?.__debugOverride}`);
 
@@ -17740,8 +17832,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       console.log('[PHYSICS] ✓ Debug mode ACTIVE - NOT exiting physics for array', arr.id);
       return false;
     }
-    if(enabled){
-      console.log('[PHYSICS] ✓ Array has physics enabled - NOT exiting physics for array', arr.id);
+    if(effectiveMode === 'physics'){
+      console.log('[PHYSICS] ✓ Array is treated as physics-active - NOT exiting physics for array', arr.id);
       return false;
     }
     console.log('[PHYSICS] ✗ EXITING PHYSICS MODE for array', arr.id);
