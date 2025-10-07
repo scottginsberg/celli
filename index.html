@@ -9427,10 +9427,16 @@ const Scene = (()=>{
       ball:null,
       structures:[],
       floaters:[],
+      voxelStructures:[],
+      lighthousePositions:[],
       baseHeight:-6,
       time:0,
       presentActive:false
     };
+
+    const L_OCCLUSION=1;
+    const towerParams={ count:16, minRadius:120, maxRadius:600, azimuthSpread:0.6 };
+    const MAX_LIGHTHOUSE_BEACONS=4;
 
     function ensureGroup(){
       if(state.group) return;
@@ -9446,7 +9452,7 @@ const Scene = (()=>{
     }
 
     function createSky(){
-      const geo=new THREE.SphereGeometry(1800,48,24);
+      const geo=new THREE.SphereGeometry(1200,32,16);
       const uniforms={
         top:{value:new THREE.Color(0x8ec1ea)},
         mid:{value:new THREE.Color(0x63aee3)},
@@ -9466,8 +9472,8 @@ const Scene = (()=>{
     }
 
     function createWater(){
-      const SIZE=900;
-      const SEG=192;
+      const SIZE=1200;
+      const SEG=256;
       const STEP=SIZE/SEG;
       const HALF=SIZE/2;
       state.gridConfig={SIZE,SEG,STEP,HALF};
@@ -9624,11 +9630,12 @@ const Scene = (()=>{
     }
 
     function createGrid(){
-      const GRID_SEG=128;
-      const SIZE=state.gridConfig?.SIZE||600;
+      const baseConfig=state.gridConfig||{};
+      const GRID_SEG=(baseConfig.SEG ?? 256);
+      const SIZE=baseConfig.SIZE ?? 600;
       const STEP=SIZE/GRID_SEG;
       const HALF=SIZE/2;
-      state.gridConfig={...state.gridConfig, GRID_SEG, GRID_STEP:STEP, HALF};
+      state.gridConfig={...baseConfig, GRID_SEG, GRID_STEP:STEP, HALF};
       const lineCount=((GRID_SEG+1)*GRID_SEG + (GRID_SEG+1)*GRID_SEG);
       const gridPos=new Float32Array(lineCount*2*3);
       let ptr=0;
@@ -9647,12 +9654,12 @@ const Scene = (()=>{
       const gridMat=new THREE.LineBasicMaterial({
         color:0xbfe7ff,
         transparent:true,
-        opacity:0.3,
+        opacity:0.35,
         depthWrite:false,
         depthTest:true
       });
       const grid=new THREE.LineSegments(gridGeo, gridMat);
-      grid.renderOrder=-5;
+      grid.renderOrder=999;
       grid.name='OceanGrid';
       state.grid=grid;
       state.gridAttr=gridGeo.getAttribute('position');
@@ -9672,27 +9679,30 @@ const Scene = (()=>{
     }
 
     function createStructures(){
+      state.voxelStructures.length=0;
+      state.lighthousePositions.length=0;
+
       const voxel=new THREE.BoxGeometry(4.5,4.5,4.5);
       const towerGroup=new THREE.Group();
       towerGroup.name='OceanTowers';
       state.group.add(towerGroup);
       const towers=[];
-      const towerCount=16;
-      for(let c=0;c<towerCount;c++){
-        const instances=360;
+      for(let c=0;c<towerParams.count;c++){
+        const instancesPerCluster=450;
         const mat=new THREE.MeshStandardMaterial({
           color:0x4a7a9f,
           metalness:0.15,
-          roughness:0.85
+          roughness:0.85,
+          emissive:0x000000
         });
-        const mesh=new THREE.InstancedMesh(voxel, mat, instances);
+        const mesh=new THREE.InstancedMesh(voxel, mat, instancesPerCluster);
         mesh.name=`OceanTowerCluster${c}`;
         mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        const radius=THREE.MathUtils.randFloat(160, 680);
-        const baseAng=(c / towerCount) * Math.PI * 2;
-        const angJitter=THREE.MathUtils.randFloat(-0.6,0.6);
+        const radius=THREE.MathUtils.randFloat(towerParams.minRadius, towerParams.maxRadius);
+        const baseAng=(c / towerParams.count) * Math.PI * 2;
+        const angJitter=THREE.MathUtils.randFloat(-towerParams.azimuthSpread, towerParams.azimuthSpread);
         const ang=baseAng + angJitter;
-        const baseY=THREE.MathUtils.randFloat(-10, 26) + state.baseHeight;
+        const baseY=THREE.MathUtils.randFloat(-10, 30) + state.baseHeight;
         const base=new THREE.Vector3(Math.sin(ang)*radius, baseY, Math.cos(ang)*radius);
         const tilt=new THREE.Euler(
           THREE.MathUtils.degToRad(THREE.MathUtils.randFloat(3,12)),
@@ -9704,7 +9714,7 @@ const Scene = (()=>{
         const H=THREE.MathUtils.randInt(30,60);
         const D=THREE.MathUtils.randInt(12,20);
         for(let x=0;x<W;x++) for(let y=0;y<H;y++) for(let z=0;z<D;z++){
-          if(i>=instances) break;
+          if(i>=instancesPerCluster) break;
           if(Math.random()<0.80) continue;
           const m=new THREE.Matrix4();
           const scale=THREE.MathUtils.randFloat(0.9,1.3);
@@ -9714,9 +9724,16 @@ const Scene = (()=>{
           m.compose(p, new THREE.Quaternion(), new THREE.Vector3(scale,scale,scale));
           mesh.setMatrixAt(i++, m);
         }
-        mesh.count=Math.min(i,instances);
+        mesh.count=Math.min(i,instancesPerCluster);
+        mesh.layers.enable(L_OCCLUSION);
         towerGroup.add(mesh);
         towers.push(mesh);
+        state.voxelStructures.push(mesh);
+
+        if(state.lighthousePositions.length<MAX_LIGHTHOUSE_BEACONS && Math.random()<0.5){
+          const topY = baseY + (H * 2.75);
+          state.lighthousePositions.push(new THREE.Vector3(base.x, topY, base.z));
+        }
       }
       state.structures=towers;
 
@@ -9725,29 +9742,37 @@ const Scene = (()=>{
       state.group.add(floatGroup);
       const floatGeom=new THREE.BoxGeometry(3,3,3);
       const floaters=[];
-      const count=48;
-      for(let i=0;i<count;i++){
-        const emissiveIntensity=THREE.MathUtils.randFloat(2.5,4.2);
+      const lightVoxelCount=60;
+      for(let i=0;i<lightVoxelCount;i++){
+        const glowIntensity=THREE.MathUtils.randFloat(2.5,4.5);
         const mat=new THREE.MeshStandardMaterial({
           color:new THREE.Color(0.8,0.95,1.0),
           emissive:new THREE.Color(0.7,0.85,1.0),
-          emissiveIntensity,
+          emissiveIntensity:glowIntensity,
           metalness:0.1,
           roughness:0.15,
           toneMapped:false
         });
         const mesh=new THREE.Mesh(floatGeom, mat);
-        const radius=THREE.MathUtils.randFloat(120, 640);
+        const radius=THREE.MathUtils.randFloat(80, 600);
         const ang=Math.random()*Math.PI*2;
-        const height=THREE.MathUtils.randFloat(20, 140) + state.baseHeight;
+        const height=THREE.MathUtils.randFloat(15, 120) + state.baseHeight;
         mesh.position.set(Math.sin(ang)*radius, height, Math.cos(ang)*radius);
         mesh.rotation.set(Math.random()*Math.PI*2, Math.random()*Math.PI*2, Math.random()*Math.PI*2);
-        const light=new THREE.PointLight(new THREE.Color(0.6,0.85,1.0), THREE.MathUtils.randFloat(15,30), 60);
+        mesh.userData.baseY = height;
+
+        const intensity=THREE.MathUtils.randFloat(15,30);
+        const light=new THREE.PointLight(new THREE.Color(0.6,0.85,1.0), intensity, 50);
+        light.userData.baseIntensity = intensity;
         light.position.copy(mesh.position);
         light.castShadow=false;
+
         floatGroup.add(mesh);
         floatGroup.add(light);
-        floaters.push({mesh, light, baseY:height, floatSpeed:THREE.MathUtils.randFloat(0.3,0.7), floatOffset:Math.random()*Math.PI*2, baseIntensity:light.intensity});
+
+        const record={mesh, light, floatSpeed:THREE.MathUtils.randFloat(0.3,0.7), floatOffset:Math.random()*Math.PI*2};
+        floaters.push(record);
+        state.voxelStructures.push(record);
       }
       state.floaters=floaters;
     }
@@ -9790,7 +9815,8 @@ const Scene = (()=>{
         if(item.light) item.light.visible = vis;
         if(!vis) return;
         const bob = Math.sin(state.time * item.floatSpeed + item.floatOffset) * 2.5;
-        const y = item.baseY + bob;
+        const baseY = item.mesh?.userData?.baseY ?? item.baseY ?? state.baseHeight;
+        const y = baseY + bob;
         if(item.mesh){
           item.mesh.position.y = y;
           item.mesh.rotation.y += 0.003 * item.floatSpeed;
@@ -9799,7 +9825,8 @@ const Scene = (()=>{
         if(item.light){
           item.light.position.y = y;
           const pulse = 0.85 + Math.sin(state.time * 2.0 + item.floatOffset) * 0.15;
-          item.light.intensity = item.baseIntensity * pulse;
+          const baseIntensity = item.light.userData?.baseIntensity ?? item.baseIntensity ?? item.light.intensity;
+          item.light.intensity = baseIntensity * pulse;
         }
       });
     }
@@ -9808,7 +9835,10 @@ const Scene = (()=>{
       if(!state.gridAttr || !state.settings.showGrid || !state.presentActive) return;
       const pos=state.gridAttr.array;
       if(!pos) return;
-      const {GRID_SEG:SEG=0, GRID_STEP:STEP=1, HALF=600/2}=state.gridConfig||{};
+      const cfg=state.gridConfig||{};
+      const SEG=(cfg.GRID_SEG ?? cfg.SEG ?? 0);
+      const STEP=cfg.GRID_STEP ?? ((cfg.SIZE && SEG) ? (cfg.SIZE/SEG) : 1);
+      const HALF=cfg.HALF ?? ((cfg.SIZE||600)/2);
       let p=0;
       const Q=state.settings.choppiness;
       for(let z=0; z<=SEG; z++) for(let x=0; x<SEG; x++){
