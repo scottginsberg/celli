@@ -1,229 +1,243 @@
-.ocean-note{position:fixed;left:16px;top:16px;z-index:10003;background:rgba(5,25,45,.35);border:1px solid rgba(170,220,255,.25);padding:8px 12px;border-radius:12px;font-size:12px;font-weight:600;color:#cfe9ff;text-shadow:0 1px 0 #001;display:none;pointer-events:none}
-.ocean-err{position:fixed;left:16px;bottom:16px;z-index:10003;background:#240f12;color:#ffd2d2;border:1px solid #ff5a6a;padding:10px 12px;border-radius:10px;font-weight:600;font-size:12px;line-height:1.3;max-width:320px;display:none;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,0.35)}
-      <label class="stack" style="gap:4px;">
-        <span class="sub">Near Fade <span id="oceanNearFadeValue"></span></span>
-        <input type="range" id="oceanNearFade" min="0" max="200" step="1">
-      </label>
-      <label class="stack" style="gap:4px;">
-        <span class="sub">Far Fade <span id="oceanFarFadeValue"></span></span>
-        <input type="range" id="oceanFarFade" min="50" max="600" step="1">
-      </label>
-    nearFade:20.0,
-    farFade:200.0,
-    const DEFAULT_ENV_INTENSITY = OceanDefaults.envIntensity || 1;
-      lastSize:{w:0,h:0},
-      ui:{note:null, err:null},
-      watchdog:null,
-      drewOnce:false,
-      fallbackActive:false,
-      fallbackScene:null,
-      fallbackCamera:null,
-      fallbackMesh:null
-    function ensureUI(){
-      if(state.ui.note && state.ui.err) return;
-      const note = document.createElement('div');
-      note.className = 'ocean-note';
-      note.textContent = 'Ocean backdrop active — adjust via Ocean Backdrop panel.';
-      note.style.display = 'none';
-      document.body.appendChild(note);
-      const err = document.createElement('div');
-      err.className = 'ocean-err';
-      err.style.display = 'none';
-      document.body.appendChild(err);
-      state.ui.note = note;
-      state.ui.err = err;
-    }
+  const derezEffects = [];
+  const celliDerezState = { active: false, lastY: null };
+  let derezParticleGeometry = null;
+  function triggerCelliDerez(worldPos){
+    if(!scene || !THREE || celliDerezState.active) return;
+    try{
+      const base = new THREE.Group();
+      const px = Number.isFinite(worldPos?.x) ? worldPos.x : 0;
+      const py = Number.isFinite(worldPos?.y) ? worldPos.y : 0;
+      const pz = Number.isFinite(worldPos?.z) ? worldPos.z : 0;
+      base.position.set(px, py + 0.4, pz);
 
-    function setNoteVisible(flag){
-      ensureUI();
-      state.ui.note.style.display = flag ? 'block' : 'none';
-    }
+      const layout = [
+        { size: [0.36, 0.48, 0.28], offset: [0, -0.05, 0], color: 0xf59e0b },
+        { size: [0.32, 0.24, 0.24], offset: [0, 0.32, 0], color: 0xfcd34d },
+        { size: [0.08, 0.08, 0.05], offset: [-0.1, 0.36, 0.12], color: 0x1f2937 },
+        { size: [0.08, 0.08, 0.05], offset: [0.1, 0.36, 0.12], color: 0x1f2937 },
+        { size: [0.14, 0.06, 0.05], offset: [0, 0.26, 0.13], color: 0x1f2937 },
+        { size: [0.08, 0.06, 0.05], offset: [-0.16, 0.3, 0.12], color: 0xec4899 },
+        { size: [0.08, 0.06, 0.05], offset: [0.16, 0.3, 0.12], color: 0xec4899 },
+        { size: [0.36, 0.08, 0.12], offset: [0, 0.5, 0], color: 0xfcd34d },
+        { size: [0.16, 0.12, 0.08], offset: [-0.24, 0.5, 0], color: 0xf59e0b },
+        { size: [0.16, 0.12, 0.08], offset: [0.24, 0.5, 0], color: 0xf59e0b },
+        { size: [0.12, 0.4, 0.12], offset: [-0.26, -0.2, 0], color: 0xf59e0b },
+        { size: [0.12, 0.4, 0.12], offset: [0.26, -0.2, 0], color: 0xf59e0b },
+        { size: [0.12, 0.24, 0.12], offset: [-0.12, -0.46, 0], color: 0xf59e0b },
+        { size: [0.12, 0.24, 0.12], offset: [0.12, -0.46, 0], color: 0xf59e0b }
+      ];
 
-    function showError(msg){
-      ensureUI();
-      state.ui.err.textContent = msg;
-      state.ui.err.style.display = 'block';
-    }
+      const voxels = [];
+      const boundsMin = new THREE.Vector3(Infinity, Infinity, Infinity);
+      const boundsMax = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
 
-    function hideError(){
-      if(state.ui.err) state.ui.err.style.display = 'none';
-    }
-
-    function clearWatchdog(){
-      if(state.watchdog){
-        clearTimeout(state.watchdog);
-        state.watchdog = null;
-      }
-    }
-
-    function resetWatchdog(){
-      clearWatchdog();
-      state.drewOnce = false;
-      if(state.fallbackActive) return;
-      state.watchdog = setTimeout(()=>{
-        if(!state.drewOnce){
-          triggerFallback('Watchdog: no ocean frame in 2s → showing fallback view.');
-        }
-      }, 2000);
-    }
-
-    function envIntensityScale(){
-      const base = DEFAULT_ENV_INTENSITY > 0 ? DEFAULT_ENV_INTENSITY : 1;
-      return base > 0 ? state.settings.envIntensity / base : state.settings.envIntensity;
-    }
-
-    function applyEmissiveScale(){
-      const scale = envIntensityScale();
-      if(state.ball && state.ball.material && state.ball.material.emissiveIntensity !== undefined){
-        const base = state.ball.userData?.baseEmissiveIntensity ?? state.ball.material.emissiveIntensity;
-        state.ball.material.emissiveIntensity = base * scale;
-      }
-      state.floaters.forEach(item=>{
-        if(item.mesh && item.mesh.material && item.mesh.material.emissiveIntensity !== undefined){
-          const base = item.baseEmissiveIntensity ?? item.mesh.userData?.baseEmissiveIntensity ?? item.mesh.material.emissiveIntensity;
-          item.mesh.material.emissiveIntensity = base * scale;
-        }
-        if(item.light){
-          const baseLight = item.baseLightIntensity ?? item.light.userData?.baseIntensity ?? item.light.intensity;
-          item.light.intensity = baseLight * scale;
-        }
-      });
-    }
-
-    function markFrameDrawn(){
-      state.drewOnce = true;
-      clearWatchdog();
-      if(state.fallbackActive){
-        disableFallback();
-      } else {
-        hideError();
-      }
-    }
-
-    function disableFallback(){
-      if(!state.fallbackActive) return;
-      state.fallbackActive = false;
-      state.fallbackScene = null;
-      state.fallbackCamera = null;
-      state.fallbackMesh = null;
-      hideError();
-      setNoteVisible(state.presentActive);
-    }
-
-    function triggerFallback(message){
-      if(state.fallbackActive) return;
-      ensureCanvas();
-      ensureUI();
-      showError(message || 'Ocean backdrop unavailable — fallback engaged.');
-      setNoteVisible(false);
-      try{ ensureRenderer(); }catch(e){ showError(`Fallback init failed: ${e.message||e}`); return; }
-      clearWatchdog();
-      if(!state.renderer) return;
-      const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x0b1a2a);
-      const cam = new THREE.PerspectiveCamera(60, window.innerWidth / Math.max(1, window.innerHeight), 0.1, 100);
-      cam.position.set(2.2, 1.4, 2.2);
-      const amb = new THREE.AmbientLight(0xffffff, 0.8);
-      scene.add(amb);
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(1, 1, 1),
-        new THREE.MeshStandardMaterial({ color:0x8fd0ff, roughness:0.2 })
-      );
-      scene.add(mesh);
-      state.fallbackScene = scene;
-      state.fallbackCamera = cam;
-      state.fallbackMesh = mesh;
-      state.fallbackActive = true;
-      const renderer = state.renderer;
-      const loop = ()=>{
-        if(!state.fallbackActive) return;
-        requestAnimationFrame(loop);
-        try{
-          mesh.rotation.x += 0.01;
-          mesh.rotation.y += 0.013;
-          cam.aspect = window.innerWidth / Math.max(1, window.innerHeight);
-          cam.updateProjectionMatrix();
-          renderer.setSize(window.innerWidth, window.innerHeight);
-          renderer.render(scene, cam);
-        }catch(err){
-          showError(`Fallback error: ${err.message||err}`);
-          state.fallbackActive = false;
-        }
-      };
-      loop();
-    }
-
-      ensureUI();
-        nearFade:{value:state.settings.nearFade},
-        farFade:{value:state.settings.farFade},
-      ball.userData.baseEmissiveIntensity = ball.material.emissiveIntensity ?? 1.05;
-        mesh.userData.baseEmissiveIntensity = glow;
-        floaters.push({
-          mesh,
-          light,
-          floatSpeed:THREE.MathUtils.randFloat(0.3,0.7),
-          floatOffset:Math.random()*Math.PI*2,
-          baseEmissiveIntensity: glow,
-          baseLightIntensity: intensity
+      layout.forEach(part=>{
+        const geo = new THREE.BoxGeometry(part.size[0], part.size[1], part.size[2]);
+        const mat = new THREE.MeshStandardMaterial({
+          color: part.color,
+          emissive: new THREE.Color(part.color),
+          emissiveIntensity: 0.2,
+          transparent: true,
+          opacity: 1,
+          depthWrite: false
         });
-      applyEmissiveScale();
-      const envScale = envIntensityScale();
-          if(item.mesh.material && item.mesh.material.emissiveIntensity !== undefined){
-            const baseEmissive = item.baseEmissiveIntensity ?? item.mesh.userData?.baseEmissiveIntensity ?? item.mesh.material.emissiveIntensity;
-            item.mesh.material.emissiveIntensity = baseEmissive * envScale;
+        mat.toneMapped = false;
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(part.offset[0], part.offset[1], part.offset[2]);
+        base.add(mesh);
+        voxels.push({ mesh, geometry: geo, material: mat });
+
+        const half = new THREE.Vector3(part.size[0] / 2, part.size[1] / 2, part.size[2] / 2);
+        boundsMin.x = Math.min(boundsMin.x, mesh.position.x - half.x);
+        boundsMin.y = Math.min(boundsMin.y, mesh.position.y - half.y);
+        boundsMin.z = Math.min(boundsMin.z, mesh.position.z - half.z);
+        boundsMax.x = Math.max(boundsMax.x, mesh.position.x + half.x);
+        boundsMax.y = Math.max(boundsMax.y, mesh.position.y + half.y);
+        boundsMax.z = Math.max(boundsMax.z, mesh.position.z + half.z);
+      });
+
+      const glow = new THREE.PointLight(0xfcd34d, 0, 3.5, 2);
+      glow.position.set(0, 0.45, 0);
+      base.add(glow);
+
+      scene.add(base);
+
+      derezEffects.push({
+        group: base,
+        voxels,
+        bounds: { min: boundsMin, max: boundsMax },
+        particles: [],
+        light: glow,
+        stage: 'glow',
+        stageTime: 0,
+        totalTime: 0
+      });
+
+      celliDerezState.active = true;
+      if(celli){ celli.visible = false; }
+      needsRender = true;
+    }catch(e){
+      console.warn('Failed to trigger Celli derez effect', e);
+      celliDerezState.active = false;
+      if(celli){ celli.visible = true; }
+    }
+  }
+
+  function cleanupDerezEffect(effect){
+    try{
+      if(effect.particles){
+        effect.particles.forEach(p=>{
+          if(p?.mesh){
+            effect.group?.remove(p.mesh);
+            try{ p.material?.dispose?.(); }catch{}
           }
-          const baseIntensity = item.baseLightIntensity ?? item.light.userData?.baseIntensity ?? item.light.intensity;
-          item.light.intensity = baseIntensity * envScale * pulse;
-        if(state.post && state.post.compMat && state.post.compMat.uniforms){
-          state.post.compMat.uniforms.camNear.value = state.camera.near;
-          state.post.compMat.uniforms.camFar.value = state.camera.far;
+        });
+        effect.particles.length = 0;
+      }
+      if(effect.light){
+        try{ effect.group?.remove(effect.light); }catch{}
+      }
+      if(effect.group){
+        try{ scene.remove(effect.group); }catch{}
+      }
+    }catch(e){
+      console.warn('Failed to cleanup derez effect', e);
+    }
+    effect.voxels = [];
+    celliDerezState.active = false;
+    if(celli){ celli.visible = true; }
+    needsRender = true;
+  }
+
+  function updateDerezEffects(deltaMs){
+    if(!derezEffects.length) return;
+    const deltaSec = deltaMs / 1000;
+    for(let i = derezEffects.length - 1; i >= 0; i--){
+      const effect = derezEffects[i];
+      if(!effect) continue;
+      effect.stageTime += deltaMs;
+      effect.totalTime += deltaMs;
+      needsRender = true;
+
+      if(effect.stage === 'glow'){
+        const glowT = Math.min(1, effect.stageTime / 350);
+        const pulse = 0.94 + 0.08 * Math.sin(glowT * Math.PI);
+        effect.voxels.forEach(v=>{
+          if(!v?.mesh || !v.material) return;
+          v.mesh.scale.set(pulse, pulse, pulse);
+          v.material.emissiveIntensity = 0.6 + 1.8 * glowT;
+          v.material.opacity = 1;
+        });
+        if(effect.light){
+          effect.light.intensity = THREE.MathUtils.lerp(0, 3.2, glowT);
         }
-      if(state.post.raysMat && state.post.raysMat.uniforms){
-        state.post.raysMat.uniforms.rayDecay.value = PP.rayDecay;
-        state.post.raysMat.uniforms.rayExposure.value = PP.rayExposure;
+        if(effect.stageTime >= 350){
+          effect.stage = 'burst';
+          effect.stageTime = 0;
+          if(effect.light){ effect.light.intensity = 0; }
+          if(!derezParticleGeometry){
+            derezParticleGeometry = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+          }
+          const colorPool = effect.voxels.map(v=>v.material?.color?.getHex?.() ?? 0xf59e0b);
+          const particleCount = Math.max(24, colorPool.length * 6);
+          const bounds = effect.bounds;
+          effect.voxels.forEach(v=>{
+            if(!v) return;
+            if(v.mesh){
+              effect.group?.remove(v.mesh);
+            }
+            try{ v.geometry?.dispose?.(); }catch{}
+            try{ v.material?.dispose?.(); }catch{}
+          });
+          effect.voxels = [];
+          effect.particles = [];
+          for(let j = 0; j < particleCount; j++){
+            const colorHex = colorPool[j % colorPool.length];
+            const material = new THREE.MeshStandardMaterial({
+              color: colorHex,
+              emissive: new THREE.Color(colorHex),
+              emissiveIntensity: 1.3,
+              transparent: true,
+              opacity: 1,
+              depthWrite: false
+            });
+            material.toneMapped = false;
+            const particle = new THREE.Mesh(derezParticleGeometry, material);
+            const rx = THREE.MathUtils.lerp(bounds.min.x, bounds.max.x, Math.random());
+            const ry = THREE.MathUtils.lerp(bounds.min.y, bounds.max.y, Math.random());
+            const rz = THREE.MathUtils.lerp(bounds.min.z, bounds.max.z, Math.random());
+            particle.position.set(rx, ry, rz);
+            particle.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+            effect.group.add(particle);
+            effect.particles.push({
+              mesh: particle,
+              material,
+              velocity: new THREE.Vector3((Math.random()-0.5)*2.2, Math.random()*2.4 + 1.8, (Math.random()-0.5)*2.2),
+              spin: new THREE.Vector3((Math.random()-0.5)*4, (Math.random()-0.5)*4, (Math.random()-0.5)*4)
+            });
+          }
+        }
+      } else if(effect.stage === 'burst'){
+        const fade = Math.min(1, effect.stageTime / 700);
+        if(effect.particles){
+          effect.particles.forEach(p=>{
+            if(!p?.mesh || !p.material) return;
+            p.velocity.y -= 6 * deltaSec;
+            p.velocity.x *= 0.97;
+            p.velocity.z *= 0.97;
+            p.mesh.position.addScaledVector(p.velocity, deltaSec);
+            p.mesh.rotation.x += p.spin.x * deltaSec;
+            p.mesh.rotation.y += p.spin.y * deltaSec;
+            p.mesh.rotation.z += p.spin.z * deltaSec;
+            const life = Math.max(0, 1 - fade);
+            p.material.opacity = life;
+            p.material.emissiveIntensity = 1.3 * life;
+            p.mesh.scale.setScalar(THREE.MathUtils.lerp(1, 0.6, fade));
+          });
+        }
+        if(effect.stageTime >= 700){
+          cleanupDerezEffect(effect);
+          derezEffects.splice(i, 1);
+          continue;
+        }
       }
-      if(state.post.lighthouseMat && state.post.lighthouseMat.uniforms){
-        const count = state.settings.enableLighthouse
-          ? Math.min(state.lighthousePositions.length, 4)
-          : 0;
-        state.post.lighthouseMat.uniforms.lighthouseCount.value = count;
-      }
-      if(state.scene && state.scene.fog){
-        state.scene.fog.color.set(state.settings.fogColor);
-      }
-        state.waterUniforms.nearFade.value = state.settings.nearFade;
-        state.waterUniforms.farFade.value = state.settings.farFade;
-      applyEmissiveScale();
-      const lighthouseCount = state.settings.enableLighthouse
-        ? Math.min(state.lighthousePositions.length, 4)
-        : 0;
-      post.lighthouseMat.uniforms.lighthouseCount.value = lighthouseCount;
-      for(let i=0;i<lighthouseCount;i++){
-      for(let i=lighthouseCount;i<4;i++){
-        post.lighthouseMat.uniforms.lighthousePos.value[i].set(-1, -1, 1);
-      }
-      markFrameDrawn();
-        setNoteVisible(false);
-        clearWatchdog();
-        disableFallback();
-        hideError();
-      const prev = state.presentActive;
-      setNoteVisible(state.presentActive);
-      if(state.presentActive && !prev){
-        resetWatchdog();
-      }
-      if(!state.presentActive){
-        clearWatchdog();
-        disableFallback();
-        hideError();
-      }
-      if(state.presentActive){
-        applyEmissiveScale();
-      }
-    nearFade: document.getElementById('oceanNearFade'),
-    farFade: document.getElementById('oceanFarFade'),
-    nearFade: document.getElementById('oceanNearFadeValue'),
-    farFade: document.getElementById('oceanFarFadeValue'),
-    nearFade: (v)=>`${Math.round(Number(v)||0)}m`,
-    farFade: (v)=>`${Math.round(Number(v)||0)}m`,
-    'foamAmount','foamBias','foamScale','nearFade','farFade','maxGloss','roughnessScale',
+    }
+  }
+
+    const deltaRaw = lastFrame ? (time - lastFrame) : 16;
+    if(deltaRaw < 16){ __rafId = requestAnimationFrame(animate); return; }
+    const deltaMs = Math.min(64, deltaRaw);
+      updateDerezEffects(deltaMs);
+            let respawned = false;
+            const prevY = celliDerezState.lastY;
+            const crossedZero = (prevY != null && prevY > 0 && p.y < 0);
+            if(p.y < 0){
+              if(crossedZero && !celliDerezState.active){
+                triggerCelliDerez({ x: p.x, y: 0, z: p.z });
+              }
+              if(respawnPos){
+                console.log('[PHYSICS] Fell off world, respawning at spawn point');
+                playerBody.setTranslation(respawnPos, true);
+                playerBody.setLinvel({x: 0, y: 0, z: 0}, true);
+                cachedPlayerPos.set(respawnPos.x, respawnPos.y, respawnPos.z);
+                jumpVelocity = 0;
+                landingSquashTime = 0;
+                wasGroundedLastFrame = false;
+                lastLandKey = null;
+                respawned = true;
+              }
+            }
+            if(!respawned){
+
+              celliDerezState.lastY = cachedPlayerPos.y;
+
+    if(celliDerezState.active){
+      if(celli) celli.visible = false;
+      if(arrayaAvatar) arrayaAvatar.setVisible(false);
+      return;
+    }
+
+    if(!physicsMode){
+      celliDerezState.lastY = null;
+    }
+
