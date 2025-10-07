@@ -374,6 +374,7 @@ document.addEventListener('click', function(e){
   <div class="row" style="padding:0 12px 6px;">
     <button class="btn" id="presentToggleBtn">🎨 Present: OFF</button>
     <button class="btn" id="graphicsSettingsBtn">🎛️ Graphic Settings</button>
+    <button class="btn" id="oceanSettingsBtn">🌊 Ocean Backdrop</button>
   </div>
 
   <label class="row" style="padding:0 12px 6px; justify-content:space-between; align-items:center; font-weight:600;">
@@ -521,6 +522,61 @@ document.addEventListener('click', function(e){
       <label class="stack" style="gap:4px;">
         <span class="sub">Blur Damping <span id="gfxMotionDampingValue"></span></span>
         <input type="range" id="gfxMotionDamping" min="0.7" max="0.99" step="0.005">
+      </label>
+    </div>
+  </div>
+</div>
+
+<div class="panel stack" id="oceanSettingsPanel" style="display:none; position:absolute; left:440px; top:340px; width:320px; max-height:80vh; overflow:auto;">
+  <div class="win-header" style="background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.12)">
+    <span>Ocean Backdrop</span>
+    <div id="oceanSettingsClose" class="close" title="Hide"></div>
+  </div>
+  <div class="stack" style="padding:12px; gap:12px;">
+    <div class="sub" id="oceanSettingsHint">Enable Present mode to view the ocean backdrop.</div>
+
+    <label class="row" style="justify-content:space-between; align-items:center;">
+      <span>Enable Ocean</span>
+      <input type="checkbox" id="oceanEnable">
+    </label>
+
+    <div class="stack" style="gap:6px;">
+      <div class="title" style="font-size:14px;">Animation</div>
+      <label class="stack" style="gap:4px;">
+        <span>Time Scale</span>
+        <input type="range" id="oceanTimeScale" min="0.1" max="3" step="0.05">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:6px;">
+      <div class="title" style="font-size:14px;">Surface</div>
+      <label class="stack" style="gap:4px;">
+        <span>Foam Amount</span>
+        <input type="range" id="oceanFoamAmount" min="0" max="5" step="0.1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span>Horizon Boost</span>
+        <input type="range" id="oceanHorizonBoost" min="0" max="2" step="0.01">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span>Micro Ripple Strength</span>
+        <input type="range" id="oceanMicroScale" min="0" max="0.15" step="0.005">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:6px;">
+      <div class="title" style="font-size:14px;">Elements</div>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Grid Overlay</span>
+        <input type="checkbox" id="oceanShowGrid">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Dead Towers</span>
+        <input type="checkbox" id="oceanShowTowers">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Floating Lights</span>
+        <input type="checkbox" id="oceanShowFloaters">
       </label>
     </div>
   </div>
@@ -1209,7 +1265,7 @@ const Store = createStore((set,get)=>{
   return {
     arrays: {}, nextArrayId:1, lastCreatedArrayId:null,
     selection:{arrayId:null, focus:null, anchor:null, range:null, faceHint:null},
-    scene:{physics:false, showGrid:true, showAxes:true, physicsDebugAll:false},
+    scene:{physics:false, showGrid:true, showAxes:true, physicsDebugAll:false, ocean:{enabled:false}},
     ui:{zLayer:0, fxOpen:false, addressMode:'local', lastInteraction:'3d', viewMode:'standard', crystal2D:false},
     gridPhase:{x:null,y:null,z:null},
     namedBlocks:new Map(), // name -> {x,y,z, data: [layers[z][y][x]] }
@@ -1833,7 +1889,8 @@ const Store = createStore((set,get)=>{
           sourceByCell,
           activeScales: new Map()
         });
-        
+        try{ Scene.setOceanEnabled?.(!!restoredScene?.ocean?.enabled); }catch{}
+
         // Restore selection early so focused array renders with shells/LOD correctly
         try{
           const sel0 = data.selection || {};
@@ -2924,6 +2981,8 @@ const Actions = {
   },
   togglePresentMode: ()=> Scene.togglePresentMode(),
   updateGraphicsSettings: (patch)=> Scene.updateGraphicsSettings(patch || {}),
+  setOceanEnabled: (enabled)=> Scene.setOceanEnabled(enabled),
+  updateOceanSettings: (patch)=> Scene.updateOceanSettings(patch || {}),
   // Render mode removed - always use simple mode
   // Undo/Redo system
   // Data history (undo/redo)
@@ -9322,6 +9381,570 @@ const Boot = {
 const Scene = (()=>{
   let scene, camera, renderer, controls, grid, axesHelper;
   let baseLightsGroup = null;
+
+  const OceanDefaults = Object.freeze({
+    enabled: false,
+    timeScale: 1,
+    foamAmount: 2.5,
+    foamBias: 0.5,
+    foamScale: 1.5,
+    horizonBoost: 1.35,
+    microScale: 0.035,
+    microFreq: 18.0,
+    microWaveScale: 0.3,
+    choppiness: 2.0,
+    maxGloss: 0.91,
+    roughnessScale: 0.0044,
+    showGrid: true,
+    showTowers: true,
+    showFloaters: true
+  });
+
+  const OceanBackdrop = (()=>{
+    const dirs=[
+      new THREE.Vector2(1.0,0.2).normalize(),
+      new THREE.Vector2(-0.6,0.8).normalize(),
+      new THREE.Vector2(0.2,-1.0).normalize(),
+      new THREE.Vector2(0.8,0.4).normalize(),
+      new THREE.Vector2(-1.0,-0.2).normalize(),
+      new THREE.Vector2(0.4,0.9).normalize()
+    ];
+    const waveParams={
+      A:[0.85,0.45,0.28,0.18,0.12,0.08],
+      L:[35.0,16.5,8.2,4.5,2.8,1.8],
+      S:[0.95,1.15,1.3,1.45,1.6,1.8]
+    };
+    const state={
+      settings:{...OceanDefaults},
+      group:null,
+      sky:null,
+      skyUniforms:null,
+      water:null,
+      waterUniforms:null,
+      grid:null,
+      gridAttr:null,
+      gridConfig:null,
+      ball:null,
+      structures:[],
+      floaters:[],
+      baseHeight:-6,
+      time:0,
+      presentActive:false
+    };
+
+    function ensureGroup(){
+      if(state.group) return;
+      state.group=new THREE.Group();
+      state.group.name='OceanBackdrop';
+      state.group.visible=false;
+      createSky();
+      createWater();
+      createGrid();
+      createBuoy();
+      createStructures();
+      if(scene) scene.add(state.group);
+    }
+
+    function createSky(){
+      const geo=new THREE.SphereGeometry(1800,48,24);
+      const uniforms={
+        top:{value:new THREE.Color(0x8ec1ea)},
+        mid:{value:new THREE.Color(0x63aee3)},
+        bot:{value:new THREE.Color(0x092c4d)}
+      };
+      const mat=new THREE.ShaderMaterial({
+        side:THREE.BackSide,
+        uniforms,
+        vertexShader:`varying vec3 v; void main(){ v=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+        fragmentShader:`varying vec3 v; uniform vec3 top,mid,bot; void main(){ float h=normalize(v).y*.5+.5; vec3 c=mix(bot,mid,smoothstep(0.,.45,h)); c=mix(c,top,smoothstep(.45,1.,h)); gl_FragColor=vec4(c,1.); }`
+      });
+      const sky=new THREE.Mesh(geo,mat);
+      sky.name='OceanSky';
+      state.sky=sky;
+      state.skyUniforms=uniforms;
+      state.group.add(sky);
+    }
+
+    function createWater(){
+      const SIZE=900;
+      const SEG=192;
+      const STEP=SIZE/SEG;
+      const HALF=SIZE/2;
+      state.gridConfig={SIZE,SEG,STEP,HALF};
+      const oceanGeo=new THREE.PlaneGeometry(SIZE,SIZE,SEG,SEG);
+      oceanGeo.rotateX(-Math.PI/2);
+      const uniforms={
+        uTime:{value:0},
+        sunDir:{value:new THREE.Vector3(0.5,0.6,0.3).normalize()},
+        deep:{value:new THREE.Color(0x0b345a)},
+        shallow:{value:new THREE.Color(0x1e6aa2)},
+        foamColor:{value:new THREE.Color(0xffffff)},
+        Q:{value:state.settings.choppiness},
+        foamAmt:{value:state.settings.foamAmount},
+        foamBias:{value:state.settings.foamBias},
+        foamScale:{value:state.settings.foamScale},
+        maxGloss:{value:state.settings.maxGloss},
+        roughnessScale:{value:state.settings.roughnessScale},
+        microScale:{value:state.settings.microScale},
+        microFreq:{value:state.settings.microFreq},
+        microWaveScale:{value:state.settings.microWaveScale},
+        nearFade:{value:20.0},
+        farFade:{value:260.0},
+        horizonCol:{value:new THREE.Color(0xcfeaff)},
+        horizonZStart:{value:60.0},
+        horizonZEnd:{value:260.0},
+        horizonBoost:{value:state.settings.horizonBoost},
+        A0:{value:waveParams.A[0]}, A1:{value:waveParams.A[1]}, A2:{value:waveParams.A[2]},
+        A3:{value:waveParams.A[3]}, A4:{value:waveParams.A[4]}, A5:{value:waveParams.A[5]},
+        L0:{value:waveParams.L[0]}, L1:{value:waveParams.L[1]}, L2:{value:waveParams.L[2]},
+        L3:{value:waveParams.L[3]}, L4:{value:waveParams.L[4]}, L5:{value:waveParams.L[5]},
+        S0:{value:waveParams.S[0]}, S1:{value:waveParams.S[1]}, S2:{value:waveParams.S[2]},
+        S3:{value:waveParams.S[3]}, S4:{value:waveParams.S[4]}, S5:{value:waveParams.S[5]}
+      };
+      const waterMat=new THREE.ShaderMaterial({
+        transparent:true,
+        uniforms,
+        vertexShader:`
+          uniform float uTime; uniform float Q;
+          uniform float A0,A1,A2,A3,A4,A5, L0,L1,L2,L3,L4,L5, S0,S1,S2,S3,S4,S5;
+          uniform float microScale, microFreq, microWaveScale;
+          varying vec3 vN; varying vec3 vP; varying float vSlope; varying float vHeight;
+          varying float vViewZ; varying float vBreak;
+          const int N=6; vec2 D[N];
+          void setup(){ D[0]=normalize(vec2( 1.0, 0.2)); D[1]=normalize(vec2(-0.6, 0.8)); D[2]=normalize(vec2( 0.2,-1.0));
+                        D[3]=normalize(vec2( 0.8, 0.4)); D[4]=normalize(vec2(-1.0,-0.2)); D[5]=normalize(vec2( 0.4, 0.9)); }
+          float A[N]; float L[N]; float S[N];
+          void params(){ A[0]=A0;A[1]=A1;A[2]=A2;A[3]=A3;A[4]=A4;A[5]=A5;
+                         L[0]=L0;L[1]=L1;L[2]=L2;L[3]=L3;L[4]=L4;L[5]=L5;
+                         S[0]=S0;S[1]=S1;S[2]=S2;S[3]=S3;S[4]=S4;S[5]=S5; }
+          void main(){
+            setup(); params();
+            vec3 p = position, disp=vec3(0.);
+            vec3 grad = vec3(0.);
+            float jac=0.0;
+            for(int i=0;i<N;i++){
+              float k=6.28318/L[i], w=sqrt(9.8*k), a=k*dot(D[i], p.xz) - (w*S[i])*uTime;
+              float s=sin(a), c=cos(a);
+              disp.x += Q*A[i]*D[i].x*c;
+              disp.z += Q*A[i]*D[i].y*c;
+              disp.y += A[i]*s;
+              grad.x += -A[i]*D[i].x*k*c;
+              grad.z += -A[i]*D[i].y*k*c;
+              jac    +=  k*A[i]*c;
+            }
+            p += disp;
+            float scaledFreq = microFreq * microWaveScale;
+            float micro1 = sin(p.x * scaledFreq + uTime * 3.2) * cos(p.z * scaledFreq * 0.8 + uTime * 2.8);
+            float micro2 = sin(p.x * scaledFreq * 2.3 + p.z * scaledFreq * 1.7 + uTime * 4.5) *
+                           cos(p.z * scaledFreq * 2.1 + p.x * scaledFreq * 0.9 + uTime * 3.8);
+            float microDisp = (micro1 + micro2 * 0.6) * microScale;
+            p.y += microDisp;
+            float eps = 0.05;
+            vec3 pRight = p + vec3(eps, 0.0, 0.0);
+            vec3 pFront = p + vec3(0.0, 0.0, eps);
+            float microRight1 = sin(pRight.x * scaledFreq + uTime * 3.2) * cos(pRight.z * scaledFreq * 0.8 + uTime * 2.8);
+            float microRight2 = sin(pRight.x * scaledFreq * 2.3 + pRight.z * scaledFreq * 1.7 + uTime * 4.5) *
+                                cos(pRight.z * scaledFreq * 2.1 + pRight.x * scaledFreq * 0.9 + uTime * 3.8);
+            pRight.y += (microRight1 + microRight2 * 0.6) * microScale;
+            float microFront1 = sin(pFront.x * scaledFreq + uTime * 3.2) * cos(pFront.z * scaledFreq * 0.8 + uTime * 2.8);
+            float microFront2 = sin(pFront.x * scaledFreq * 2.3 + pFront.z * scaledFreq * 1.7 + uTime * 4.5) *
+                                cos(pFront.z * scaledFreq * 2.1 + pFront.x * scaledFreq * 0.9 + uTime * 3.8);
+            pFront.y += (microFront1 + microFront2 * 0.6) * microScale;
+            vec3 tangentX = pRight - p;
+            vec3 tangentZ = pFront - p;
+            vec3 microNormal = normalize(cross(tangentZ, tangentX));
+            vec3 mainNormal = normalize(vec3(-grad.x, 1.0, -grad.z));
+            vN = normalize(mainNormal * 0.7 + microNormal * 0.3);
+            vSlope = length(grad);
+            vHeight = disp.y + microDisp;
+            vec4 vp = modelViewMatrix * vec4(p,1.0);
+            vViewZ = -vp.z;
+            vP = (modelMatrix*vec4(p,1.0)).xyz;
+            vBreak = jac;
+            gl_Position = projectionMatrix * vp;
+          }`,
+        fragmentShader:`
+          uniform vec3 deep, shallow, foamColor, sunDir;
+          uniform float foamAmt, foamBias, foamScale, nearFade, farFade, uTime;
+          uniform float maxGloss, roughnessScale;
+          uniform vec3 horizonCol; uniform float horizonZStart, horizonZEnd, horizonBoost;
+          varying vec3 vN; varying vec3 vP; varying float vSlope; varying float vHeight;
+          varying float vViewZ; varying float vBreak;
+          float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+          float noise(vec2 p){
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float a = hash(i);
+            float b = hash(i + vec2(1.0, 0.0));
+            float c = hash(i + vec2(0.0, 1.0));
+            float d = hash(i + vec2(1.0, 1.0));
+            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+          }
+          void main(){
+            vec3 N = normalize(vN);
+            vec3 V = normalize(cameraPosition - vP);
+            float fres = pow(1.0 - max(dot(V, N), 0.0), 4.0);
+            vec3 base = mix(deep, shallow, smoothstep(-0.6, 0.95, vHeight));
+            vec3 col  = base*(0.72+0.28*fres);
+            float distanceFade = smoothstep(horizonZStart, horizonZEnd, vViewZ);
+            float viewAngle = abs(dot(normalize(V), N));
+            float grazingMask = smoothstep(0.35, 0.01, viewAngle);
+            float distBoost = pow(distanceFade, 0.6);
+            float horizonMix = distBoost * grazingMask * horizonBoost * 1.5;
+            col = mix(col, horizonCol * 1.3, clamp(horizonMix, 0.0, 0.95));
+            float jacobian = vBreak;
+            float turbulence = clamp((jacobian - foamBias) * foamScale, 0.0, 1.0);
+            vec2 foamUV = vP.xz * 0.5 + uTime * 0.15;
+            float foamTex = noise(foamUV * 4.0) * 0.5 + noise(foamUV * 8.0) * 0.3 + noise(foamUV * 16.0) * 0.2;
+            foamTex = smoothstep(0.4, 0.7, foamTex);
+            float foam = foamTex * turbulence * foamAmt;
+            col = mix(col, foamColor, clamp(foam, 0.0, 1.0));
+            float viewDist = length(cameraPosition - vP);
+            float distanceGloss = mix(0.09, maxGloss, 1.0 / (1.0 + viewDist * roughnessScale));
+            float roughness = 1.0 - mix(distanceGloss, 0.0, clamp(turbulence * 0.8, 0.0, 1.0));
+            vec3 L = normalize(sunDir);
+            vec3 H = normalize(L + V);
+            float NdotH = max(dot(N, H), 0.0);
+            float specPower = mix(16.0, 512.0, distanceGloss);
+            float spec = pow(NdotH, specPower) * (1.0 - roughness) * distanceGloss;
+            col += vec3(spec * 2.5);
+            float depthAlpha = 0.95 - smoothstep(nearFade, farFade, vViewZ) * 0.45;
+            gl_FragColor = vec4(col, depthAlpha);
+          }`
+      });
+      waterMat.depthWrite=false;
+      const water=new THREE.Mesh(oceanGeo, waterMat);
+      water.position.y=state.baseHeight;
+      water.renderOrder=-10;
+      water.name='OceanWater';
+      state.water=water;
+      state.waterUniforms=uniforms;
+      state.group.add(water);
+    }
+
+    function createGrid(){
+      const GRID_SEG=128;
+      const SIZE=state.gridConfig?.SIZE||600;
+      const STEP=SIZE/GRID_SEG;
+      const HALF=SIZE/2;
+      state.gridConfig={...state.gridConfig, GRID_SEG, GRID_STEP:STEP, HALF};
+      const lineCount=((GRID_SEG+1)*GRID_SEG + (GRID_SEG+1)*GRID_SEG);
+      const gridPos=new Float32Array(lineCount*2*3);
+      let ptr=0;
+      for(let z=0; z<=GRID_SEG; z++) for(let x=0; x<GRID_SEG; x++){
+        const ax=-HALF + x*STEP, az=-HALF + z*STEP, bx=ax+STEP, bz=az;
+        gridPos[ptr++]=ax; gridPos[ptr++]=state.baseHeight; gridPos[ptr++]=az;
+        gridPos[ptr++]=bx; gridPos[ptr++]=state.baseHeight; gridPos[ptr++]=bz;
+      }
+      for(let x=0; x<=GRID_SEG; x++) for(let z=0; z<GRID_SEG; z++){
+        const ax=-HALF + x*STEP, az=-HALF + z*STEP, bx=ax, bz=az+STEP;
+        gridPos[ptr++]=ax; gridPos[ptr++]=state.baseHeight; gridPos[ptr++]=az;
+        gridPos[ptr++]=bx; gridPos[ptr++]=state.baseHeight; gridPos[ptr++]=bz;
+      }
+      const gridGeo=new THREE.BufferGeometry();
+      gridGeo.setAttribute('position', new THREE.BufferAttribute(gridPos,3));
+      const gridMat=new THREE.LineBasicMaterial({
+        color:0xbfe7ff,
+        transparent:true,
+        opacity:0.3,
+        depthWrite:false,
+        depthTest:true
+      });
+      const grid=new THREE.LineSegments(gridGeo, gridMat);
+      grid.renderOrder=-5;
+      grid.name='OceanGrid';
+      state.grid=grid;
+      state.gridAttr=gridGeo.getAttribute('position');
+      state.group.add(grid);
+    }
+
+    function createBuoy(){
+      const ball=new THREE.Mesh(
+        new THREE.SphereGeometry(0.5,24,16),
+        new THREE.MeshStandardMaterial({color:0xffffff, emissive:0x88aaff, emissiveIntensity:1.05, roughness:0.25})
+      );
+      ball.position.set(0, state.baseHeight + 0.7, -2.5);
+      ball.userData.base={x:0,z:-2.5,height:0.55};
+      ball.name='OceanBuoy';
+      state.ball=ball;
+      state.group.add(ball);
+    }
+
+    function createStructures(){
+      const voxel=new THREE.BoxGeometry(4.5,4.5,4.5);
+      const towerGroup=new THREE.Group();
+      towerGroup.name='OceanTowers';
+      state.group.add(towerGroup);
+      const towers=[];
+      const towerCount=16;
+      for(let c=0;c<towerCount;c++){
+        const instances=360;
+        const mat=new THREE.MeshStandardMaterial({
+          color:0x4a7a9f,
+          metalness:0.15,
+          roughness:0.85
+        });
+        const mesh=new THREE.InstancedMesh(voxel, mat, instances);
+        mesh.name=`OceanTowerCluster${c}`;
+        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        const radius=THREE.MathUtils.randFloat(160, 680);
+        const baseAng=(c / towerCount) * Math.PI * 2;
+        const angJitter=THREE.MathUtils.randFloat(-0.6,0.6);
+        const ang=baseAng + angJitter;
+        const baseY=THREE.MathUtils.randFloat(-10, 26) + state.baseHeight;
+        const base=new THREE.Vector3(Math.sin(ang)*radius, baseY, Math.cos(ang)*radius);
+        const tilt=new THREE.Euler(
+          THREE.MathUtils.degToRad(THREE.MathUtils.randFloat(3,12)),
+          THREE.MathUtils.degToRad(THREE.MathUtils.randFloat(0,360)),
+          THREE.MathUtils.degToRad(THREE.MathUtils.randFloat(-8,8))
+        );
+        let i=0;
+        const W=THREE.MathUtils.randInt(12,20);
+        const H=THREE.MathUtils.randInt(30,60);
+        const D=THREE.MathUtils.randInt(12,20);
+        for(let x=0;x<W;x++) for(let y=0;y<H;y++) for(let z=0;z<D;z++){
+          if(i>=instances) break;
+          if(Math.random()<0.80) continue;
+          const m=new THREE.Matrix4();
+          const scale=THREE.MathUtils.randFloat(0.9,1.3);
+          const p=new THREE.Vector3((x-W*0.5)*5.5, (y-H*0.5)*5.5, (z-D*0.5)*5.5);
+          p.applyEuler(tilt);
+          p.add(base);
+          m.compose(p, new THREE.Quaternion(), new THREE.Vector3(scale,scale,scale));
+          mesh.setMatrixAt(i++, m);
+        }
+        mesh.count=Math.min(i,instances);
+        towerGroup.add(mesh);
+        towers.push(mesh);
+      }
+      state.structures=towers;
+
+      const floatGroup=new THREE.Group();
+      floatGroup.name='OceanFloaters';
+      state.group.add(floatGroup);
+      const floatGeom=new THREE.BoxGeometry(3,3,3);
+      const floaters=[];
+      const count=48;
+      for(let i=0;i<count;i++){
+        const emissiveIntensity=THREE.MathUtils.randFloat(2.5,4.2);
+        const mat=new THREE.MeshStandardMaterial({
+          color:new THREE.Color(0.8,0.95,1.0),
+          emissive:new THREE.Color(0.7,0.85,1.0),
+          emissiveIntensity,
+          metalness:0.1,
+          roughness:0.15,
+          toneMapped:false
+        });
+        const mesh=new THREE.Mesh(floatGeom, mat);
+        const radius=THREE.MathUtils.randFloat(120, 640);
+        const ang=Math.random()*Math.PI*2;
+        const height=THREE.MathUtils.randFloat(20, 140) + state.baseHeight;
+        mesh.position.set(Math.sin(ang)*radius, height, Math.cos(ang)*radius);
+        mesh.rotation.set(Math.random()*Math.PI*2, Math.random()*Math.PI*2, Math.random()*Math.PI*2);
+        const light=new THREE.PointLight(new THREE.Color(0.6,0.85,1.0), THREE.MathUtils.randFloat(15,30), 60);
+        light.position.copy(mesh.position);
+        light.castShadow=false;
+        floatGroup.add(mesh);
+        floatGroup.add(light);
+        floaters.push({mesh, light, baseY:height, floatSpeed:THREE.MathUtils.randFloat(0.3,0.7), floatOffset:Math.random()*Math.PI*2, baseIntensity:light.intensity});
+      }
+      state.floaters=floaters;
+    }
+
+    function getWaveParams(){
+      return waveParams;
+    }
+
+    function sampleChoppy(x,z,t,Q){
+      const {A,L,S}=getWaveParams();
+      let dx=0,dz=0,y=0;
+      for(let i=0;i<dirs.length;i++){
+        const k=2*Math.PI/L[i];
+        const w=Math.sqrt(9.8*k);
+        const a=k*(dirs[i].x*x+dirs[i].y*z)-(w*S[i])*t;
+        const s=Math.sin(a), c=Math.cos(a);
+        dx+=Q*A[i]*dirs[i].x*c;
+        dz+=Q*A[i]*dirs[i].y*c;
+        y+=A[i]*s;
+      }
+      return {x:x+dx, y:y, z:z+dz};
+    }
+
+    function sampleMicroRipples(x,z,t){
+      const microScale = state.settings.microScale;
+      const microFreq = state.settings.microFreq;
+      const microWaveScale = state.settings.microWaveScale;
+      const scaledFreq = microFreq * microWaveScale;
+      const micro1 = Math.sin(x * scaledFreq + t * 3.2) * Math.cos(z * scaledFreq * 0.8 + t * 2.8);
+      const micro2 = Math.sin(x * scaledFreq * 2.3 + z * scaledFreq * 1.7 + t * 4.5) *
+                     Math.cos(z * scaledFreq * 2.1 + x * scaledFreq * 0.9 + t * 3.8);
+      return (micro1 + micro2 * 0.6) * microScale;
+    }
+
+    function updateFloaters(dt){
+      const active = state.settings.showFloaters && state.presentActive;
+      state.floaters.forEach(item=>{
+        const vis = active;
+        if(item.mesh) item.mesh.visible = vis;
+        if(item.light) item.light.visible = vis;
+        if(!vis) return;
+        const bob = Math.sin(state.time * item.floatSpeed + item.floatOffset) * 2.5;
+        const y = item.baseY + bob;
+        if(item.mesh){
+          item.mesh.position.y = y;
+          item.mesh.rotation.y += 0.003 * item.floatSpeed;
+          item.mesh.rotation.x += 0.002 * item.floatSpeed;
+        }
+        if(item.light){
+          item.light.position.y = y;
+          const pulse = 0.85 + Math.sin(state.time * 2.0 + item.floatOffset) * 0.15;
+          item.light.intensity = item.baseIntensity * pulse;
+        }
+      });
+    }
+
+    function updateGrid(){
+      if(!state.gridAttr || !state.settings.showGrid || !state.presentActive) return;
+      const pos=state.gridAttr.array;
+      if(!pos) return;
+      const {GRID_SEG:SEG=0, GRID_STEP:STEP=1, HALF=600/2}=state.gridConfig||{};
+      let p=0;
+      const Q=state.settings.choppiness;
+      for(let z=0; z<=SEG; z++) for(let x=0; x<SEG; x++){
+        const ax=-HALF + x*STEP, az=-HALF + z*STEP, bx=ax+STEP, bz=az;
+        const A=sampleChoppy(ax,az,state.time,Q);
+        const B=sampleChoppy(bx,bz,state.time,Q);
+        const microA = sampleMicroRipples(A.x, A.z, state.time);
+        const microB = sampleMicroRipples(B.x, B.z, state.time);
+        pos[p++]=A.x; pos[p++]=state.baseHeight + A.y + microA + 0.01; pos[p++]=A.z;
+        pos[p++]=B.x; pos[p++]=state.baseHeight + B.y + microB + 0.01; pos[p++]=B.z;
+      }
+      for(let x=0; x<=SEG; x++) for(let z=0; z<SEG; z++){
+        const ax=-HALF + x*STEP, az=-HALF + z*STEP, bx=ax, bz=az+STEP;
+        const A=sampleChoppy(ax,az,state.time,Q);
+        const B=sampleChoppy(bx,bz,state.time,Q);
+        const microA = sampleMicroRipples(A.x, A.z, state.time);
+        const microB = sampleMicroRipples(B.x, B.z, state.time);
+        pos[p++]=A.x; pos[p++]=state.baseHeight + A.y + microA + 0.01; pos[p++]=A.z;
+        pos[p++]=B.x; pos[p++]=state.baseHeight + B.y + microB + 0.01; pos[p++]=B.z;
+      }
+      state.gridAttr.needsUpdate = true;
+      if(state.grid) state.grid.visible = state.presentActive && state.settings.showGrid;
+    }
+
+    function updateBuoy(){
+      if(!state.ball || !state.presentActive) return;
+      const base=state.ball.userData.base || {x:state.ball.position.x, z:state.ball.position.z, height:0.55};
+      const Q=state.settings.choppiness;
+      const sample=sampleChoppy(base.x, base.z, state.time, Q);
+      const micro=sampleMicroRipples(sample.x, sample.z, state.time);
+      state.ball.position.set(sample.x, state.baseHeight + sample.y + micro + base.height, sample.z);
+    }
+
+    function updateSunDir(){
+      if(!state.waterUniforms) return;
+      let dir=null;
+      try{
+        if(FancyGraphics?.lights?.key){
+          dir=FancyGraphics.lights.key.position.clone().normalize();
+        }else if(baseLightsGroup){
+          const light=baseLightsGroup.children?.find?.(c=>c.isDirectionalLight);
+          if(light){
+            dir=light.position.clone().normalize();
+          }
+        }
+      }catch{}
+      if(!dir){ dir=new THREE.Vector3(0.5,0.6,0.3).normalize(); }
+      state.waterUniforms.sunDir.value.copy(dir);
+    }
+
+    function applySettings(){
+      if(state.waterUniforms){
+        state.waterUniforms.Q.value = state.settings.choppiness;
+        state.waterUniforms.foamAmt.value = state.settings.foamAmount;
+        state.waterUniforms.foamBias.value = state.settings.foamBias;
+        state.waterUniforms.foamScale.value = state.settings.foamScale;
+        state.waterUniforms.microScale.value = state.settings.microScale;
+        state.waterUniforms.microFreq.value = state.settings.microFreq;
+        state.waterUniforms.microWaveScale.value = state.settings.microWaveScale;
+        state.waterUniforms.horizonBoost.value = state.settings.horizonBoost;
+        state.waterUniforms.maxGloss.value = state.settings.maxGloss;
+        state.waterUniforms.roughnessScale.value = state.settings.roughnessScale;
+      }
+      if(state.grid) state.grid.visible = state.presentActive && state.settings.showGrid;
+      state.structures.forEach(mesh=>{ if(mesh) mesh.visible = state.presentActive && state.settings.showTowers; });
+      state.floaters.forEach(item=>{
+        const vis = state.presentActive && state.settings.showFloaters;
+        if(item.mesh) item.mesh.visible = vis;
+        if(item.light) item.light.visible = vis;
+      });
+    }
+
+    function updateVisibility(){
+      if(!state.group) return false;
+      state.presentActive = !!(state.settings.enabled && FancyGraphics?.enabled);
+      state.group.visible = state.presentActive;
+      if(!state.presentActive) return false;
+      applySettings();
+      return true;
+    }
+
+    function update(dt){
+      if(!state.group) return;
+      if(!state.settings.enabled) {
+        state.presentActive=false;
+        state.group.visible=false;
+        return;
+      }
+      const active=updateVisibility();
+      if(!active) return;
+      const delta=Number.isFinite(dt) ? dt : 0.016;
+      const speed=Math.max(0, state.settings.timeScale||0);
+      state.time += delta * (speed || 0);
+      if(state.waterUniforms){ state.waterUniforms.uTime.value = state.time; }
+      updateSunDir();
+      updateBuoy();
+      updateGrid();
+      updateFloaters(delta);
+    }
+
+    function setEnabled(flag){
+      state.settings.enabled = !!flag;
+      updateVisibility();
+      return state.settings.enabled;
+    }
+
+    function updateSettings(patch){
+      if(!patch) return;
+      Object.keys(patch).forEach(key=>{
+        if(Object.prototype.hasOwnProperty.call(state.settings, key)){
+          const val=patch[key];
+          if(typeof state.settings[key] === 'number'){
+            const num = Number(val);
+            if(Number.isFinite(num)) state.settings[key]=num;
+          } else {
+            state.settings[key]=!!val;
+          }
+        }
+      });
+      applySettings();
+    }
+
+    function getSettings(){
+      return { ...state.settings, active: state.presentActive };
+    }
+
+    return {
+      init:ensureGroup,
+      update,
+      setEnabled,
+      updateSettings,
+      getSettings,
+      applySettings,
+      refreshVisibility:updateVisibility
+    };
+  })();
 let rapierWorld=null, controller=null, playerBody=null, playerCollider=null, staticPhysicsBody=null;
 let physicsActivationPending = false;
 let physicsInputCaptured = false;
@@ -10054,6 +10677,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       scene.fog = null;
     }
     applyFancyLightingAdjustments();
+    OceanBackdrop.applySettings();
+    OceanBackdrop.refreshVisibility();
   }
 
   function setPresentMode(force){
@@ -10101,6 +10726,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(FancyGraphics.passes.outline) FancyGraphics.passes.outline.selectedObjects = [];
       updateBaseLightingVisibility();
     }
+    OceanBackdrop.refreshVisibility();
     updateShellVisibilityGlobal();
     refreshCellMaterials();
     return FancyGraphics.enabled;
@@ -10214,6 +10840,36 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         });
       }catch{}
       needsRender = true;
+    }
+
+    function setOceanEnabled(flag){
+      const actual = OceanBackdrop.setEnabled(flag);
+      try{
+        const settings = OceanBackdrop.getSettings();
+        const stored = { ...settings };
+        delete stored.active;
+        Store.setState(s=>({ scene:{ ...s.scene, ocean:{ ...(s.scene?.ocean||{}), ...stored } } }));
+        try{ UI?.syncOceanSettings?.(); }catch{}
+      }catch{}
+      needsRender = true;
+      return actual;
+    }
+
+    function updateOceanSettings(patch){
+      OceanBackdrop.updateSettings(patch);
+      try{
+        const settings = OceanBackdrop.getSettings();
+        const stored = { ...settings };
+        delete stored.active;
+        Store.setState(s=>({ scene:{ ...s.scene, ocean:{ ...(s.scene?.ocean||{}), ...stored } } }));
+        try{ UI?.syncOceanSettings?.(); }catch{}
+      }catch{}
+      needsRender = true;
+      return OceanBackdrop.getSettings();
+    }
+
+    function getOceanSettings(){
+      return OceanBackdrop.getSettings();
     }
 
     function updateShellVisibilityGlobal(){
@@ -11315,6 +11971,16 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     setupRenderer();
 
     scene=new THREE.Scene();
+    OceanBackdrop.init();
+    try{
+      const savedOcean = Store.getState().scene?.ocean;
+      if(savedOcean){
+        const patch = { ...savedOcean };
+        delete patch.enabled;
+        if(Object.keys(patch).length){ updateOceanSettings(patch); }
+        if(savedOcean.enabled){ setOceanEnabled(true); }
+      }
+    }catch{}
     camera=new THREE.PerspectiveCamera(60,window.innerWidth/window.innerHeight,.1,2000);
     camera.position.set(8, 10, 14); // Higher and further for better view
     controls=new OrbitControls(camera,renderer.domElement);
@@ -14790,6 +15456,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           FancyGraphics.passes.outline.selectedObjects = [];
         }
       }
+      OceanBackdrop.update(dtFancy);
     }
 
     if(FancyGraphics.enabled && FancyGraphics.composer){
@@ -18823,7 +19490,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
 
- return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, hydrateAll, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsDebugAll, setPhysicsCamera, resetContactCache, setPhysicsSpawn, isPhysicsInputCaptured:()=>syncPhysicsInputCapture(), facingFromCamera, getViewAxisForArray:(arrOrFrame, observer)=>{
+ return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, hydrateAll, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, setOceanEnabled, updateOceanSettings, getOceanSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsDebugAll, setPhysicsCamera, resetContactCache, setPhysicsSpawn, isPhysicsInputCaptured:()=>syncPhysicsInputCapture(), facingFromCamera, getViewAxisForArray:(arrOrFrame, observer)=>{
     try{
       if(!arrOrFrame) return null;
       const frame = arrOrFrame.matrixWorld ? arrOrFrame : (arrOrFrame._frame || null);
@@ -18846,7 +19513,7 @@ const UI = (()=>{
     focusChip:document.getElementById('focusChip'), inspect:document.getElementById('inspect'),
     centerHome:document.getElementById('centerHome'), viewMainframe:document.getElementById('viewMainframe'),
     toggleGrid:document.getElementById('toggleGrid'), toggleAxes:document.getElementById('toggleAxes'),
-    presentToggle:document.getElementById('presentToggleBtn'), graphicsSettingsBtn:document.getElementById('graphicsSettingsBtn'), crystalToggle:document.getElementById('crystal2DToggle'),
+    presentToggle:document.getElementById('presentToggleBtn'), graphicsSettingsBtn:document.getElementById('graphicsSettingsBtn'), oceanSettingsBtn:document.getElementById('oceanSettingsBtn'), crystalToggle:document.getElementById('crystal2DToggle'),
     physicsBtn:document.getElementById('physicsBtn'), reset:document.getElementById('reset'),
     status:document.getElementById('statusChip'),
     sheetTitle:document.getElementById('sheetTitle'),
@@ -18902,7 +19569,21 @@ const UI = (()=>{
     outlineThickness: document.getElementById('gfxOutlineThicknessValue'),
     motionDamping: document.getElementById('gfxMotionDampingValue')
   };
+  const oceanPanel = document.getElementById('oceanSettingsPanel');
+  const oceanClose = document.getElementById('oceanSettingsClose');
+  const oceanPanelHint = document.getElementById('oceanSettingsHint');
+  const oceanControls = {
+    enable: document.getElementById('oceanEnable'),
+    timeScale: document.getElementById('oceanTimeScale'),
+    foamAmount: document.getElementById('oceanFoamAmount'),
+    horizonBoost: document.getElementById('oceanHorizonBoost'),
+    microScale: document.getElementById('oceanMicroScale'),
+    showGrid: document.getElementById('oceanShowGrid'),
+    showTowers: document.getElementById('oceanShowTowers'),
+    showFloaters: document.getElementById('oceanShowFloaters')
+  };
   let graphicsPanelVisible = false;
+  let oceanPanelVisible = false;
 
   const sliderFormatters = {
     bloomStrength: (v)=>v.toFixed(2),
@@ -18968,6 +19649,55 @@ const UI = (()=>{
     if(graphicsPanelHint) graphicsPanelHint.style.display = enabled ? 'none' : 'block';
   }
 
+  function setOceanControlsEnabled(enabled){
+    Object.entries(oceanControls).forEach(([key, ctrl])=>{
+      if(!ctrl) return;
+      if(key === 'enable'){ ctrl.disabled = false; }
+      else ctrl.disabled = !enabled;
+    });
+    if(oceanPanelHint) oceanPanelHint.style.display = enabled ? 'none' : 'block';
+  }
+
+  function updateOceanButton(settings){
+    if(!els.oceanSettingsBtn) return;
+    const enabled = !!settings?.enabled;
+    const presentActive = Scene.isPresentEnabled ? Scene.isPresentEnabled() : false;
+    els.oceanSettingsBtn.classList.toggle('good', enabled && presentActive);
+    els.oceanSettingsBtn.classList.toggle('warn', enabled && !presentActive);
+  }
+
+  function syncOceanSettings(){
+    if(!Scene.getOceanSettings) return;
+    const settings = Scene.getOceanSettings() || {};
+    if(oceanControls.enable) oceanControls.enable.checked = !!settings.enabled;
+    if(oceanControls.timeScale && settings.timeScale != null) oceanControls.timeScale.value = settings.timeScale;
+    if(oceanControls.foamAmount && settings.foamAmount != null) oceanControls.foamAmount.value = settings.foamAmount;
+    if(oceanControls.horizonBoost && settings.horizonBoost != null) oceanControls.horizonBoost.value = settings.horizonBoost;
+    if(oceanControls.microScale && settings.microScale != null) oceanControls.microScale.value = settings.microScale;
+    if(oceanControls.showGrid) oceanControls.showGrid.checked = !!settings.showGrid;
+    if(oceanControls.showTowers) oceanControls.showTowers.checked = !!settings.showTowers;
+    if(oceanControls.showFloaters) oceanControls.showFloaters.checked = !!settings.showFloaters;
+    setOceanControlsEnabled(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
+    updateOceanButton(settings);
+  }
+
+  function showOceanPanel(){
+    if(!oceanPanel) return;
+    oceanPanelVisible = true;
+    oceanPanel.style.display = 'block';
+    syncOceanSettings();
+  }
+
+  function hideOceanPanel(){
+    if(!oceanPanel) return;
+    oceanPanelVisible = false;
+    oceanPanel.style.display = 'none';
+  }
+
+  function toggleOceanPanel(){
+    if(oceanPanelVisible) hideOceanPanel(); else showOceanPanel();
+  }
+
   function updatePresentButton(state){
     if(!els.presentToggle) return;
     els.presentToggle.textContent = state ? '🎨 Present: ON' : '🎨 Present: OFF';
@@ -18989,6 +19719,8 @@ const UI = (()=>{
     updatePresentButton(active);
     setGraphicsControlsEnabled(active);
     syncGraphicsSettings();
+    setOceanControlsEnabled(active);
+    syncOceanSettings();
     updateDpadPresent(active);
   }
 
@@ -19167,6 +19899,13 @@ const UI = (()=>{
       graphicsClose._wired = true;
       graphicsClose.addEventListener('click',(e)=>{ e.preventDefault(); hideGraphicsPanel(); });
     }
+    if(els.oceanSettingsBtn){
+      els.oceanSettingsBtn.onclick=()=>{ toggleOceanPanel(); };
+    }
+    if(oceanClose && !oceanClose._wired){
+      oceanClose._wired = true;
+      oceanClose.addEventListener('click',(e)=>{ e.preventDefault(); hideOceanPanel(); });
+    }
     if(els.physicsBtn && !els.physicsBtn._wired){
       els.physicsBtn._wired = true;
       // Update button appearance based on current debug state
@@ -19258,7 +19997,49 @@ const UI = (()=>{
       });
     });
 
+    if(oceanControls.enable){
+      oceanControls.enable.addEventListener('change',(e)=>{
+        const desired = !!e.target.checked;
+        Actions.setOceanEnabled(desired);
+        if(desired && !(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false)){
+          showToast?.('Enable Present mode to view the ocean backdrop.');
+        }
+        syncOceanSettings();
+      });
+    }
+
+    const oceanRangeBindings = {
+      timeScale:'timeScale',
+      foamAmount:'foamAmount',
+      horizonBoost:'horizonBoost',
+      microScale:'microScale'
+    };
+    Object.entries(oceanRangeBindings).forEach(([key, setting])=>{
+      const ctrl = oceanControls[key];
+      if(!ctrl) return;
+      ctrl.addEventListener('input',(e)=>{
+        const value = parseFloat(e.target.value);
+        Actions.updateOceanSettings({ [setting]: value });
+        syncOceanSettings();
+      });
+    });
+
+    const oceanToggleBindings = {
+      showGrid:'showGrid',
+      showTowers:'showTowers',
+      showFloaters:'showFloaters'
+    };
+    Object.entries(oceanToggleBindings).forEach(([key, setting])=>{
+      const ctrl = oceanControls[key];
+      if(!ctrl) return;
+      ctrl.addEventListener('change',(e)=>{
+        Actions.updateOceanSettings({ [setting]: !!e.target.checked });
+        syncOceanSettings();
+      });
+    });
+
     syncGraphicsSettings();
+    syncOceanSettings();
 
     // Save/Load buttons
     try{
@@ -21554,7 +22335,7 @@ const UI = (()=>{
     }catch(err){ console.warn('ensureIntroNote failed', err); }
   }
 
-  return {init, renderSheet, applyCrystalStyle, renderSheetCell, updateFocusChip, scrollSheetToSelection, openEditor, startDirectTyping, toggleFxPanel, getZLayer, shiftZLayer, syncPresentUI, updateStatus, getCell, triggerIntroCollapse, ensureIntroNote, hideIntroOverlay, debugIntroState, kickIntroSequence, startIntroExperience, inspect:(arr,pos)=>{ try{ const ch=arr.chunks[keyChunk(...Object.values(chunkOf(pos.x,pos.y,pos.z)))]; const c=ch?.cells?.find?.(t=>t.x===pos.x&&t.y===pos.y&&t.z===pos.z) || {value:'',formula:''}; const el=document.getElementById('inspect'); if(el) el.textContent=`Array #${arr.id} \"${arr.name}\"\nCell ${A1(pos.x)}${pos.y+1}${greek(pos.z)} @[${pos.x},${pos.y},${pos.z},${arr.id}]\nValue: ${JSON.stringify(c.value)}\nFormula: ${c.formula||''}`; }catch(e){ /* selection panel might be hidden */ } }};
+  return {init, renderSheet, applyCrystalStyle, renderSheetCell, updateFocusChip, scrollSheetToSelection, openEditor, startDirectTyping, toggleFxPanel, getZLayer, shiftZLayer, syncPresentUI, syncOceanSettings, updateStatus, getCell, triggerIntroCollapse, ensureIntroNote, hideIntroOverlay, debugIntroState, kickIntroSequence, startIntroExperience, inspect:(arr,pos)=>{ try{ const ch=arr.chunks[keyChunk(...Object.values(chunkOf(pos.x,pos.y,pos.z)))]; const c=ch?.cells?.find?.(t=>t.x===pos.x&&t.y===pos.y&&t.z===pos.z) || {value:'',formula:''}; const el=document.getElementById('inspect'); if(el) el.textContent=`Array #${arr.id} \"${arr.name}\"\nCell ${A1(pos.x)}${pos.y+1}${greek(pos.z)} @[${pos.x},${pos.y},${pos.z},${arr.id}]\nValue: ${JSON.stringify(c.value)}\nFormula: ${c.formula||''}`; }catch(e){ /* selection panel might be hidden */ } }};
 })();
 
 // CRITICAL: Expose UI globally so window.UI?.renderSheetCell works
