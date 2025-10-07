@@ -534,14 +534,14 @@ document.addEventListener('click', function(e){
 <!-- Screen-space D-Pad (bottom-right) -->
 <div id="dpad" aria-label="D-Pad">
   <div class="dp grab" title="Drag">⠿</div>
-  <div class="dp up" data-dx="0" data-dy="-1" data-dz="0">↑</div>
-  <div class="dp depthUp" data-dx="0" data-dy="0" data-dz="1">↥</div>
-  <div class="dp left" data-dx="-1" data-dy="0" data-dz="0">←</div>
+  <div class="dp up" data-dir="up">↑</div>
+  <div class="dp depthUp" data-dir="depthUp">↥</div>
+  <div class="dp left" data-dir="left">←</div>
   <div class="dp center" title="Arrow mapping"><span style="display:inline-block;width:16px;height:12px;border:2px solid #fff;border-radius:3px"></span>&nbsp;<span id="depthMode">H</span></div>
-  <div class="dp depthDown" data-dx="0" data-dy="0" data-dz="-1">↧</div>
+  <div class="dp depthDown" data-dir="depthDown">↧</div>
   <div class="dp present" role="button" data-action="present" aria-pressed="false" title="Enter Present Mode">▶</div>
-  <div class="dp down" data-dx="0" data-dy="1" data-dz="0">↓</div>
-  <div class="dp right" data-dx="1" data-dy="0" data-dz="0">→</div>
+  <div class="dp down" data-dir="down">↓</div>
+  <div class="dp right" data-dir="right">→</div>
 </div>
 
 <!-- 2D Sheet with merged Fx UI -->
@@ -9102,6 +9102,26 @@ const Scene = (()=>{
   let baseLightsGroup = null;
 let rapierWorld=null, controller=null, playerBody=null, playerCollider=null, staticPhysicsBody=null;
 let physicsActivationPending = false;
+let physicsInputCaptured = false;
+
+function syncPhysicsInputCapture(reason){
+  try{
+    const active = physicsActivationPending || !!Store.getState().scene.physics;
+    if(active !== physicsInputCaptured){
+      physicsInputCaptured = active;
+      console.log(`[PHYSICS] Input capture ${active ? 'ENABLED' : 'RELEASED'}${reason ? ` (${reason})` : ''}`);
+    }
+    return physicsInputCaptured;
+  }catch(e){
+    physicsInputCaptured = physicsActivationPending;
+    return physicsInputCaptured;
+  }
+}
+
+function setPhysicsActivationPending(next, reason){
+  physicsActivationPending = !!next;
+  syncPhysicsInputCapture(reason);
+}
 
 function updatePhysicsStatusChip(text){
   try{
@@ -15207,6 +15227,63 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     platformerKeyState[dir] = !!isDown;
     return true;
   }
+
+  function cameraBasisForSelection(arr){
+    let major='Z', sign=1, signX=1, signY=1, signZ=1;
+    if(!arr) return {major, sign, signX, signY, signZ};
+    try{
+      const frame = arr._frame || null;
+      const cam = Scene?.getCamera ? Scene.getCamera() : null;
+      if(frame && cam && cam.position && typeof cam.position.clone === 'function'){
+        const arrPos = new THREE.Vector3().setFromMatrixPosition(frame.matrixWorld);
+        const camPos = cam.position.clone();
+        const toCamW = camPos.sub(arrPos).normalize();
+        const inv = new THREE.Matrix4().copy(frame.matrixWorld).invert();
+        const toCamL = toCamW.clone().applyMatrix3(new THREE.Matrix3().setFromMatrix4(inv)).normalize();
+        const ax=Math.abs(toCamL.x), ay=Math.abs(toCamL.y), az=Math.abs(toCamL.z);
+        if(ay>ax && ay>az){ major='Y'; sign=Math.sign(toCamL.y)||1; }
+        else if(ax>ay && ax>az){ major='X'; sign=Math.sign(toCamL.x)||1; }
+        else { major='Z'; sign=Math.sign(toCamL.z)||1; }
+        signX = Math.sign(toCamL.x)||1;
+        signY = Math.sign(toCamL.y)||1;
+        signZ = Math.sign(toCamL.z)||1;
+      }
+    }catch{}
+    return {major, sign, signX, signY, signZ};
+  }
+
+  function resolveViewRelativeStep(arr, direction, {depthMode=false}={}){
+    if(!arr || !direction) return {dx:0,dy:0,dz:0};
+    if(direction === 'depthUp' || direction === 'depthDown'){
+      return resolveViewRelativeStep(arr, direction === 'depthUp' ? 'up' : 'down', {depthMode:true});
+    }
+    const basis = cameraBasisForSelection(arr);
+    let dx=0, dy=0, dz=0;
+    if(depthMode){
+      if(direction==='left')  dx = (basis.signX>0 ? -1 : +1);
+      if(direction==='right') dx = (basis.signX>0 ? +1 : -1);
+      if(direction==='up')    dz = (basis.signZ>0 ? +1 : -1);
+      if(direction==='down')  dz = (basis.signZ>0 ? -1 : +1);
+      return {dx,dy,dz};
+    }
+    if(basis.major==='X'){
+      if(direction==='left')  dz = (basis.sign>0 ? +1 : -1);
+      if(direction==='right') dz = (basis.sign>0 ? -1 : +1);
+      if(direction==='up')    dy = -1;
+      if(direction==='down')  dy = +1;
+    } else if(basis.major==='Z'){
+      if(direction==='left')  dx = (basis.sign>0 ? +1 : -1);
+      if(direction==='right') dx = (basis.sign>0 ? -1 : +1);
+      if(direction==='up')    dy = -1;
+      if(direction==='down')  dy = +1;
+    } else { // basis.major === 'Y'
+      if(direction==='left')  dx = -1;
+      if(direction==='right') dx = +1;
+      if(direction==='up')    dz = (basis.sign>0 ? -1 : +1);
+      if(direction==='down')  dz = (basis.sign>0 ? +1 : -1);
+    }
+    return {dx,dy,dz};
+  }
   let mouseLookEnabled = false;
   let mouseYaw = 0; // Camera rotation around Y axis
   let mousePitch = 0; // Camera rotation around X axis
@@ -15366,7 +15443,6 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         if(fallbackArr){ Actions.setSelection(fallbackArr.id, {x:0,y:0,z:0}, null, '2d'); sel = Store.getState().selection; }
       }
       if(!sel.focus) return; const arr=s.arrays[sel.arrayId]; if(!arr) return;
-      let {x,y,z}=sel.focus;
       if(e.shiftKey){
         // Shift+Arrows: move selection
         if(e.key==='ArrowUp') Actions.moveSelection(0,1,0);
@@ -15375,63 +15451,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         if(e.key==='ArrowRight') Actions.moveSelection(1,0,0);
         if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){ e.preventDefault(); UI.scrollSheetToSelection(); }
       } else {
-        // View-dependent navigation with optional Depth mode (Mouse 3 toggles)
-        const cam = Scene.getCamera?.();
-        const frame = arr?._frame;
-        let major='Z', sign=1, signX=1, signY=1, signZ=1;
-        try{
-          if(frame && cam){
-            const arrPos = new THREE.Vector3().setFromMatrixPosition(frame.matrixWorld);
-            const toCamW = cam.position.clone().sub(arrPos).normalize();
-            const inv = new THREE.Matrix4().copy(frame.matrixWorld).invert();
-            const toCamL = toCamW.clone().applyMatrix3(new THREE.Matrix3().setFromMatrix4(inv)).normalize();
-            const ax=Math.abs(toCamL.x), ay=Math.abs(toCamL.y), az=Math.abs(toCamL.z);
-            if(ay>ax && ay>az){ major='Y'; sign=Math.sign(toCamL.y)||1; }
-            else if(ax>ay && ax>az){ major='X'; sign=Math.sign(toCamL.x)||1; }
-            else { major='Z'; sign=Math.sign(toCamL.z)||1; }
-            signX = Math.sign(toCamL.x)||1; signY = Math.sign(toCamL.y)||1; signZ = Math.sign(toCamL.z)||1;
-          }
-        }catch{}
-
+        const direction = ({ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down'})[e.key];
         const depthMode = !!Store.getState().scene.arrowMapDepth;
-        let dx=0, dy=0, dz=0;
-        if(depthMode){
-          // Depth mode: Up/Down control depth (Z) away/toward camera; Left/Right control X
-          if(e.key==='ArrowLeft')  dx = (signX>0 ? -1 : +1);
-          if(e.key==='ArrowRight') dx = (signX>0 ? +1 : -1);
-          if(e.key==='ArrowUp')    dz = (signZ>0 ? +1 : -1); // Fixed: toward camera (+Z when viewing from +Z)
-          if(e.key==='ArrowDown')  dz = (signZ>0 ? -1 : +1); // Fixed: away from camera (-Z when viewing from +Z)
-      } else {
-          // Standard view-dependent mapping (height on Up/Down except top/bottom views)
-          if(major==='X'){
-            // Viewing along X axis (east/west): Left/Right control Z, Up/Down control Y
-            // When viewing from +X (east), left should be +Z (north), right should be -Z (south)
-            if(e.key==='ArrowLeft')  dz = (sign>0 ? +1 : -1);
-            if(e.key==='ArrowRight') dz = (sign>0 ? -1 : +1);
-            if(e.key==='ArrowUp')    dy = -1;
-            if(e.key==='ArrowDown')  dy = +1;
-          } else if(major==='Z'){
-            // Viewing along Z axis (north/south): Left/Right control X, Up/Down control Y
-            // When viewing from +Z (south), left should be +X (east), right should be -X (west)
-            if(e.key==='ArrowLeft')  dx = (sign>0 ? +1 : -1);
-            if(e.key==='ArrowRight') dx = (sign>0 ? -1 : +1);
-            if(e.key==='ArrowUp')    dy = -1;
-            if(e.key==='ArrowDown')  dy = +1;
-          } else { // major==='Y'
-            // Viewing from top/bottom: Left/Right control X, Up/Down control Z
-            if(e.key==='ArrowLeft')  dx = -1;
-            if(e.key==='ArrowRight') dx = +1;
-            if(e.key==='ArrowUp')    dz = (sign>0 ? -1 : +1);
-            if(e.key==='ArrowDown')  dz = (sign>0 ? +1 : -1);
-          }
-        }
-
-        if(dx||dy||dz){
+        const step = resolveViewRelativeStep(arr, direction, {depthMode});
+        if(step.dx || step.dy || step.dz){
           e.preventDefault();
-          x = Math.max(0, Math.min(arr.size.x-1, x+dx));
-          y = Math.max(0, Math.min(arr.size.y-1, y+dy));
-          z = Math.max(0, Math.min(arr.size.z-1, z+dz));
-          Actions.setSelection(sel.arrayId,{x,y,z}); UI.scrollSheetToSelection();
+          let {x,y,z} = sel.focus;
+          x = Math.max(0, Math.min(arr.size.x-1, x + step.dx));
+          y = Math.max(0, Math.min(arr.size.y-1, y + step.dy));
+          z = Math.max(0, Math.min(arr.size.z-1, z + step.dz));
+          Actions.setSelection(sel.arrayId,{x,y,z});
+          UI.scrollSheetToSelection?.();
         }
       }
       // Immediate typing: Enter resumes, other printable keys clear and start typing
@@ -18278,10 +18308,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const next = !current;
       console.log(`[PHYSICS MODE TOGGLE] Current: ${current}, Next: ${next}`);
       if(next){
-        physicsActivationPending = true;
+        setPhysicsActivationPending(true, 'toggle-begin');
         updatePhysicsStatusChip('Physics: Loading...');
       } else {
-        physicsActivationPending = false;
+        setPhysicsActivationPending(false, 'toggle-begin');
       }
       const debugAll = !!Store.getState().scene.physicsDebugAll;
       console.log(`[PHYSICS] Toggle: debugAll=${debugAll}, next=${next}`);
@@ -18295,11 +18325,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(next && avatarCfg.enabled === false){
         showToast?.('Avatar physics disabled by CELLI_PHYS');
         Store.setState(s=>({scene:{...s.scene, physics:false}}));
+        syncPhysicsInputCapture('avatar-disabled');
         updatePhysicsStatusChip('Physics: OFF');
         if(debugApplied){ applyDebugPhysicsOverrides(false); }
         ensurePlatformerActiveState(false);
         resetPhysicsInputState();
-        physicsActivationPending = false;
+        setPhysicsActivationPending(false, 'avatar-disabled');
         return;
       }
 
@@ -18311,12 +18342,13 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           if(debugApplied){ applyDebugPhysicsOverrides(false); }
           ensurePlatformerActiveState(false);
           resetPhysicsInputState();
-          physicsActivationPending = false;
+          setPhysicsActivationPending(false, status?.reason || 'rapier-failed');
           return;
         }
       }
 
       Store.setState(s=>({scene:{...s.scene, physics:next}}));
+      syncPhysicsInputCapture('toggle-commit');
       ensurePlatformerActiveState(next);
 
       if(next){
@@ -18365,10 +18397,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             console.warn('[PHYSICS] Failed to create player body:', e);
             updatePhysicsStatusChip('Physics: OFF (error)');
             Store.setState(s=>({scene:{...s.scene, physics:false}}));
+            syncPhysicsInputCapture('player-body-error');
             ensurePlatformerActiveState(false);
             if(debugApplied){ applyDebugPhysicsOverrides(false); }
             resetPhysicsInputState();
-            physicsActivationPending = false;
+            setPhysicsActivationPending(false, 'player-body-error');
             return;
           }
         }
@@ -18412,7 +18445,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           a._collidersBuilding = true;
         });
         // Clear activation pending immediately - debug mode protects against physics exit
-        physicsActivationPending = false;
+        setPhysicsActivationPending(false, 'collider-build');
         // Initialize mouse look angles from current camera
         try{
           if(camera){
@@ -18424,7 +18457,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           }
         }catch{}
       } else {
-        physicsActivationPending = false;
+        setPhysicsActivationPending(false, 'toggle-complete');
         resetPhysicsInputState();
         // On disable: destroy player body and release pointer lock
         if(playerBody && rapierWorld){
@@ -18466,12 +18499,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       }
     } finally {
       // Always reset flags
-      physicsActivationPending = false;
+      setPhysicsActivationPending(false, 'toggle-finalize');
       physicsToggleInFlight = false;
     }
   }
 
- return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, hydrateAll, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsDebugAll, setPhysicsCamera, resetContactCache, setPhysicsSpawn, isPhysicsInputCaptured:()=>physicsActivationPending || Store.getState().scene.physics, getViewAxisForArray:(arrOrFrame, observer)=>{
+ return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, hydrateAll, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsDebugAll, setPhysicsCamera, resetContactCache, setPhysicsSpawn, isPhysicsInputCaptured:()=>syncPhysicsInputCapture(), getViewAxisForArray:(arrOrFrame, observer)=>{
     try{
       if(!arrOrFrame) return null;
       const frame = arrOrFrame.matrixWorld ? arrOrFrame : (arrOrFrame._frame || null);
@@ -19357,14 +19390,21 @@ const UI = (()=>{
 
     // Wire D-Pad HUD
     const dpad=document.getElementById('dpad');
-    const onDP=(dx,dy,dz)=>{
-      const s=Store.getState().selection; if(!s?.arrayId||!s.focus) return;
-      const arr=Store.getState().arrays[s.arrayId]; if(!arr) return;
-      // D-pad is static: up/down = Y, left/right = X, depthUp/depthDown = Z
-      const nx=Math.max(0, Math.min(arr.size.x-1, s.focus.x + dx));
-      const ny=Math.max(0, Math.min(arr.size.y-1, s.focus.y + dy));
-      const nz=Math.max(0, Math.min(arr.size.z-1, s.focus.z + dz));
+    const onDP=(direction)=>{
+      if(!direction) return;
+      const state = Store.getState();
+      const sel = state.selection;
+      if(!sel?.arrayId || !sel.focus) return;
+      const arr = state.arrays[sel.arrayId];
+      if(!arr) return;
+      const depthMode = direction.startsWith('depth') ? true : !!state.scene.arrowMapDepth;
+      const step = resolveViewRelativeStep(arr, direction, {depthMode});
+      if(!(step.dx || step.dy || step.dz)) return;
+      const nx=Math.max(0, Math.min(arr.size.x-1, sel.focus.x + step.dx));
+      const ny=Math.max(0, Math.min(arr.size.y-1, sel.focus.y + step.dy));
+      const nz=Math.max(0, Math.min(arr.size.z-1, sel.focus.z + step.dz));
       Actions.setSelection(arr.id, {x:nx,y:ny,z:nz}, null, '3d');
+      UI.scrollSheetToSelection?.();
     };
     const presentBtn = dpad ? dpad.querySelector('.present') : null;
     const syncPresentToggle=()=>{
@@ -19408,11 +19448,9 @@ const UI = (()=>{
           togglePresentFromDpad();
           return;
         }
-        const dx=parseInt(btn.dataset.dx||'0',10);
-        const dy=parseInt(btn.dataset.dy||'0',10);
-        const dz=parseInt(btn.dataset.dz||'0',10);
-        if(!(dx||dy||dz)) return;
-        onDP(dx,dy,dz);
+        const direction = btn.dataset.dir || btn.dataset.direction || '';
+        if(!direction) return;
+        onDP(direction);
       });
     });
     syncPresentToggle();
