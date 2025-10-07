@@ -193,6 +193,18 @@ body:not(.touch) .mobile-only{ display:none !important }
 body:not(.touch) .desktop-only{ display:flex !important }
 /* Touch-friendly sheet sizing: full device width card at bottom */
 body.touch #sheet{ left:50%; right:auto; width:min(92vw, 680px); height:40vh; bottom:12px; top:auto; transform:translateX(-50%) }
+body.touch #graphicsSettingsPanel,
+body.touch #oceanSettingsPanel{
+  position:fixed !important;
+  left:50% !important;
+  top:50% !important;
+  transform:translate(-50%,-50%) !important;
+  right:auto !important;
+  bottom:auto !important;
+  width:min(92vw, 420px) !important;
+  max-height:80vh !important;
+  z-index:10004 !important;
+}
 body.touch .sheet-body .sheet td, body.touch .sheet-body .sheet th{ height:36px; font-size:15px }
 /* Make cells scale to ~8 columns (minus row header) */
 body.touch .sheet-body .sheet td.cell{ width:calc((100vw - 24px - 150px)/8) }
