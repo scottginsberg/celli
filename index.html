@@ -67,7 +67,8 @@
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;overscroll-behavior:none}
-canvas#view{position:fixed;inset:0;width:100vw;height:100vh;display:block}
+canvas#oceanCanvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;z-index:0;pointer-events:none}
+canvas#view{position:fixed;inset:0;width:100vw;height:100vh;display:block;z-index:1}
 /* Intro overlay gradient that sits above 3D and behind sheet */
 #introOverlay{position:fixed;inset:0;z-index:10000;pointer-events:none;
   background:linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #93c5fd 100%);
@@ -539,48 +540,40 @@ document.addEventListener('click', function(e){
   </div>
 </div>
 
-<div class="panel stack" id="oceanSettingsPanel" style="display:none; position:absolute; left:440px; top:340px; width:320px; max-height:80vh; overflow:auto;">
+<div class="panel stack" id="oceanSettingsPanel" style="display:none; position:absolute; left:440px; top:340px; width:360px; max-height:80vh; overflow:auto;">
   <div class="win-header" style="background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.12)">
     <span>Ocean Backdrop</span>
     <div id="oceanSettingsClose" class="close" title="Hide"></div>
   </div>
   <div class="stack" style="padding:12px; gap:12px;">
-    <div class="sub" id="oceanSettingsHint">Enable Present mode to view the ocean backdrop.</div>
+    <div class="sub" id="oceanSettingsHint">Enable Present mode and toggle on the ocean backdrop to adjust these settings.</div>
 
     <label class="row" style="justify-content:space-between; align-items:center;">
       <span>Enable Ocean</span>
       <input type="checkbox" id="oceanEnable">
     </label>
 
-    <div class="stack" style="gap:6px;">
-      <div class="title" style="font-size:14px;">Animation</div>
+    <div class="stack" style="gap:10px;">
+      <div class="title" style="font-size:14px;">General</div>
       <label class="stack" style="gap:4px;">
-        <span>Time Scale</span>
-        <input type="range" id="oceanTimeScale" min="0.1" max="3" step="0.05">
-      </label>
-    </div>
-
-    <div class="stack" style="gap:6px;">
-      <div class="title" style="font-size:14px;">Surface</div>
-      <label class="stack" style="gap:4px;">
-        <span>Foam Amount</span>
-        <input type="range" id="oceanFoamAmount" min="0" max="5" step="0.1">
+        <span class="sub">Env Intensity <span id="oceanEnvIntensityValue"></span></span>
+        <input type="range" id="oceanEnvIntensity" min="0" max="4" step="0.05">
       </label>
       <label class="stack" style="gap:4px;">
-        <span>Horizon Boost</span>
-        <input type="range" id="oceanHorizonBoost" min="0" max="2" step="0.01">
+        <span class="sub">Key Light Intensity <span id="oceanLightIntensityValue"></span></span>
+        <input type="range" id="oceanLightIntensity" min="0" max="5" step="0.05">
       </label>
       <label class="stack" style="gap:4px;">
-        <span>Micro Ripple Strength</span>
-        <input type="range" id="oceanMicroScale" min="0" max="0.15" step="0.005">
+        <span class="sub">Exposure <span id="oceanExposureValue"></span></span>
+        <input type="range" id="oceanExposure" min="0.3" max="2.5" step="0.01">
       </label>
-    </div>
-
-    <div class="stack" style="gap:6px;">
-      <div class="title" style="font-size:14px;">Elements</div>
       <label class="row" style="justify-content:space-between; align-items:center;">
         <span>Grid Overlay</span>
         <input type="checkbox" id="oceanShowGrid">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Buoy Sphere</span>
+        <input type="checkbox" id="oceanShowSphere">
       </label>
       <label class="row" style="justify-content:space-between; align-items:center;">
         <span>Dead Towers</span>
@@ -589,6 +582,254 @@ document.addEventListener('click', function(e){
       <label class="row" style="justify-content:space-between; align-items:center;">
         <span>Floating Lights</span>
         <input type="checkbox" id="oceanShowFloaters">
+      </label>
+      <button class="btn" id="oceanScreenshotBtn">📸 Capture Screenshot</button>
+    </div>
+
+    <div class="stack" style="gap:10px;">
+      <div class="title" style="font-size:14px;">Sky &amp; Sun</div>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Sun Elevation <span id="oceanSunElevationValue"></span></span>
+        <input type="range" id="oceanSunElevation" min="0" max="90" step="1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Sun Azimuth <span id="oceanSunAzimuthValue"></span></span>
+        <input type="range" id="oceanSunAzimuth" min="0" max="360" step="1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span>Sky Top</span>
+        <input type="color" id="oceanSkyTop" value="#8ec1ea">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span>Sky Mid</span>
+        <input type="color" id="oceanSkyMid" value="#63aee3">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span>Sky Bottom</span>
+        <input type="color" id="oceanSkyBot" value="#092c4d">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:10px;">
+      <div class="title" style="font-size:14px;">Waves</div>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Time Scale <span id="oceanTimeScaleValue"></span></span>
+        <input type="range" id="oceanTimeScale" min="0.1" max="3" step="0.01">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Choppiness <span id="oceanChoppinessValue"></span></span>
+        <input type="range" id="oceanChoppiness" min="0" max="2" step="0.01">
+      </label>
+      <div class="sub" style="font-weight:600;">Gerstner Bands</div>
+      <div class="stack" style="gap:6px;">
+        <div class="stack" style="gap:4px;" data-wave="0">
+          <span class="sub">Band 0 Amplitude <span id="oceanAmp0Value"></span></span>
+          <input type="range" id="oceanAmp0" min="0" max="2" step="0.01">
+          <span class="sub">Band 0 Wavelength <span id="oceanLen0Value"></span></span>
+          <input type="range" id="oceanLen0" min="1" max="50" step="0.1">
+          <span class="sub">Band 0 Speed <span id="oceanSpeed0Value"></span></span>
+          <input type="range" id="oceanSpeed0" min="0.1" max="3" step="0.01">
+        </div>
+        <div class="stack" style="gap:4px;" data-wave="1">
+          <span class="sub">Band 1 Amplitude <span id="oceanAmp1Value"></span></span>
+          <input type="range" id="oceanAmp1" min="0" max="2" step="0.01">
+          <span class="sub">Band 1 Wavelength <span id="oceanLen1Value"></span></span>
+          <input type="range" id="oceanLen1" min="1" max="50" step="0.1">
+          <span class="sub">Band 1 Speed <span id="oceanSpeed1Value"></span></span>
+          <input type="range" id="oceanSpeed1" min="0.1" max="3" step="0.01">
+        </div>
+        <div class="stack" style="gap:4px;" data-wave="2">
+          <span class="sub">Band 2 Amplitude <span id="oceanAmp2Value"></span></span>
+          <input type="range" id="oceanAmp2" min="0" max="2" step="0.01">
+          <span class="sub">Band 2 Wavelength <span id="oceanLen2Value"></span></span>
+          <input type="range" id="oceanLen2" min="1" max="50" step="0.1">
+          <span class="sub">Band 2 Speed <span id="oceanSpeed2Value"></span></span>
+          <input type="range" id="oceanSpeed2" min="0.1" max="3" step="0.01">
+        </div>
+        <div class="stack" style="gap:4px;" data-wave="3">
+          <span class="sub">Band 3 Amplitude <span id="oceanAmp3Value"></span></span>
+          <input type="range" id="oceanAmp3" min="0" max="2" step="0.01">
+          <span class="sub">Band 3 Wavelength <span id="oceanLen3Value"></span></span>
+          <input type="range" id="oceanLen3" min="1" max="50" step="0.1">
+          <span class="sub">Band 3 Speed <span id="oceanSpeed3Value"></span></span>
+          <input type="range" id="oceanSpeed3" min="0.1" max="3" step="0.01">
+        </div>
+        <div class="stack" style="gap:4px;" data-wave="4">
+          <span class="sub">Band 4 Amplitude <span id="oceanAmp4Value"></span></span>
+          <input type="range" id="oceanAmp4" min="0" max="2" step="0.01">
+          <span class="sub">Band 4 Wavelength <span id="oceanLen4Value"></span></span>
+          <input type="range" id="oceanLen4" min="1" max="50" step="0.1">
+          <span class="sub">Band 4 Speed <span id="oceanSpeed4Value"></span></span>
+          <input type="range" id="oceanSpeed4" min="0.1" max="3" step="0.01">
+        </div>
+        <div class="stack" style="gap:4px;" data-wave="5">
+          <span class="sub">Band 5 Amplitude <span id="oceanAmp5Value"></span></span>
+          <input type="range" id="oceanAmp5" min="0" max="2" step="0.01">
+          <span class="sub">Band 5 Wavelength <span id="oceanLen5Value"></span></span>
+          <input type="range" id="oceanLen5" min="1" max="50" step="0.1">
+          <span class="sub">Band 5 Speed <span id="oceanSpeed5Value"></span></span>
+          <input type="range" id="oceanSpeed5" min="0.1" max="3" step="0.01">
+        </div>
+      </div>
+    </div>
+
+    <div class="stack" style="gap:10px;">
+      <div class="title" style="font-size:14px;">Ocean Shader</div>
+      <label class="stack" style="gap:4px;">
+        <span>Deep Water</span>
+        <input type="color" id="oceanDeepColor" value="#0b345a">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span>Shallow Water</span>
+        <input type="color" id="oceanShallowColor" value="#1e6aa2">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span>Foam Color</span>
+        <input type="color" id="oceanFoamColor" value="#ffffff">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Foam Amount <span id="oceanFoamAmountValue"></span></span>
+        <input type="range" id="oceanFoamAmount" min="0" max="5" step="0.1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Foam Threshold <span id="oceanFoamBiasValue"></span></span>
+        <input type="range" id="oceanFoamBias" min="-1" max="3" step="0.05">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Foam Sharpness <span id="oceanFoamScaleValue"></span></span>
+        <input type="range" id="oceanFoamScale" min="0.1" max="5" step="0.1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Max Gloss <span id="oceanMaxGlossValue"></span></span>
+        <input type="range" id="oceanMaxGloss" min="0" max="1" step="0.01">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Roughness Scale <span id="oceanRoughnessScaleValue"></span></span>
+        <input type="range" id="oceanRoughnessScale" min="0.0001" max="0.02" step="0.0001">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span>Horizon Color</span>
+        <input type="color" id="oceanHorizonColor" value="#cfeaff">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Horizon Fade Start <span id="oceanHorizonStartValue"></span></span>
+        <input type="range" id="oceanHorizonStart" min="10" max="400" step="1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Horizon Fade End <span id="oceanHorizonEndValue"></span></span>
+        <input type="range" id="oceanHorizonEnd" min="50" max="900" step="1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Horizon Boost <span id="oceanHorizonBoostValue"></span></span>
+        <input type="range" id="oceanHorizonBoost" min="0" max="2" step="0.01">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:10px;">
+      <div class="title" style="font-size:14px;">Micro Ripples</div>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Ripple Strength <span id="oceanMicroScaleValue"></span></span>
+        <input type="range" id="oceanMicroScale" min="0" max="0.15" step="0.005">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Ripple Frequency <span id="oceanMicroFreqValue"></span></span>
+        <input type="range" id="oceanMicroFreq" min="5" max="50" step="0.5">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Ripple Size Scale <span id="oceanMicroWaveScaleValue"></span></span>
+        <input type="range" id="oceanMicroWaveScale" min="0.1" max="2" step="0.05">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:10px;">
+      <div class="title" style="font-size:14px;">Post Processing</div>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Enable Bloom</span>
+        <input type="checkbox" id="oceanEnableBloom">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Bloom Strength <span id="oceanBloomStrengthValue"></span></span>
+        <input type="range" id="oceanBloomStrength" min="0" max="2" step="0.01">
+      </label>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Enable Vignette</span>
+        <input type="checkbox" id="oceanEnableVignette">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Vignette Strength <span id="oceanVignetteStrengthValue"></span></span>
+        <input type="range" id="oceanVignetteStrength" min="0" max="2" step="0.01">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Film Grain <span id="oceanGrainAmountValue"></span></span>
+        <input type="range" id="oceanGrainAmount" min="0" max="0.1" step="0.001">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:10px;">
+      <div class="title" style="font-size:14px;">God Rays</div>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Enable Rays</span>
+        <input type="checkbox" id="oceanEnableRays">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Ray Strength <span id="oceanRayStrengthValue"></span></span>
+        <input type="range" id="oceanRayStrength" min="0" max="4" step="0.01">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Ray Decay <span id="oceanRayDecayValue"></span></span>
+        <input type="range" id="oceanRayDecay" min="0.6" max="1" step="0.001">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Ray Exposure <span id="oceanRayExposureValue"></span></span>
+        <input type="range" id="oceanRayExposure" min="0" max="2.5" step="0.01">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:10px;">
+      <div class="title" style="font-size:14px;">Lighthouse Beams</div>
+      <label class="row" style="justify-content:space-between; align-items:center;">
+        <span>Enable Beams</span>
+        <input type="checkbox" id="oceanEnableLighthouse">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Beam Strength <span id="oceanLighthouseStrengthValue"></span></span>
+        <input type="range" id="oceanLighthouseStrength" min="0" max="2.5" step="0.01">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:10px;">
+      <div class="title" style="font-size:14px;">Depth of Field &amp; Fog</div>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Focus Distance <span id="oceanFocusDistanceValue"></span></span>
+        <input type="range" id="oceanFocusDistance" min="5" max="1000" step="1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">DOF Strength <span id="oceanDofStrengthValue"></span></span>
+        <input type="range" id="oceanDofStrength" min="0" max="3" step="0.01">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Focus Range <span id="oceanFocusRangeValue"></span></span>
+        <input type="range" id="oceanFocusRange" min="10" max="500" step="1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Fog Start <span id="oceanFogStartValue"></span></span>
+        <input type="range" id="oceanFogStart" min="50" max="1000" step="1">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Fog End <span id="oceanFogEndValue"></span></span>
+        <input type="range" id="oceanFogEnd" min="200" max="3000" step="10">
+      </label>
+      <label class="stack" style="gap:4px;">
+        <span>Fog Color</span>
+        <input type="color" id="oceanFogColor" value="#5aaee3">
+      </label>
+    </div>
+
+    <div class="stack" style="gap:10px;">
+      <div class="title" style="font-size:14px;">Grid Overlay</div>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Grid Opacity <span id="oceanGridOpacityValue"></span></span>
+        <input type="range" id="oceanGridOpacity" min="0" max="1" step="0.01">
       </label>
     </div>
   </div>
@@ -9395,40 +9636,94 @@ const Scene = (()=>{
   let baseLightsGroup = null;
 
   const OceanDefaults = Object.freeze({
-    enabled: false,
-    timeScale: 1,
-    foamAmount: 2.5,
-    foamBias: 0.5,
-    foamScale: 1.5,
-    horizonBoost: 1.35,
-    microScale: 0.035,
-    microFreq: 18.0,
-    microWaveScale: 0.3,
-    choppiness: 2.0,
-    maxGloss: 0.91,
-    roughnessScale: 0.0044,
-    showGrid: true,
-    showTowers: true,
-    showFloaters: true
+    enabled:false,
+    envIntensity:0.8,
+    lightIntensity:0.55,
+    exposure:1.25,
+    showGrid:true,
+    showSphere:true,
+    showTowers:true,
+    showFloaters:true,
+    timeScale:1.0,
+    choppiness:2.0,
+    amplitude0:0.85,
+    amplitude1:0.45,
+    amplitude2:0.28,
+    amplitude3:0.18,
+    amplitude4:0.12,
+    amplitude5:0.08,
+    wavelength0:35.0,
+    wavelength1:16.5,
+    wavelength2:8.2,
+    wavelength3:4.5,
+    wavelength4:2.8,
+    wavelength5:1.8,
+    speed0:0.95,
+    speed1:1.15,
+    speed2:1.3,
+    speed3:1.45,
+    speed4:1.6,
+    speed5:1.8,
+    deepColor:'#0b345a',
+    shallowColor:'#1e6aa2',
+    foamColor:'#ffffff',
+    foamAmount:2.5,
+    foamBias:0.5,
+    foamScale:1.5,
+    maxGloss:0.91,
+    roughnessScale:0.0044,
+    horizonColor:'#cfeaff',
+    horizonZStart:60.0,
+    horizonZEnd:260.0,
+    horizonBoost:1.35,
+    microScale:0.035,
+    microFreq:18.0,
+    microWaveScale:0.3,
+    enableBloom:true,
+    bloomStrength:1.4,
+    enableVignette:true,
+    vignetteStrength:0.85,
+    grainAmount:0.015,
+    enableRays:true,
+    rayStrength:1.8,
+    rayDecay:0.965,
+    rayExposure:1.15,
+    enableLighthouse:true,
+    lighthouseStrength:0.8,
+    focusDistance:21.0,
+    dofStrength:0.95,
+    focusRange:10.0,
+    fogStart:50.0,
+    fogEnd:200.0,
+    fogColor:'#5aaee3',
+    gridOpacity:0.35,
+    sunElevation:22,
+    sunAzimuth:25,
+    skyTopColor:'#8ec1ea',
+    skyMidColor:'#63aee3',
+    skyBotColor:'#092c4d'
   });
 
   const OceanBackdrop = (()=>{
-    const dirs=[
-      new THREE.Vector2(1.0,0.2).normalize(),
-      new THREE.Vector2(-0.6,0.8).normalize(),
-      new THREE.Vector2(0.2,-1.0).normalize(),
-      new THREE.Vector2(0.8,0.4).normalize(),
-      new THREE.Vector2(-1.0,-0.2).normalize(),
-      new THREE.Vector2(0.4,0.9).normalize()
+    const dirs = [
+      new THREE.Vector2(1.0, 0.2).normalize(),
+      new THREE.Vector2(-0.6, 0.8).normalize(),
+      new THREE.Vector2(0.2, -1.0).normalize(),
+      new THREE.Vector2(0.8, 0.4).normalize(),
+      new THREE.Vector2(-1.0, -0.2).normalize(),
+      new THREE.Vector2(0.4, 0.9).normalize()
     ];
-    const waveParams={
-      A:[0.85,0.45,0.28,0.18,0.12,0.08],
-      L:[35.0,16.5,8.2,4.5,2.8,1.8],
-      S:[0.95,1.15,1.3,1.45,1.6,1.8]
-    };
-    const state={
+    const towerParams = { count:16, minRadius:120, maxRadius:600, azimuthSpread:0.6 };
+    const MAX_LIGHTHOUSE = 4;
+    const tmpVec3 = new THREE.Vector3();
+    const tmpVec2 = new THREE.Vector2();
+
+    const state = {
       settings:{...OceanDefaults},
-      group:null,
+      canvas:null,
+      renderer:null,
+      scene:null,
+      camera:null,
       sky:null,
       skyUniforms:null,
       water:null,
@@ -9437,66 +9732,105 @@ const Scene = (()=>{
       gridAttr:null,
       gridConfig:null,
       ball:null,
-      structures:[],
+      towerGroup:null,
+      floatGroup:null,
       floaters:[],
-      voxelStructures:[],
+      towers:[],
       lighthousePositions:[],
-      baseHeight:-6,
+      lights:{ambient:null, dir:null},
+      post:null,
       time:0,
-      presentActive:false
+      baseHeight:-6,
+      presentActive:false,
+      ready:false,
+      lastSize:{w:0,h:0}
     };
 
-    const L_OCCLUSION=1;
-    const towerParams={ count:16, minRadius:120, maxRadius:600, azimuthSpread:0.6 };
-    const MAX_LIGHTHOUSE_BEACONS=4;
+    function ensureCanvas(){
+      if(state.canvas) return;
+      const canvas = document.createElement('canvas');
+      canvas.id = 'oceanCanvas';
+      canvas.style.display = 'none';
+      canvas.style.pointerEvents = 'none';
+      const mainCanvas = document.getElementById('view');
+      if(mainCanvas && mainCanvas.parentNode){
+        mainCanvas.parentNode.insertBefore(canvas, mainCanvas);
+      } else {
+        document.body.appendChild(canvas);
+      }
+      state.canvas = canvas;
+    }
 
-    function ensureGroup(){
-      if(state.group) return;
-      state.group=new THREE.Group();
-      state.group.name='OceanBackdrop';
-      state.group.visible=false;
+    function ensureRenderer(){
+      if(state.renderer) return;
+      ensureCanvas();
+      const renderer = new THREE.WebGLRenderer({ canvas: state.canvas, antialias:true, alpha:false });
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = state.settings.exposure;
+      state.renderer = renderer;
+    }
+
+    function buildScene(){
+      if(state.scene) return;
+      state.scene = new THREE.Scene();
+      state.scene.fog = new THREE.FogExp2(0x0e2744, 0.02);
+      state.camera = new THREE.PerspectiveCamera(60, window.innerWidth / Math.max(1, window.innerHeight), 0.1, 5000);
+      state.camera.position.set(2.2, 1.4, 2.2);
+      state.camera.lookAt(0, 0.4, 0);
       createSky();
       createWater();
       createGrid();
       createBuoy();
-      createStructures();
-      if(scene) scene.add(state.group);
+      addMonumentalStructures();
+      createLights();
+    }
+
+    function createLights(){
+      const ambient = new THREE.AmbientLight(0xbfdfff, state.settings.envIntensity);
+      const dir = new THREE.DirectionalLight(0xffffff, state.settings.lightIntensity);
+      dir.position.set(-3, 7, -4);
+      state.scene.add(ambient);
+      state.scene.add(dir);
+      state.lights.ambient = ambient;
+      state.lights.dir = dir;
     }
 
     function createSky(){
-      const geo=new THREE.SphereGeometry(1200,32,16);
-      const uniforms={
-        top:{value:new THREE.Color(0x8ec1ea)},
-        mid:{value:new THREE.Color(0x63aee3)},
-        bot:{value:new THREE.Color(0x092c4d)}
+      const geo = new THREE.SphereGeometry(1200, 32, 16);
+      const uniforms = {
+        top:{ value:new THREE.Color(state.settings.skyTopColor) },
+        mid:{ value:new THREE.Color(state.settings.skyMidColor) },
+        bot:{ value:new THREE.Color(state.settings.skyBotColor) }
       };
-      const mat=new THREE.ShaderMaterial({
+      const mat = new THREE.ShaderMaterial({
         side:THREE.BackSide,
         uniforms,
         vertexShader:`varying vec3 v; void main(){ v=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
         fragmentShader:`varying vec3 v; uniform vec3 top,mid,bot; void main(){ float h=normalize(v).y*.5+.5; vec3 c=mix(bot,mid,smoothstep(0.,.45,h)); c=mix(c,top,smoothstep(.45,1.,h)); gl_FragColor=vec4(c,1.); }`
       });
-      const sky=new THREE.Mesh(geo,mat);
-      sky.name='OceanSky';
-      state.sky=sky;
-      state.skyUniforms=uniforms;
-      state.group.add(sky);
+      const sky = new THREE.Mesh(geo, mat);
+      state.sky = sky;
+      state.skyUniforms = uniforms;
+      state.scene.add(sky);
     }
 
     function createWater(){
-      const SIZE=1200;
-      const SEG=256;
-      const STEP=SIZE/SEG;
-      const HALF=SIZE/2;
-      state.gridConfig={SIZE,SEG,STEP,HALF};
-      const oceanGeo=new THREE.PlaneGeometry(SIZE,SIZE,SEG,SEG);
-      oceanGeo.rotateX(-Math.PI/2);
-      const uniforms={
+      const SIZE = 1200;
+      const SEG = 256;
+      const STEP = SIZE / SEG;
+      const HALF = SIZE / 2;
+      state.gridConfig = { SIZE, SEG, STEP, HALF };
+      const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
+      geo.rotateX(-Math.PI/2);
+      const uniforms = {
         uTime:{value:0},
         sunDir:{value:new THREE.Vector3(0.5,0.6,0.3).normalize()},
-        deep:{value:new THREE.Color(0x0b345a)},
-        shallow:{value:new THREE.Color(0x1e6aa2)},
-        foamColor:{value:new THREE.Color(0xffffff)},
+        deep:{value:new THREE.Color(state.settings.deepColor)},
+        shallow:{value:new THREE.Color(state.settings.shallowColor)},
+        foamColor:{value:new THREE.Color(state.settings.foamColor)},
         Q:{value:state.settings.choppiness},
         foamAmt:{value:state.settings.foamAmount},
         foamBias:{value:state.settings.foamBias},
@@ -9508,302 +9842,513 @@ const Scene = (()=>{
         microWaveScale:{value:state.settings.microWaveScale},
         nearFade:{value:20.0},
         farFade:{value:260.0},
-        horizonCol:{value:new THREE.Color(0xcfeaff)},
-        horizonZStart:{value:60.0},
-        horizonZEnd:{value:260.0},
+        horizonCol:{value:new THREE.Color(state.settings.horizonColor)},
+        horizonZStart:{value:state.settings.horizonZStart},
+        horizonZEnd:{value:state.settings.horizonZEnd},
         horizonBoost:{value:state.settings.horizonBoost},
-        A0:{value:waveParams.A[0]}, A1:{value:waveParams.A[1]}, A2:{value:waveParams.A[2]},
-        A3:{value:waveParams.A[3]}, A4:{value:waveParams.A[4]}, A5:{value:waveParams.A[5]},
-        L0:{value:waveParams.L[0]}, L1:{value:waveParams.L[1]}, L2:{value:waveParams.L[2]},
-        L3:{value:waveParams.L[3]}, L4:{value:waveParams.L[4]}, L5:{value:waveParams.L[5]},
-        S0:{value:waveParams.S[0]}, S1:{value:waveParams.S[1]}, S2:{value:waveParams.S[2]},
-        S3:{value:waveParams.S[3]}, S4:{value:waveParams.S[4]}, S5:{value:waveParams.S[5]}
+        A0:{value:state.settings.amplitude0}, A1:{value:state.settings.amplitude1}, A2:{value:state.settings.amplitude2},
+        A3:{value:state.settings.amplitude3}, A4:{value:state.settings.amplitude4}, A5:{value:state.settings.amplitude5},
+        L0:{value:state.settings.wavelength0}, L1:{value:state.settings.wavelength1}, L2:{value:state.settings.wavelength2},
+        L3:{value:state.settings.wavelength3}, L4:{value:state.settings.wavelength4}, L5:{value:state.settings.wavelength5},
+        S0:{value:state.settings.speed0}, S1:{value:state.settings.speed1}, S2:{value:state.settings.speed2},
+        S3:{value:state.settings.speed3}, S4:{value:state.settings.speed4}, S5:{value:state.settings.speed5}
       };
-      const waterMat=new THREE.ShaderMaterial({
+      const mat = new THREE.ShaderMaterial({
         transparent:true,
         uniforms,
         vertexShader:`
-          uniform float uTime; uniform float Q;
-          uniform float A0,A1,A2,A3,A4,A5, L0,L1,L2,L3,L4,L5, S0,S1,S2,S3,S4,S5;
-          uniform float microScale, microFreq, microWaveScale;
-          varying vec3 vN; varying vec3 vP; varying float vSlope; varying float vHeight;
-          varying float vViewZ; varying float vBreak;
-          const int N=6; vec2 D[N];
-          void setup(){ D[0]=normalize(vec2( 1.0, 0.2)); D[1]=normalize(vec2(-0.6, 0.8)); D[2]=normalize(vec2( 0.2,-1.0));
-                        D[3]=normalize(vec2( 0.8, 0.4)); D[4]=normalize(vec2(-1.0,-0.2)); D[5]=normalize(vec2( 0.4, 0.9)); }
-          float A[N]; float L[N]; float S[N];
-          void params(){ A[0]=A0;A[1]=A1;A[2]=A2;A[3]=A3;A[4]=A4;A[5]=A5;
-                         L[0]=L0;L[1]=L1;L[2]=L2;L[3]=L3;L[4]=L4;L[5]=L5;
-                         S[0]=S0;S[1]=S1;S[2]=S2;S[3]=S3;S[4]=S4;S[5]=S5; }
-          void main(){
-            setup(); params();
-            vec3 p = position, disp=vec3(0.);
-            vec3 grad = vec3(0.);
-            float jac=0.0;
-            for(int i=0;i<N;i++){
-              float k=6.28318/L[i], w=sqrt(9.8*k), a=k*dot(D[i], p.xz) - (w*S[i])*uTime;
-              float s=sin(a), c=cos(a);
-              disp.x += Q*A[i]*D[i].x*c;
-              disp.z += Q*A[i]*D[i].y*c;
-              disp.y += A[i]*s;
-              grad.x += -A[i]*D[i].x*k*c;
-              grad.z += -A[i]*D[i].y*k*c;
-              jac    +=  k*A[i]*c;
-            }
-            p += disp;
-            float scaledFreq = microFreq * microWaveScale;
-            float micro1 = sin(p.x * scaledFreq + uTime * 3.2) * cos(p.z * scaledFreq * 0.8 + uTime * 2.8);
-            float micro2 = sin(p.x * scaledFreq * 2.3 + p.z * scaledFreq * 1.7 + uTime * 4.5) *
-                           cos(p.z * scaledFreq * 2.1 + p.x * scaledFreq * 0.9 + uTime * 3.8);
-            float microDisp = (micro1 + micro2 * 0.6) * microScale;
-            p.y += microDisp;
-            float eps = 0.05;
-            vec3 pRight = p + vec3(eps, 0.0, 0.0);
-            vec3 pFront = p + vec3(0.0, 0.0, eps);
-            float microRight1 = sin(pRight.x * scaledFreq + uTime * 3.2) * cos(pRight.z * scaledFreq * 0.8 + uTime * 2.8);
-            float microRight2 = sin(pRight.x * scaledFreq * 2.3 + pRight.z * scaledFreq * 1.7 + uTime * 4.5) *
-                                cos(pRight.z * scaledFreq * 2.1 + pRight.x * scaledFreq * 0.9 + uTime * 3.8);
-            pRight.y += (microRight1 + microRight2 * 0.6) * microScale;
-            float microFront1 = sin(pFront.x * scaledFreq + uTime * 3.2) * cos(pFront.z * scaledFreq * 0.8 + uTime * 2.8);
-            float microFront2 = sin(pFront.x * scaledFreq * 2.3 + pFront.z * scaledFreq * 1.7 + uTime * 4.5) *
-                                cos(pFront.z * scaledFreq * 2.1 + pFront.x * scaledFreq * 0.9 + uTime * 3.8);
-            pFront.y += (microFront1 + microFront2 * 0.6) * microScale;
-            vec3 tangentX = pRight - p;
-            vec3 tangentZ = pFront - p;
-            vec3 microNormal = normalize(cross(tangentZ, tangentX));
-            vec3 mainNormal = normalize(vec3(-grad.x, 1.0, -grad.z));
-            vN = normalize(mainNormal * 0.7 + microNormal * 0.3);
-            vSlope = length(grad);
-            vHeight = disp.y + microDisp;
-            vec4 vp = modelViewMatrix * vec4(p,1.0);
-            vViewZ = -vp.z;
-            vP = (modelMatrix*vec4(p,1.0)).xyz;
-            vBreak = jac;
-            gl_Position = projectionMatrix * vp;
-          }`,
+    uniform float uTime; uniform float Q;
+    uniform float A0,A1,A2,A3,A4,A5, L0,L1,L2,L3,L4,L5, S0,S1,S2,S3,S4,S5;
+    uniform float microScale, microFreq, microWaveScale;
+    varying vec3 vN; varying vec3 vP; varying float vSlope; varying float vHeight;
+    varying float vViewZ; varying float vBreak;
+    const int N=6; vec2 D[N];
+    void setup(){ D[0]=normalize(vec2( 1.0, 0.2)); D[1]=normalize(vec2(-0.6, 0.8)); D[2]=normalize(vec2( 0.2,-1.0));
+                  D[3]=normalize(vec2( 0.8, 0.4)); D[4]=normalize(vec2(-1.0,-0.2)); D[5]=normalize(vec2( 0.4, 0.9)); }
+    float A[N]; float L[N]; float S[N];
+    void params(){ A[0]=A0;A[1]=A1;A[2]=A2;A[3]=A3;A[4]=A4;A[5]=A5;
+                   L[0]=L0;L[1]=L1;L[2]=L2;L[3]=L3;L[4]=L4;L[5]=L5;
+                   S[0]=S0;S[1]=S1;S[2]=S2;S[3]=S3;S[4]=S4;S[5]=S5; }
+    void main(){
+      setup(); params();
+      vec3 p = position, disp=vec3(0.);
+      vec3 grad = vec3(0.);
+      float jac=0.0;
+      for(int i=0;i<N;i++){
+        float k=6.28318/L[i], w=sqrt(9.8*k), a=k*dot(D[i], p.xz) - (w*S[i])*uTime;
+        float s=sin(a), c=cos(a);
+        disp.x += Q*A[i]*D[i].x*c;
+        disp.z += Q*A[i]*D[i].y*c;
+        disp.y += A[i]*s;
+        grad.x += -A[i]*D[i].x*k*c;
+        grad.z += -A[i]*D[i].y*k*c;
+        jac    +=  k*A[i]*c;
+      }
+      p += disp;
+      float scaledFreq = microFreq * microWaveScale;
+      float micro1 = sin(p.x * scaledFreq + uTime * 3.2) * cos(p.z * scaledFreq * 0.8 + uTime * 2.8);
+      float micro2 = sin(p.x * scaledFreq * 2.3 + p.z * scaledFreq * 1.7 + uTime * 4.5) *
+                     cos(p.z * scaledFreq * 2.1 + p.x * scaledFreq * 0.9 + uTime * 3.8);
+      float microDisp = (micro1 + micro2 * 0.6) * microScale;
+      p.y += microDisp;
+      float eps = 0.05;
+      vec3 pRight = p + vec3(eps, 0.0, 0.0);
+      vec3 pFront = p + vec3(0.0, 0.0, eps);
+      float microRight1 = sin(pRight.x * scaledFreq + uTime * 3.2) * cos(pRight.z * scaledFreq * 0.8 + uTime * 2.8);
+      float microRight2 = sin(pRight.x * scaledFreq * 2.3 + pRight.z * scaledFreq * 1.7 + uTime * 4.5) *
+                          cos(pRight.z * scaledFreq * 2.1 + pRight.x * scaledFreq * 0.9 + uTime * 3.8);
+      pRight.y += (microRight1 + microRight2 * 0.6) * microScale;
+      float microFront1 = sin(pFront.x * scaledFreq + uTime * 3.2) * cos(pFront.z * scaledFreq * 0.8 + uTime * 2.8);
+      float microFront2 = sin(pFront.x * scaledFreq * 2.3 + pFront.z * scaledFreq * 1.7 + uTime * 4.5) *
+                          cos(pFront.z * scaledFreq * 2.1 + pFront.x * scaledFreq * 0.9 + uTime * 3.8);
+      pFront.y += (microFront1 + microFront2 * 0.6) * microScale;
+      vec3 tangentX = pRight - p;
+      vec3 tangentZ = pFront - p;
+      vec3 microNormal = normalize(cross(tangentZ, tangentX));
+      vec3 mainNormal = normalize(vec3(-grad.x, 1.0, -grad.z));
+      vN = normalize(mainNormal * 0.7 + microNormal * 0.3);
+      vSlope = length(grad);
+      vHeight = disp.y + microDisp;
+      vec4 vp = modelViewMatrix * vec4(p,1.0);
+      vViewZ = -vp.z;
+      vP = (modelMatrix*vec4(p,1.0)).xyz;
+      vBreak = jac;
+      gl_Position = projectionMatrix * vp;
+    }`,
         fragmentShader:`
-          uniform vec3 deep, shallow, foamColor, sunDir;
-          uniform float foamAmt, foamBias, foamScale, nearFade, farFade, uTime;
-          uniform float maxGloss, roughnessScale;
-          uniform vec3 horizonCol; uniform float horizonZStart, horizonZEnd, horizonBoost;
-          varying vec3 vN; varying vec3 vP; varying float vSlope; varying float vHeight;
-          varying float vViewZ; varying float vBreak;
-          float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-          float noise(vec2 p){
-            vec2 i = floor(p);
-            vec2 f = fract(p);
-            f = f * f * (3.0 - 2.0 * f);
-            float a = hash(i);
-            float b = hash(i + vec2(1.0, 0.0));
-            float c = hash(i + vec2(0.0, 1.0));
-            float d = hash(i + vec2(1.0, 1.0));
-            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-          }
-          void main(){
-            vec3 N = normalize(vN);
-            vec3 V = normalize(cameraPosition - vP);
-            float fres = pow(1.0 - max(dot(V, N), 0.0), 4.0);
-            vec3 base = mix(deep, shallow, smoothstep(-0.6, 0.95, vHeight));
-            vec3 col  = base*(0.72+0.28*fres);
-            float distanceFade = smoothstep(horizonZStart, horizonZEnd, vViewZ);
-            float viewAngle = abs(dot(normalize(V), N));
-            float grazingMask = smoothstep(0.35, 0.01, viewAngle);
-            float distBoost = pow(distanceFade, 0.6);
-            float horizonMix = distBoost * grazingMask * horizonBoost * 1.5;
-            col = mix(col, horizonCol * 1.3, clamp(horizonMix, 0.0, 0.95));
-            float jacobian = vBreak;
-            float turbulence = clamp((jacobian - foamBias) * foamScale, 0.0, 1.0);
-            vec2 foamUV = vP.xz * 0.5 + uTime * 0.15;
-            float foamTex = noise(foamUV * 4.0) * 0.5 + noise(foamUV * 8.0) * 0.3 + noise(foamUV * 16.0) * 0.2;
-            foamTex = smoothstep(0.4, 0.7, foamTex);
-            float foam = foamTex * turbulence * foamAmt;
-            col = mix(col, foamColor, clamp(foam, 0.0, 1.0));
-            float viewDist = length(cameraPosition - vP);
-            float distanceGloss = mix(0.09, maxGloss, 1.0 / (1.0 + viewDist * roughnessScale));
-            float roughness = 1.0 - mix(distanceGloss, 0.0, clamp(turbulence * 0.8, 0.0, 1.0));
-            vec3 L = normalize(sunDir);
-            vec3 H = normalize(L + V);
-            float NdotH = max(dot(N, H), 0.0);
-            float specPower = mix(16.0, 512.0, distanceGloss);
-            float spec = pow(NdotH, specPower) * (1.0 - roughness) * distanceGloss;
-            col += vec3(spec * 2.5);
-            float depthAlpha = 0.95 - smoothstep(nearFade, farFade, vViewZ) * 0.45;
-            gl_FragColor = vec4(col, depthAlpha);
-          }`
+    uniform vec3 deep, shallow, foamColor, sunDir;
+    uniform float foamAmt, foamBias, foamScale, nearFade, farFade, uTime;
+    uniform float maxGloss, roughnessScale;
+    uniform vec3 horizonCol; uniform float horizonZStart, horizonZEnd, horizonBoost;
+    varying vec3 vN; varying vec3 vP; varying float vSlope; varying float vHeight;
+    varying float vViewZ; varying float vBreak;
+    float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float noise(vec2 p){
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      float a = hash(i);
+      float b = hash(i + vec2(1.0, 0.0));
+      float c = hash(i + vec2(0.0, 1.0));
+      float d = hash(i + vec2(1.0, 1.0));
+      return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    }
+    void main(){
+      vec3 N = normalize(vN);
+      vec3 V = normalize(cameraPosition - vP);
+      float fres = pow(1.0 - max(dot(V, N), 0.0), 4.0);
+      vec3 base = mix(deep, shallow, smoothstep(-0.6, 0.95, vHeight));
+      vec3 col  = base*(0.72+0.28*fres);
+      float distanceFade = smoothstep(horizonZStart, horizonZEnd, vViewZ);
+      float viewAngle = abs(dot(normalize(V), N));
+      float grazingMask = smoothstep(0.35, 0.01, viewAngle);
+      float distBoost = pow(distanceFade, 0.6);
+      float horizonMix = distBoost * grazingMask * horizonBoost * 1.5;
+      col = mix(col, horizonCol * 1.3, clamp(horizonMix, 0.0, 0.95));
+      float jacobian = vBreak;
+      float turbulence = clamp((jacobian - foamBias) * foamScale, 0.0, 1.0);
+      vec2 foamUV = vP.xz * 0.5 + uTime * 0.15;
+      float foamTex = noise(foamUV * 4.0) * 0.5 + noise(foamUV * 8.0) * 0.3 + noise(foamUV * 16.0) * 0.2;
+      foamTex = smoothstep(0.4, 0.7, foamTex);
+      float foam = foamTex * turbulence * foamAmt;
+      col = mix(col, foamColor, clamp(foam, 0.0, 1.0));
+      float viewDist = length(cameraPosition - vP);
+      float distanceGloss = mix(0.09, maxGloss, 1.0 / (1.0 + viewDist * roughnessScale));
+      float roughness = 1.0 - mix(distanceGloss, 0.0, clamp(turbulence * 0.8, 0.0, 1.0));
+      vec3 L = normalize(sunDir);
+      vec3 H = normalize(L + V);
+      float NdotH = max(dot(N, H), 0.0);
+      float specPower = mix(16.0, 512.0, distanceGloss);
+      float spec = pow(NdotH, specPower) * (1.0 - roughness) * distanceGloss;
+      col += vec3(spec * 2.5);
+      float depthAlpha = 0.95 - smoothstep(nearFade, farFade, vViewZ) * 0.45;
+      gl_FragColor = vec4(col, depthAlpha);
+    }`
       });
-      waterMat.depthWrite=false;
-      const water=new THREE.Mesh(oceanGeo, waterMat);
-      water.position.y=state.baseHeight;
-      water.renderOrder=-10;
-      water.name='OceanWater';
-      state.water=water;
-      state.waterUniforms=uniforms;
-      state.group.add(water);
+      mat.depthWrite = false;
+      const water = new THREE.Mesh(geo, mat);
+      water.position.y = state.baseHeight;
+      water.renderOrder = -10;
+      state.water = water;
+      state.waterUniforms = uniforms;
+      state.scene.add(water);
     }
 
     function createGrid(){
-      const baseConfig=state.gridConfig||{};
-      const GRID_SEG=(baseConfig.SEG ?? 256);
-      const SIZE=baseConfig.SIZE ?? 600;
-      const STEP=SIZE/GRID_SEG;
-      const HALF=SIZE/2;
-      state.gridConfig={...baseConfig, GRID_SEG, GRID_STEP:STEP, HALF};
-      const lineCount=((GRID_SEG+1)*GRID_SEG + (GRID_SEG+1)*GRID_SEG);
-      const gridPos=new Float32Array(lineCount*2*3);
-      let ptr=0;
+      const baseConfig = state.gridConfig || {};
+      const GRID_SEG = baseConfig.SEG ?? 256;
+      const SIZE = baseConfig.SIZE ?? 600;
+      const STEP = SIZE / GRID_SEG;
+      const HALF = SIZE / 2;
+      state.gridConfig = { ...baseConfig, GRID_SEG, GRID_STEP:STEP, HALF };
+      const lineCount = ((GRID_SEG+1)*GRID_SEG + (GRID_SEG+1)*GRID_SEG);
+      const positions = new Float32Array(lineCount * 2 * 3);
+      let ptr = 0;
       for(let z=0; z<=GRID_SEG; z++) for(let x=0; x<GRID_SEG; x++){
-        const ax=-HALF + x*STEP, az=-HALF + z*STEP, bx=ax+STEP, bz=az;
-        gridPos[ptr++]=ax; gridPos[ptr++]=state.baseHeight; gridPos[ptr++]=az;
-        gridPos[ptr++]=bx; gridPos[ptr++]=state.baseHeight; gridPos[ptr++]=bz;
+        const ax = -HALF + x*STEP, az = -HALF + z*STEP, bx = ax + STEP, bz = az;
+        positions[ptr++] = ax; positions[ptr++] = state.baseHeight; positions[ptr++] = az;
+        positions[ptr++] = bx; positions[ptr++] = state.baseHeight; positions[ptr++] = bz;
       }
       for(let x=0; x<=GRID_SEG; x++) for(let z=0; z<GRID_SEG; z++){
-        const ax=-HALF + x*STEP, az=-HALF + z*STEP, bx=ax, bz=az+STEP;
-        gridPos[ptr++]=ax; gridPos[ptr++]=state.baseHeight; gridPos[ptr++]=az;
-        gridPos[ptr++]=bx; gridPos[ptr++]=state.baseHeight; gridPos[ptr++]=bz;
+        const ax = -HALF + x*STEP, az = -HALF + z*STEP, bx = ax, bz = az + STEP;
+        positions[ptr++] = ax; positions[ptr++] = state.baseHeight; positions[ptr++] = az;
+        positions[ptr++] = bx; positions[ptr++] = state.baseHeight; positions[ptr++] = bz;
       }
-      const gridGeo=new THREE.BufferGeometry();
-      gridGeo.setAttribute('position', new THREE.BufferAttribute(gridPos,3));
-      const gridMat=new THREE.LineBasicMaterial({
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const mat = new THREE.LineBasicMaterial({
         color:0xbfe7ff,
         transparent:true,
-        opacity:0.35,
+        opacity:state.settings.gridOpacity,
         depthWrite:false,
         depthTest:true
       });
-      const grid=new THREE.LineSegments(gridGeo, gridMat);
-      grid.renderOrder=999;
-      grid.name='OceanGrid';
-      state.grid=grid;
-      state.gridAttr=gridGeo.getAttribute('position');
-      state.group.add(grid);
+      const grid = new THREE.LineSegments(geo, mat);
+      grid.renderOrder = 999;
+      state.grid = grid;
+      state.gridAttr = geo.getAttribute('position');
+      state.scene.add(grid);
     }
 
     function createBuoy(){
-      const ball=new THREE.Mesh(
-        new THREE.SphereGeometry(0.5,24,16),
-        new THREE.MeshStandardMaterial({color:0xffffff, emissive:0x88aaff, emissiveIntensity:1.05, roughness:0.25})
+      const ball = new THREE.Mesh(
+        new THREE.SphereGeometry(0.5, 24, 16),
+        new THREE.MeshStandardMaterial({ color:0xffffff, emissive:0x88aaff, emissiveIntensity:1.05, roughness:0.25 })
       );
       ball.position.set(0, state.baseHeight + 0.7, -2.5);
-      ball.userData.base={x:0,z:-2.5,height:0.55};
-      ball.name='OceanBuoy';
-      state.ball=ball;
-      state.group.add(ball);
+      ball.userData.base = { x:0, z:-2.5, height:0.55 };
+      state.ball = ball;
+      state.scene.add(ball);
     }
 
-    function createStructures(){
-      state.voxelStructures.length=0;
-      state.lighthousePositions.length=0;
-
-      const voxel=new THREE.BoxGeometry(4.5,4.5,4.5);
-      const towerGroup=new THREE.Group();
-      towerGroup.name='OceanTowers';
-      state.group.add(towerGroup);
-      const towers=[];
-      for(let c=0;c<towerParams.count;c++){
-        const instancesPerCluster=450;
-        const mat=new THREE.MeshStandardMaterial({
+    function addMonumentalStructures(){
+      state.floaters.length = 0;
+      state.towers.length = 0;
+      state.lighthousePositions.length = 0;
+      const voxel = new THREE.BoxGeometry(4.5, 4.5, 4.5);
+      const towerGroup = new THREE.Group();
+      const towers = [];
+      for(let c=0; c<towerParams.count; c++){
+        const instances = 450;
+        const mat = new THREE.MeshStandardMaterial({
           color:0x4a7a9f,
           metalness:0.15,
           roughness:0.85,
           emissive:0x000000
         });
-        const mesh=new THREE.InstancedMesh(voxel, mat, instancesPerCluster);
-        mesh.name=`OceanTowerCluster${c}`;
+        const mesh = new THREE.InstancedMesh(voxel, mat, instances);
         mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        const radius=THREE.MathUtils.randFloat(towerParams.minRadius, towerParams.maxRadius);
-        const baseAng=(c / towerParams.count) * Math.PI * 2;
-        const angJitter=THREE.MathUtils.randFloat(-towerParams.azimuthSpread, towerParams.azimuthSpread);
-        const ang=baseAng + angJitter;
-        const baseY=THREE.MathUtils.randFloat(-10, 30) + state.baseHeight;
-        const base=new THREE.Vector3(Math.sin(ang)*radius, baseY, Math.cos(ang)*radius);
-        const tilt=new THREE.Euler(
+        const radius = THREE.MathUtils.randFloat(towerParams.minRadius, towerParams.maxRadius);
+        const baseAng = (c / towerParams.count) * Math.PI * 2;
+        const jitter = THREE.MathUtils.randFloat(-towerParams.azimuthSpread, towerParams.azimuthSpread);
+        const ang = baseAng + jitter;
+        const baseY = THREE.MathUtils.randFloat(-10, 30) + state.baseHeight;
+        const base = new THREE.Vector3(Math.sin(ang)*radius, baseY, Math.cos(ang)*radius);
+        const tilt = new THREE.Euler(
           THREE.MathUtils.degToRad(THREE.MathUtils.randFloat(3,12)),
           THREE.MathUtils.degToRad(THREE.MathUtils.randFloat(0,360)),
           THREE.MathUtils.degToRad(THREE.MathUtils.randFloat(-8,8))
         );
-        let i=0;
-        const W=THREE.MathUtils.randInt(12,20);
-        const H=THREE.MathUtils.randInt(30,60);
-        const D=THREE.MathUtils.randInt(12,20);
-        for(let x=0;x<W;x++) for(let y=0;y<H;y++) for(let z=0;z<D;z++){
-          if(i>=instancesPerCluster) break;
-          if(Math.random()<0.80) continue;
-          const m=new THREE.Matrix4();
-          const scale=THREE.MathUtils.randFloat(0.9,1.3);
-          const p=new THREE.Vector3((x-W*0.5)*5.5, (y-H*0.5)*5.5, (z-D*0.5)*5.5);
-          p.applyEuler(tilt);
-          p.add(base);
-          m.compose(p, new THREE.Quaternion(), new THREE.Vector3(scale,scale,scale));
-          mesh.setMatrixAt(i++, m);
+        let i = 0;
+        const W = THREE.MathUtils.randInt(12,20);
+        const H = THREE.MathUtils.randInt(30,60);
+        const D = THREE.MathUtils.randInt(12,20);
+        for(let x=0; x<W; x++) for(let y=0; y<H; y++) for(let z=0; z<D; z++){
+          if(i>=instances) break;
+          if(Math.random() < 0.80) continue;
+          const matrix = new THREE.Matrix4();
+          const scale = THREE.MathUtils.randFloat(0.9, 1.3);
+          const pos = new THREE.Vector3((x-W*0.5)*5.5, (y-H*0.5)*5.5, (z-D*0.5)*5.5);
+          pos.applyEuler(tilt);
+          pos.add(base);
+          matrix.compose(pos, new THREE.Quaternion(), new THREE.Vector3(scale, scale, scale));
+          mesh.setMatrixAt(i++, matrix);
         }
-        mesh.count=Math.min(i,instancesPerCluster);
-        mesh.layers.enable(L_OCCLUSION);
+        mesh.count = Math.min(i, instances);
+        mesh.layers.enable(1);
         towerGroup.add(mesh);
         towers.push(mesh);
-        state.voxelStructures.push(mesh);
-
-        if(state.lighthousePositions.length<MAX_LIGHTHOUSE_BEACONS && Math.random()<0.5){
+        if(state.lighthousePositions.length < MAX_LIGHTHOUSE && Math.random() < 0.5){
           const topY = baseY + (H * 2.75);
           state.lighthousePositions.push(new THREE.Vector3(base.x, topY, base.z));
         }
       }
-      state.structures=towers;
+      state.towerGroup = towerGroup;
+      state.towers = towers;
+      state.scene.add(towerGroup);
 
-      const floatGroup=new THREE.Group();
-      floatGroup.name='OceanFloaters';
-      state.group.add(floatGroup);
-      const floatGeom=new THREE.BoxGeometry(3,3,3);
-      const floaters=[];
-      const lightVoxelCount=60;
-      for(let i=0;i<lightVoxelCount;i++){
-        const glowIntensity=THREE.MathUtils.randFloat(2.5,4.5);
-        const mat=new THREE.MeshStandardMaterial({
+      const floatGroup = new THREE.Group();
+      const floatGeom = new THREE.BoxGeometry(3, 3, 3);
+      const floaters = [];
+      for(let i=0; i<60; i++){
+        const glow = THREE.MathUtils.randFloat(2.5, 4.5);
+        const mat = new THREE.MeshStandardMaterial({
           color:new THREE.Color(0.8,0.95,1.0),
           emissive:new THREE.Color(0.7,0.85,1.0),
-          emissiveIntensity:glowIntensity,
+          emissiveIntensity:glow,
           metalness:0.1,
           roughness:0.15,
           toneMapped:false
         });
-        const mesh=new THREE.Mesh(floatGeom, mat);
-        const radius=THREE.MathUtils.randFloat(80, 600);
-        const ang=Math.random()*Math.PI*2;
-        const height=THREE.MathUtils.randFloat(15, 120) + state.baseHeight;
+        const mesh = new THREE.Mesh(floatGeom, mat);
+        const radius = THREE.MathUtils.randFloat(80, 600);
+        const ang = Math.random() * Math.PI * 2;
+        const height = THREE.MathUtils.randFloat(15, 120) + state.baseHeight;
         mesh.position.set(Math.sin(ang)*radius, height, Math.cos(ang)*radius);
         mesh.rotation.set(Math.random()*Math.PI*2, Math.random()*Math.PI*2, Math.random()*Math.PI*2);
         mesh.userData.baseY = height;
-
-        const intensity=THREE.MathUtils.randFloat(15,30);
-        const light=new THREE.PointLight(new THREE.Color(0.6,0.85,1.0), intensity, 50);
+        const intensity = THREE.MathUtils.randFloat(15, 30);
+        const light = new THREE.PointLight(new THREE.Color(0.6,0.85,1.0), intensity, 50);
         light.userData.baseIntensity = intensity;
         light.position.copy(mesh.position);
-        light.castShadow=false;
-
+        light.castShadow = false;
         floatGroup.add(mesh);
         floatGroup.add(light);
-
-        const record={mesh, light, floatSpeed:THREE.MathUtils.randFloat(0.3,0.7), floatOffset:Math.random()*Math.PI*2};
-        floaters.push(record);
-        state.voxelStructures.push(record);
+        floaters.push({ mesh, light, floatSpeed:THREE.MathUtils.randFloat(0.3,0.7), floatOffset:Math.random()*Math.PI*2 });
       }
-      state.floaters=floaters;
+      state.floatGroup = floatGroup;
+      state.floaters = floaters;
+      state.scene.add(floatGroup);
+    }
+
+    function makeMat(frag){
+      return new THREE.ShaderMaterial({
+        uniforms:{
+          t:{value:null}, t2:{value:null}, t3:{value:null}, t4:{value:null}, depthTex:{value:null},
+          res:{value:new THREE.Vector2(window.innerWidth, window.innerHeight)},
+          strength:{value:state.settings.bloomStrength},
+          time:{value:0},
+          vig:{value:state.settings.vignetteStrength},
+          grain:{value:state.settings.grainAmount},
+          enableBloom:{value: state.settings.enableBloom ? 1 : 0},
+          enableVig:{value: state.settings.enableVignette ? 1 : 0},
+          focusDist:{value:state.settings.focusDistance},
+          dofStrength:{value:state.settings.dofStrength},
+          focusRange:{value:state.settings.focusRange},
+          camNear:{value:state.camera ? state.camera.near : 0.1},
+          camFar:{value:state.camera ? state.camera.far : 5000},
+          fogStart:{value:state.settings.fogStart},
+          fogEnd:{value:state.settings.fogEnd},
+          fogCol:{value:new THREE.Color(state.settings.fogColor)},
+          enableRays:{value: state.settings.enableRays ? 1 : 0},
+          rayStrength:{value:state.settings.rayStrength},
+          rayDecay:{value:state.settings.rayDecay},
+          rayExposure:{value:state.settings.rayExposure},
+          sunPos:{value:new THREE.Vector2(0.5,0.2)},
+          rayColor:{value:new THREE.Color(0xcde9ff)},
+          enableLighthouse:{value: state.settings.enableLighthouse ? 1 : 0},
+          lighthouseStrength:{value:state.settings.lighthouseStrength},
+          lighthouseColor:{value:new THREE.Color(0xffd89a)},
+          lighthousePos:{value:[new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()]},
+          lighthouseCount:{value:0},
+          beamSize:{value:0.08}
+        },
+        vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
+        fragmentShader:frag,
+        depthTest:false,
+        depthWrite:false
+      });
+    }
+
+    function initPostProcessing(){
+      if(state.post) return;
+      const rtScene = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { depthTexture:new THREE.DepthTexture(), depthBuffer:true });
+      const rtHalfA = new THREE.WebGLRenderTarget(Math.max(1, window.innerWidth/2), Math.max(1, window.innerHeight/2));
+      const rtHalfB = new THREE.WebGLRenderTarget(Math.max(1, window.innerWidth/2), Math.max(1, window.innerHeight/2));
+      const rtOcc = new THREE.WebGLRenderTarget(Math.max(1, window.innerWidth/2), Math.max(1, window.innerHeight/2));
+      const rtOccBlur = new THREE.WebGLRenderTarget(Math.max(1, window.innerWidth/2), Math.max(1, window.innerHeight/2));
+      const rtLighthouse = new THREE.WebGLRenderTarget(Math.max(1, window.innerWidth/2), Math.max(1, window.innerHeight/2));
+      const fsQuad = new THREE.PlaneGeometry(2,2);
+      const blurFrag = `
+  varying vec2 vUv; uniform sampler2D t; uniform vec2 res;
+  void main(){
+    vec2 px = 1.0/res; float w[5];
+    w[0]=0.204164; w[1]=0.304005; w[2]=0.193783; w[3]=0.072184; w[4]=0.017864;
+    vec3 c = texture2D(t, vUv).rgb * w[0];
+    for(int i=1;i<5;i++){
+      c += texture2D(t, vUv + vec2(float(i)*px.x,0.)).rgb*w[i];
+      c += texture2D(t, vUv - vec2(float(i)*px.x,0.)).rgb*w[i];
+    }
+    gl_FragColor = vec4(c,1.0);
+  }`;
+      const blurH = makeMat(blurFrag);
+      const blurV = makeMat(blurFrag.replace('vec2(float(i)*px.x,0.)','vec2(0.,float(i)*px.y)'));
+      const raysFrag = `
+  varying vec2 vUv; uniform sampler2D t; uniform vec2 res;
+  uniform vec2 sunPos; uniform float rayDecay; uniform float rayExposure;
+  float sampleOcclusion(vec2 uv) {
+    vec2 px = 1.0 / res;
+    float c = texture2D(t, uv).r;
+    c += texture2D(t, uv + vec2(px.x, 0.0)).r * 0.5;
+    c += texture2D(t, uv - vec2(px.x, 0.0)).r * 0.5;
+    c += texture2D(t, uv + vec2(0.0, px.y)).r * 0.5;
+    c += texture2D(t, uv - vec2(0.0, px.y)).r * 0.5;
+    return c / 3.0;
+  }
+  void main(){
+    vec2 delta = sunPos - vUv;
+    float dist = length(delta);
+    vec2 stepv = delta / 96.0;
+    vec2 uv = vUv;
+    float illum = 0.0;
+    float decay = 1.0;
+    for(int i=0;i<96;i++){
+      uv += stepv;
+      float light = sampleOcclusion(uv);
+      illum += light * decay;
+      decay *= rayDecay;
+    }
+    float col = illum * rayExposure / (1.0 + dist*1.5);
+    gl_FragColor = vec4(vec3(col), 1.0);
+  }`;
+      const raysMat = makeMat(raysFrag);
+      const lighthouseMat = new THREE.ShaderMaterial({
+        uniforms:{
+          lighthousePos:{value:[new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()]},
+          lighthouseCount:{value:0},
+          beamSize:{value:0.08}
+        },
+        vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
+        fragmentShader:`
+  varying vec2 vUv; 
+  uniform vec3 lighthousePos[4];
+  uniform int lighthouseCount;
+  uniform float beamSize;
+  void main(){
+    float brightness = 0.0;
+    for(int i=0; i<4; i++){
+      if(i >= lighthouseCount) break;
+      vec2 pos = lighthousePos[i].xy;
+      float dist = length(vUv - pos);
+      brightness += smoothstep(beamSize, beamSize * 0.3, dist);
+    }
+    gl_FragColor = vec4(vec3(brightness), 1.0);
+  }`,
+        depthTest:false,
+        depthWrite:false
+      });
+      const compFrag = `
+  varying vec2 vUv; 
+  uniform sampler2D t; uniform sampler2D t2; uniform sampler2D t3; uniform sampler2D t4;
+  uniform sampler2D depthTex; uniform vec2 res;
+  uniform float strength, time, vig, grain; uniform int enableBloom, enableVig;
+  uniform float focusDist, dofStrength, focusRange, camNear, camFar, fogStart, fogEnd; uniform vec3 fogCol;
+  uniform int enableRays; uniform float rayStrength; uniform vec3 rayColor;
+  uniform int enableLighthouse; uniform float lighthouseStrength; uniform vec3 lighthouseColor;
+  float linearizeDepth(float z){ float ndc = z*2.0 - 1.0; return (2.0*camNear*camFar) / (camFar + camNear - ndc*(camFar - camNear)); }
+  float rnd(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
+  vec3 dofBlur(sampler2D tex, float radius){
+    vec2 px = 1.0/res; vec3 c = texture2D(tex, vUv).rgb * 0.28;
+    c += texture2D(tex, vUv + px* vec2( radius, 0.0)).rgb * 0.12;
+    c += texture2D(tex, vUv + px* vec2(-radius,0.0)).rgb * 0.12;
+    c += texture2D(tex, vUv + px* vec2(0.0,  radius)).rgb * 0.12;
+    c += texture2D(tex, vUv + px* vec2(0.0, -radius)).rgb * 0.12;
+    c += texture2D(tex, vUv + px* vec2( radius, radius)).rgb * 0.09;
+    c += texture2D(tex, vUv + px* vec2(-radius, radius)).rgb * 0.09;
+    c += texture2D(tex, vUv + px* vec2( radius,-radius)).rgb * 0.09;
+    c += texture2D(tex, vUv + px* vec2(-radius,-radius)).rgb * 0.09; return c;
+  }
+  void main(){
+    float z = texture2D(depthTex, vUv).r; float depth = linearizeDepth(z);
+    float coc = smoothstep(0.0, focusRange, abs(depth - focusDist));
+    float rad = coc * dofStrength * 6.0;
+    vec3 base = dofBlur(t, rad);
+    float ff1 = smoothstep(fogStart, fogEnd * 0.5, depth);
+    float ff2 = smoothstep(fogEnd * 0.5, fogEnd, depth);
+    float ff3 = smoothstep(fogEnd, fogEnd * 1.8, depth);
+    vec3 fogLayer1 = fogCol * 0.45;
+    vec3 fogLayer2 = fogCol * 0.75;
+    vec3 fogLayer3 = fogCol * 0.95;
+    base = mix(base, fogLayer1, ff1 * 0.4);
+    base = mix(base, fogLayer2, ff2 * 0.5);
+    base = mix(base, fogLayer3, ff3 * 0.7);
+    vec3 bloom = texture2D(t2, vUv).rgb * strength; if(enableBloom==1) base += bloom;
+    if(enableRays==1){ float r = texture2D(t3, vUv).r; base += rayColor * r * rayStrength; }
+    if(enableLighthouse==1){ float lh = texture2D(t4, vUv).r; base += lighthouseColor * lh * lighthouseStrength; }
+    vec2 uv = vUv*2.0-1.0; float v = smoothstep(1.4, 0.2/vig, dot(uv,uv)); if(enableVig==1) base *= v;
+    float g = (rnd(vUv*res + time)-0.5) * (grain*2.0); base += g;
+    gl_FragColor = vec4(base, 1.0);
+  }`;
+      const compMat = makeMat(compFrag);
+      const screenScene = new THREE.Scene();
+      const screenCam = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+      const screenMesh = new THREE.Mesh(fsQuad, compMat);
+      screenScene.add(screenMesh);
+      state.post = {
+        rtScene, rtHalfA, rtHalfB, rtOcc, rtOccBlur, rtLighthouse,
+        blurH, blurV, raysMat, lighthouseMat, compMat,
+        screenScene, screenCam, fsQuad,
+        PP:{
+          enableBloom:state.settings.enableBloom,
+          enableVig:state.settings.enableVignette,
+          bloom:state.settings.bloomStrength,
+          vignette:state.settings.vignetteStrength,
+          grain:state.settings.grainAmount,
+          focus:state.settings.focusDistance,
+          dof:state.settings.dofStrength,
+          focusRange:state.settings.focusRange,
+          fogStart:state.settings.fogStart,
+          fogEnd:state.settings.fogEnd,
+          enableRays:state.settings.enableRays,
+          rayStr:state.settings.rayStrength,
+          rayDecay:state.settings.rayDecay,
+          rayExposure:state.settings.rayExposure,
+          enableLighthouse:state.settings.enableLighthouse,
+          lighthouseStr:state.settings.lighthouseStrength
+        }
+      };
+    }
+
+    function resizePostTargets(w, h){
+      if(!state.post) return;
+      state.post.rtScene.setSize(w, h);
+      state.post.rtScene.depthTexture = new THREE.DepthTexture();
+      state.post.rtHalfA.setSize(Math.max(1, w/2), Math.max(1, h/2));
+      state.post.rtHalfB.setSize(Math.max(1, w/2), Math.max(1, h/2));
+      state.post.rtOcc.setSize(Math.max(1, w/2), Math.max(1, h/2));
+      state.post.rtOccBlur.setSize(Math.max(1, w/2), Math.max(1, h/2));
+      state.post.rtLighthouse.setSize(Math.max(1, w/2), Math.max(1, h/2));
+      state.post.blurH.uniforms.res.value.set(w, h);
+      state.post.blurV.uniforms.res.value.set(w, h);
+      state.post.compMat.uniforms.res.value.set(w, h);
+      state.post.raysMat.uniforms.res.value.set(Math.max(1, w/2), Math.max(1, h/2));
+    }
+
+    function handleResize(){
+      if(!state.renderer || !state.canvas) return;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      if(state.lastSize.w === w && state.lastSize.h === h) return;
+      state.lastSize = { w, h };
+      state.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      state.renderer.setSize(w, h);
+      if(state.camera){
+        state.camera.aspect = w / Math.max(1,h);
+        state.camera.updateProjectionMatrix();
+      }
+      resizePostTargets(w, h);
     }
 
     function getWaveParams(){
-      return waveParams;
+      const s = state.settings;
+      return {
+        A:[s.amplitude0,s.amplitude1,s.amplitude2,s.amplitude3,s.amplitude4,s.amplitude5],
+        L:[s.wavelength0,s.wavelength1,s.wavelength2,s.wavelength3,s.wavelength4,s.wavelength5],
+        S:[s.speed0,s.speed1,s.speed2,s.speed3,s.speed4,s.speed5]
+      };
     }
 
     function sampleChoppy(x,z,t,Q){
-      const {A,L,S}=getWaveParams();
+      const params = getWaveParams();
       let dx=0,dz=0,y=0;
       for(let i=0;i<dirs.length;i++){
-        const k=2*Math.PI/L[i];
-        const w=Math.sqrt(9.8*k);
-        const a=k*(dirs[i].x*x+dirs[i].y*z)-(w*S[i])*t;
-        const s=Math.sin(a), c=Math.cos(a);
-        dx+=Q*A[i]*dirs[i].x*c;
-        dz+=Q*A[i]*dirs[i].y*c;
-        y+=A[i]*s;
+        const k = 2*Math.PI/params.L[i];
+        const w = Math.sqrt(9.8*k);
+        const a = k*(dirs[i].x*x+dirs[i].y*z) - (w*params.S[i])*t;
+        const s = Math.sin(a), c = Math.cos(a);
+        dx += Q*params.A[i]*dirs[i].x*c;
+        dz += Q*params.A[i]*dirs[i].y*c;
+        y += params.A[i]*s;
       }
       return {x:x+dx, y:y, z:z+dz};
     }
@@ -9820,14 +10365,14 @@ const Scene = (()=>{
     }
 
     function updateFloaters(dt){
-      const active = state.settings.showFloaters && state.presentActive;
+      const active = state.presentActive && state.settings.showFloaters;
       state.floaters.forEach(item=>{
         const vis = active;
         if(item.mesh) item.mesh.visible = vis;
         if(item.light) item.light.visible = vis;
         if(!vis) return;
         const bob = Math.sin(state.time * item.floatSpeed + item.floatOffset) * 2.5;
-        const baseY = item.mesh?.userData?.baseY ?? item.baseY ?? state.baseHeight;
+        const baseY = item.mesh?.userData?.baseY ?? state.baseHeight;
         const y = baseY + bob;
         if(item.mesh){
           item.mesh.position.y = y;
@@ -9837,22 +10382,21 @@ const Scene = (()=>{
         if(item.light){
           item.light.position.y = y;
           const pulse = 0.85 + Math.sin(state.time * 2.0 + item.floatOffset) * 0.15;
-          const baseIntensity = item.light.userData?.baseIntensity ?? item.baseIntensity ?? item.light.intensity;
-          item.light.intensity = baseIntensity * pulse;
+          const baseIntensity = item.light.userData?.baseIntensity ?? item.light.intensity;
+          item.light.intensity = baseIntensity * pulse * state.settings.envIntensity;
         }
       });
     }
 
     function updateGrid(){
-      if(!state.gridAttr || !state.settings.showGrid || !state.presentActive) return;
-      const pos=state.gridAttr.array;
-      if(!pos) return;
-      const cfg=state.gridConfig||{};
-      const SEG=(cfg.GRID_SEG ?? cfg.SEG ?? 0);
-      const STEP=cfg.GRID_STEP ?? ((cfg.SIZE && SEG) ? (cfg.SIZE/SEG) : 1);
-      const HALF=cfg.HALF ?? ((cfg.SIZE||600)/2);
-      let p=0;
-      const Q=state.settings.choppiness;
+      if(!state.gridAttr || !state.presentActive || !state.settings.showGrid) return;
+      const pos = state.gridAttr.array;
+      const cfg = state.gridConfig || {};
+      const SEG = cfg.GRID_SEG ?? cfg.SEG ?? 0;
+      const STEP = cfg.GRID_STEP ?? ((cfg.SIZE && SEG) ? (cfg.SIZE/SEG) : 1);
+      const HALF = cfg.HALF ?? ((cfg.SIZE||600)/2);
+      let p = 0;
+      const Q = state.settings.choppiness;
       for(let z=0; z<=SEG; z++) for(let x=0; x<SEG; x++){
         const ax=-HALF + x*STEP, az=-HALF + z*STEP, bx=ax+STEP, bz=az;
         const A=sampleChoppy(ax,az,state.time,Q);
@@ -9876,79 +10420,248 @@ const Scene = (()=>{
     }
 
     function updateBuoy(){
-      if(!state.ball || !state.presentActive) return;
-      const base=state.ball.userData.base || {x:state.ball.position.x, z:state.ball.position.z, height:0.55};
-      const Q=state.settings.choppiness;
-      const sample=sampleChoppy(base.x, base.z, state.time, Q);
-      const micro=sampleMicroRipples(sample.x, sample.z, state.time);
+      if(!state.ball || !state.presentActive || !state.settings.showSphere) return;
+      const base = state.ball.userData.base || {x:0,z:0,height:0.55};
+      const sample = sampleChoppy(base.x, base.z, state.time, state.settings.choppiness);
+      const micro = sampleMicroRipples(sample.x, sample.z, state.time);
       state.ball.position.set(sample.x, state.baseHeight + sample.y + micro + base.height, sample.z);
+      state.ball.visible = true;
     }
 
-    function updateSunDir(){
-      if(!state.waterUniforms) return;
-      let dir=null;
+    function syncCamera(){
+      if(!state.camera || !camera) return;
       try{
-        if(FancyGraphics?.lights?.key){
-          dir=FancyGraphics.lights.key.position.clone().normalize();
-        }else if(baseLightsGroup){
-          const light=baseLightsGroup.children?.find?.(c=>c.isDirectionalLight);
-          if(light){
-            dir=light.position.clone().normalize();
-          }
-        }
+        state.camera.fov = camera.fov;
+        state.camera.aspect = (window.innerWidth) / Math.max(1, window.innerHeight);
+        state.camera.near = 0.1;
+        state.camera.far = 5000;
+        state.camera.updateProjectionMatrix();
+        state.camera.position.copy(camera.position);
+        const target = controls?.target ? controls.target : tmpVec3.set(0,0.4,0);
+        state.camera.lookAt(target);
       }catch{}
-      if(!dir){ dir=new THREE.Vector3(0.5,0.6,0.3).normalize(); }
-      state.waterUniforms.sunDir.value.copy(dir);
+    }
+
+    function updateSunDirection(){
+      const elev = THREE.MathUtils.degToRad(state.settings.sunElevation);
+      const az = THREE.MathUtils.degToRad(state.settings.sunAzimuth);
+      tmpVec3.set(Math.sin(az)*Math.cos(elev), Math.sin(elev), Math.cos(az)*Math.cos(elev)).normalize();
+      if(state.waterUniforms){ state.waterUniforms.sunDir.value.copy(tmpVec3); }
+      if(state.lights.dir){ state.lights.dir.position.copy(tmpVec3).multiplyScalar(100); }
+    }
+
+    function syncPostSettings(){
+      if(!state.post) return;
+      const PP = state.post.PP;
+      PP.enableBloom = state.settings.enableBloom;
+      PP.enableVig = state.settings.enableVignette;
+      PP.bloom = state.settings.bloomStrength;
+      PP.vignette = state.settings.vignetteStrength;
+      PP.grain = state.settings.grainAmount;
+      PP.focus = state.settings.focusDistance;
+      PP.dof = state.settings.dofStrength;
+      PP.focusRange = state.settings.focusRange;
+      PP.fogStart = state.settings.fogStart;
+      PP.fogEnd = state.settings.fogEnd;
+      PP.enableRays = state.settings.enableRays;
+      PP.rayStr = state.settings.rayStrength;
+      PP.rayDecay = state.settings.rayDecay;
+      PP.rayExposure = state.settings.rayExposure;
+      PP.enableLighthouse = state.settings.enableLighthouse;
+      PP.lighthouseStr = state.settings.lighthouseStrength;
+      state.post.compMat.uniforms.enableBloom.value = PP.enableBloom ? 1 : 0;
+      state.post.compMat.uniforms.enableVig.value = PP.enableVig ? 1 : 0;
+      state.post.compMat.uniforms.strength.value = PP.bloom;
+      state.post.compMat.uniforms.vig.value = PP.vignette;
+      state.post.compMat.uniforms.grain.value = PP.grain;
+      state.post.compMat.uniforms.focusDist.value = PP.focus;
+      state.post.compMat.uniforms.dofStrength.value = PP.dof;
+      state.post.compMat.uniforms.focusRange.value = PP.focusRange;
+      state.post.compMat.uniforms.fogStart.value = PP.fogStart;
+      state.post.compMat.uniforms.fogEnd.value = PP.fogEnd;
+      state.post.compMat.uniforms.fogCol.value.set(state.settings.fogColor);
+      state.post.compMat.uniforms.enableRays.value = PP.enableRays ? 1 : 0;
+      state.post.compMat.uniforms.rayStrength.value = PP.rayStr;
+      state.post.compMat.uniforms.enableLighthouse.value = PP.enableLighthouse ? 1 : 0;
+      state.post.compMat.uniforms.lighthouseStrength.value = PP.lighthouseStr;
+      state.post.blurH.uniforms.strength.value = PP.bloom;
+      state.post.blurV.uniforms.strength.value = PP.bloom;
     }
 
     function applySettings(){
+      ensureResources();
+      if(state.skyUniforms){
+        state.skyUniforms.top.value.set(state.settings.skyTopColor);
+        state.skyUniforms.mid.value.set(state.settings.skyMidColor);
+        state.skyUniforms.bot.value.set(state.settings.skyBotColor);
+      }
       if(state.waterUniforms){
+        state.waterUniforms.deep.value.set(state.settings.deepColor);
+        state.waterUniforms.shallow.value.set(state.settings.shallowColor);
+        state.waterUniforms.foamColor.value.set(state.settings.foamColor);
         state.waterUniforms.Q.value = state.settings.choppiness;
         state.waterUniforms.foamAmt.value = state.settings.foamAmount;
         state.waterUniforms.foamBias.value = state.settings.foamBias;
         state.waterUniforms.foamScale.value = state.settings.foamScale;
+        state.waterUniforms.maxGloss.value = state.settings.maxGloss;
+        state.waterUniforms.roughnessScale.value = state.settings.roughnessScale;
         state.waterUniforms.microScale.value = state.settings.microScale;
         state.waterUniforms.microFreq.value = state.settings.microFreq;
         state.waterUniforms.microWaveScale.value = state.settings.microWaveScale;
+        state.waterUniforms.horizonCol.value.set(state.settings.horizonColor);
+        state.waterUniforms.horizonZStart.value = state.settings.horizonZStart;
+        state.waterUniforms.horizonZEnd.value = state.settings.horizonZEnd;
         state.waterUniforms.horizonBoost.value = state.settings.horizonBoost;
-        state.waterUniforms.maxGloss.value = state.settings.maxGloss;
-        state.waterUniforms.roughnessScale.value = state.settings.roughnessScale;
+        const params = getWaveParams();
+        const keys = ['A','L','S'];
+        keys.forEach((key, idx)=>{
+          const arr = params[key];
+          arr.forEach((val, i)=>{
+            const uniformName = key + i;
+            if(state.waterUniforms[uniformName]) state.waterUniforms[uniformName].value = val;
+          });
+        });
       }
-      if(state.grid) state.grid.visible = state.presentActive && state.settings.showGrid;
-      state.structures.forEach(mesh=>{ if(mesh) mesh.visible = state.presentActive && state.settings.showTowers; });
+      if(state.grid){
+        state.grid.material.opacity = state.settings.gridOpacity;
+        state.grid.visible = state.presentActive && state.settings.showGrid;
+      }
+      if(state.ball){
+        state.ball.visible = state.presentActive && state.settings.showSphere;
+      }
+      state.towers.forEach(mesh=>{ if(mesh) mesh.visible = state.presentActive && state.settings.showTowers; });
       state.floaters.forEach(item=>{
         const vis = state.presentActive && state.settings.showFloaters;
         if(item.mesh) item.mesh.visible = vis;
         if(item.light) item.light.visible = vis;
       });
+      if(state.renderer){
+        state.renderer.toneMappingExposure = state.settings.exposure;
+      }
+      if(state.lights.ambient){
+        state.lights.ambient.intensity = state.settings.envIntensity;
+      }
+      if(state.lights.dir){
+        state.lights.dir.intensity = state.settings.lightIntensity;
+      }
+      syncPostSettings();
+      updateSunDirection();
     }
 
-    function updateVisibility(){
-      if(!state.group) return false;
-      state.presentActive = !!(state.settings.enabled && FancyGraphics?.enabled);
-      state.group.visible = state.presentActive;
-      if(!state.presentActive) return false;
+    function renderWithPost(tNow){
+      if(!state.post || !state.renderer) return;
+      const renderer = state.renderer;
+      const scene = state.scene;
+      const camera = state.camera;
+      const post = state.post;
+      renderer.setRenderTarget(post.rtScene);
+      renderer.render(scene, camera);
+      post.blurH.uniforms.t.value = post.rtScene.texture;
+      renderer.setRenderTarget(post.rtHalfA);
+      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurH)), post.screenCam);
+      post.blurH.uniforms.t.value = post.rtHalfA.texture;
+      renderer.setRenderTarget(post.rtHalfB);
+      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurH)), post.screenCam);
+      post.blurV.uniforms.t.value = post.rtHalfB.texture;
+      renderer.setRenderTarget(post.rtHalfA);
+      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurV)), post.screenCam);
+      const sunWorld = tmpVec3.copy(state.waterUniforms.sunDir.value).multiplyScalar(1000);
+      const proj = sunWorld.project(camera);
+      const sunUV = tmpVec2.set(proj.x*0.5+0.5, proj.y*0.5+0.5);
+      renderer.setRenderTarget(post.rtOcc);
+      renderer.setClearColor(0x000000,1);
+      renderer.clear();
+      if(proj.z < 1.0){
+        const sunDiskMat = new THREE.ShaderMaterial({
+          uniforms:{ sunPos:{value:sunUV.clone()}, sunSize:{value:0.15} },
+          vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
+          fragmentShader:`varying vec2 vUv; uniform vec2 sunPos; uniform float sunSize; void main(){ float dist=length(vUv-sunPos); float circle=smoothstep(sunSize, sunSize*0.5, dist); gl_FragColor=vec4(vec3(circle),1.0); }`,
+          depthTest:false,
+          depthWrite:false
+        });
+        renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, sunDiskMat)), post.screenCam);
+        const oldMat = [];
+        state.towers.forEach(mesh=>{
+          oldMat.push(mesh.material);
+          mesh.material = new THREE.MeshBasicMaterial({ color:0x000000 });
+        });
+        renderer.render(state.towerGroup, camera);
+        state.towers.forEach((mesh, idx)=>{ mesh.material = oldMat[idx]; });
+      }
+      renderer.setClearColor(0x0b1a2a,1);
+      post.blurH.uniforms.t.value = post.rtOcc.texture;
+      renderer.setRenderTarget(post.rtOccBlur);
+      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurH)), post.screenCam);
+      post.blurV.uniforms.t.value = post.rtOccBlur.texture;
+      renderer.setRenderTarget(post.rtOcc);
+      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurV)), post.screenCam);
+      post.raysMat.uniforms.t.value = post.rtOcc.texture;
+      post.raysMat.uniforms.sunPos.value.copy(sunUV);
+      renderer.setRenderTarget(post.rtHalfB);
+      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.raysMat)), post.screenCam);
+      post.lighthouseMat.uniforms.lighthouseCount.value = Math.min(state.lighthousePositions.length, 4);
+      for(let i=0;i<Math.min(state.lighthousePositions.length,4);i++){
+        const pos = state.lighthousePositions[i].clone().project(camera);
+        post.lighthouseMat.uniforms.lighthousePos.value[i].set(pos.x*0.5+0.5, pos.y*0.5+0.5, pos.z);
+      }
+      renderer.setRenderTarget(post.rtLighthouse);
+      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.lighthouseMat)), post.screenCam);
+      post.compMat.uniforms.t.value = post.rtScene.texture;
+      post.compMat.uniforms.t2.value = post.rtHalfA.texture;
+      post.compMat.uniforms.t3.value = post.rtHalfB.texture;
+      post.compMat.uniforms.t4.value = post.rtLighthouse.texture;
+      post.compMat.uniforms.depthTex.value = post.rtScene.depthTexture;
+      post.compMat.uniforms.time.value = tNow * 60.0;
+      renderer.setRenderTarget(null);
+      renderer.render(post.screenScene, post.screenCam);
+    }
+
+    function ensureResources(){
+      if(state.ready) return;
+      ensureRenderer();
+      buildScene();
+      initPostProcessing();
+      handleResize();
+      window.addEventListener('resize', handleResize, { passive:true });
+      state.ready = true;
       applySettings();
-      return true;
     }
 
     function update(dt){
-      if(!state.group) return;
-      if(!state.settings.enabled) {
-        state.presentActive=false;
-        state.group.visible=false;
+      if(!state.settings.enabled){
+        if(state.canvas) state.canvas.style.display = 'none';
+        state.presentActive = false;
         return;
       }
-      const active=updateVisibility();
+      ensureResources();
+      const active = updateVisibility();
       if(!active) return;
-      const delta=Number.isFinite(dt) ? dt : 0.016;
-      const speed=Math.max(0, state.settings.timeScale||0);
-      state.time += delta * (speed || 0);
-      if(state.waterUniforms){ state.waterUniforms.uTime.value = state.time; }
-      updateSunDir();
+      const delta = Number.isFinite(dt) ? dt : 0.016;
+      const speed = Math.max(0, state.settings.timeScale || 0);
+      state.time += delta * speed;
+      if(state.waterUniforms) state.waterUniforms.uTime.value = state.time;
+      syncCamera();
+      updateSunDirection();
       updateBuoy();
       updateGrid();
       updateFloaters(delta);
+      renderWithPost((performance && performance.now ? performance.now()/1000 : Date.now()/1000));
+    }
+
+    function updateVisibility(){
+      ensureResources();
+      state.presentActive = !!(state.settings.enabled && FancyGraphics?.enabled);
+      if(state.canvas) state.canvas.style.display = state.presentActive ? '' : 'none';
+      if(state.grid) state.grid.visible = state.presentActive && state.settings.showGrid;
+      if(state.ball) state.ball.visible = state.presentActive && state.settings.showSphere;
+      state.towers.forEach(mesh=>{ if(mesh) mesh.visible = state.presentActive && state.settings.showTowers; });
+      state.floaters.forEach(item=>{
+        const vis = state.presentActive && state.settings.showFloaters;
+        if(item.mesh) item.mesh.visible = vis;
+        if(item.light) item.light.visible = vis;
+      });
+      syncPostSettings();
+      return state.presentActive;
     }
 
     function setEnabled(flag){
@@ -9959,15 +10672,16 @@ const Scene = (()=>{
 
     function updateSettings(patch){
       if(!patch) return;
-      Object.keys(patch).forEach(key=>{
-        if(Object.prototype.hasOwnProperty.call(state.settings, key)){
-          const val=patch[key];
-          if(typeof state.settings[key] === 'number'){
-            const num = Number(val);
-            if(Number.isFinite(num)) state.settings[key]=num;
-          } else {
-            state.settings[key]=!!val;
-          }
+      Object.entries(patch).forEach(([key, val])=>{
+        if(!(key in state.settings)) return;
+        const current = state.settings[key];
+        if(typeof current === 'number'){
+          const num = Number(val);
+          if(Number.isFinite(num)) state.settings[key] = num;
+        }else if(typeof current === 'boolean'){
+          state.settings[key] = !!val;
+        }else{
+          state.settings[key] = String(val);
         }
       });
       applySettings();
@@ -9977,14 +10691,46 @@ const Scene = (()=>{
       return { ...state.settings, active: state.presentActive };
     }
 
+    function init(){
+      ensureResources();
+      applySettings();
+      updateVisibility();
+    }
+
+    function perfNow(){
+      return (performance && performance.now ? performance.now()/1000 : Date.now()/1000);
+    }
+
+    function captureScreenshot(){
+      ensureResources();
+      const oldExposure = state.renderer.toneMappingExposure;
+      const oldBloom = state.settings.bloomStrength;
+      const oldRay = state.settings.rayStrength;
+      state.renderer.toneMappingExposure = oldExposure * 1.25;
+      state.settings.bloomStrength = oldBloom * 1.35;
+      state.settings.rayStrength = oldRay * 1.2;
+      syncPostSettings();
+      renderWithPost(perfNow());
+      const url = state.renderer.domElement.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'ocean-shot.png';
+      a.click();
+      state.renderer.toneMappingExposure = oldExposure;
+      state.settings.bloomStrength = oldBloom;
+      state.settings.rayStrength = oldRay;
+      syncPostSettings();
+    }
+
     return {
-      init:ensureGroup,
+      init,
       update,
       setEnabled,
       updateSettings,
       getSettings,
       applySettings,
-      refreshVisibility:updateVisibility
+      refreshVisibility:updateVisibility,
+      captureScreenshot
     };
   })();
 let rapierWorld=null, controller=null, playerBody=null, playerCollider=null, staticPhysicsBody=null;
@@ -19532,7 +20278,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
 
- return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, hydrateAll, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, setOceanEnabled, updateOceanSettings, getOceanSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsDebugAll, setPhysicsCamera, resetContactCache, setPhysicsSpawn, isPhysicsInputCaptured:()=>syncPhysicsInputCapture(), facingFromCamera, getViewAxisForArray:(arrOrFrame, observer)=>{
+ return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, hydrateAll, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, setOceanEnabled, updateOceanSettings, getOceanSettings, captureOceanScreenshot:()=>{
+   try{ return OceanBackdrop.captureScreenshot?.(); }catch(e){ console.warn('[OCEAN] capture screenshot failed', e); return null; }
+ }, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsDebugAll, setPhysicsCamera, resetContactCache, setPhysicsSpawn, isPhysicsInputCaptured:()=>syncPhysicsInputCapture(), facingFromCamera, getViewAxisForArray:(arrOrFrame, observer)=>{
     try{
       if(!arrOrFrame) return null;
       const frame = arrOrFrame.matrixWorld ? arrOrFrame : (arrOrFrame._frame || null);
@@ -19616,14 +20364,190 @@ const UI = (()=>{
   const oceanPanelHint = document.getElementById('oceanSettingsHint');
   const oceanControls = {
     enable: document.getElementById('oceanEnable'),
+    envIntensity: document.getElementById('oceanEnvIntensity'),
+    lightIntensity: document.getElementById('oceanLightIntensity'),
+    exposure: document.getElementById('oceanExposure'),
+    showGrid: document.getElementById('oceanShowGrid'),
+    showSphere: document.getElementById('oceanShowSphere'),
+    showTowers: document.getElementById('oceanShowTowers'),
+    showFloaters: document.getElementById('oceanShowFloaters'),
+    screenshot: document.getElementById('oceanScreenshotBtn'),
+    sunElevation: document.getElementById('oceanSunElevation'),
+    sunAzimuth: document.getElementById('oceanSunAzimuth'),
+    skyTopColor: document.getElementById('oceanSkyTop'),
+    skyMidColor: document.getElementById('oceanSkyMid'),
+    skyBotColor: document.getElementById('oceanSkyBot'),
     timeScale: document.getElementById('oceanTimeScale'),
+    choppiness: document.getElementById('oceanChoppiness'),
+    amplitude0: document.getElementById('oceanAmp0'),
+    amplitude1: document.getElementById('oceanAmp1'),
+    amplitude2: document.getElementById('oceanAmp2'),
+    amplitude3: document.getElementById('oceanAmp3'),
+    amplitude4: document.getElementById('oceanAmp4'),
+    amplitude5: document.getElementById('oceanAmp5'),
+    wavelength0: document.getElementById('oceanLen0'),
+    wavelength1: document.getElementById('oceanLen1'),
+    wavelength2: document.getElementById('oceanLen2'),
+    wavelength3: document.getElementById('oceanLen3'),
+    wavelength4: document.getElementById('oceanLen4'),
+    wavelength5: document.getElementById('oceanLen5'),
+    speed0: document.getElementById('oceanSpeed0'),
+    speed1: document.getElementById('oceanSpeed1'),
+    speed2: document.getElementById('oceanSpeed2'),
+    speed3: document.getElementById('oceanSpeed3'),
+    speed4: document.getElementById('oceanSpeed4'),
+    speed5: document.getElementById('oceanSpeed5'),
+    deepColor: document.getElementById('oceanDeepColor'),
+    shallowColor: document.getElementById('oceanShallowColor'),
+    foamColor: document.getElementById('oceanFoamColor'),
     foamAmount: document.getElementById('oceanFoamAmount'),
+    foamBias: document.getElementById('oceanFoamBias'),
+    foamScale: document.getElementById('oceanFoamScale'),
+    maxGloss: document.getElementById('oceanMaxGloss'),
+    roughnessScale: document.getElementById('oceanRoughnessScale'),
+    horizonColor: document.getElementById('oceanHorizonColor'),
+    horizonZStart: document.getElementById('oceanHorizonStart'),
+    horizonZEnd: document.getElementById('oceanHorizonEnd'),
     horizonBoost: document.getElementById('oceanHorizonBoost'),
     microScale: document.getElementById('oceanMicroScale'),
-    showGrid: document.getElementById('oceanShowGrid'),
-    showTowers: document.getElementById('oceanShowTowers'),
-    showFloaters: document.getElementById('oceanShowFloaters')
+    microFreq: document.getElementById('oceanMicroFreq'),
+    microWaveScale: document.getElementById('oceanMicroWaveScale'),
+    enableBloom: document.getElementById('oceanEnableBloom'),
+    bloomStrength: document.getElementById('oceanBloomStrength'),
+    enableVignette: document.getElementById('oceanEnableVignette'),
+    vignetteStrength: document.getElementById('oceanVignetteStrength'),
+    grainAmount: document.getElementById('oceanGrainAmount'),
+    enableRays: document.getElementById('oceanEnableRays'),
+    rayStrength: document.getElementById('oceanRayStrength'),
+    rayDecay: document.getElementById('oceanRayDecay'),
+    rayExposure: document.getElementById('oceanRayExposure'),
+    enableLighthouse: document.getElementById('oceanEnableLighthouse'),
+    lighthouseStrength: document.getElementById('oceanLighthouseStrength'),
+    focusDistance: document.getElementById('oceanFocusDistance'),
+    dofStrength: document.getElementById('oceanDofStrength'),
+    focusRange: document.getElementById('oceanFocusRange'),
+    fogStart: document.getElementById('oceanFogStart'),
+    fogEnd: document.getElementById('oceanFogEnd'),
+    fogColor: document.getElementById('oceanFogColor'),
+    gridOpacity: document.getElementById('oceanGridOpacity')
   };
+  const oceanValueDisplays = {
+    envIntensity: document.getElementById('oceanEnvIntensityValue'),
+    lightIntensity: document.getElementById('oceanLightIntensityValue'),
+    exposure: document.getElementById('oceanExposureValue'),
+    sunElevation: document.getElementById('oceanSunElevationValue'),
+    sunAzimuth: document.getElementById('oceanSunAzimuthValue'),
+    timeScale: document.getElementById('oceanTimeScaleValue'),
+    choppiness: document.getElementById('oceanChoppinessValue'),
+    amplitude0: document.getElementById('oceanAmp0Value'),
+    amplitude1: document.getElementById('oceanAmp1Value'),
+    amplitude2: document.getElementById('oceanAmp2Value'),
+    amplitude3: document.getElementById('oceanAmp3Value'),
+    amplitude4: document.getElementById('oceanAmp4Value'),
+    amplitude5: document.getElementById('oceanAmp5Value'),
+    wavelength0: document.getElementById('oceanLen0Value'),
+    wavelength1: document.getElementById('oceanLen1Value'),
+    wavelength2: document.getElementById('oceanLen2Value'),
+    wavelength3: document.getElementById('oceanLen3Value'),
+    wavelength4: document.getElementById('oceanLen4Value'),
+    wavelength5: document.getElementById('oceanLen5Value'),
+    speed0: document.getElementById('oceanSpeed0Value'),
+    speed1: document.getElementById('oceanSpeed1Value'),
+    speed2: document.getElementById('oceanSpeed2Value'),
+    speed3: document.getElementById('oceanSpeed3Value'),
+    speed4: document.getElementById('oceanSpeed4Value'),
+    speed5: document.getElementById('oceanSpeed5Value'),
+    foamAmount: document.getElementById('oceanFoamAmountValue'),
+    foamBias: document.getElementById('oceanFoamBiasValue'),
+    foamScale: document.getElementById('oceanFoamScaleValue'),
+    maxGloss: document.getElementById('oceanMaxGlossValue'),
+    roughnessScale: document.getElementById('oceanRoughnessScaleValue'),
+    horizonZStart: document.getElementById('oceanHorizonStartValue'),
+    horizonZEnd: document.getElementById('oceanHorizonEndValue'),
+    horizonBoost: document.getElementById('oceanHorizonBoostValue'),
+    microScale: document.getElementById('oceanMicroScaleValue'),
+    microFreq: document.getElementById('oceanMicroFreqValue'),
+    microWaveScale: document.getElementById('oceanMicroWaveScaleValue'),
+    bloomStrength: document.getElementById('oceanBloomStrengthValue'),
+    vignetteStrength: document.getElementById('oceanVignetteStrengthValue'),
+    grainAmount: document.getElementById('oceanGrainAmountValue'),
+    rayStrength: document.getElementById('oceanRayStrengthValue'),
+    rayDecay: document.getElementById('oceanRayDecayValue'),
+    rayExposure: document.getElementById('oceanRayExposureValue'),
+    lighthouseStrength: document.getElementById('oceanLighthouseStrengthValue'),
+    focusDistance: document.getElementById('oceanFocusDistanceValue'),
+    dofStrength: document.getElementById('oceanDofStrengthValue'),
+    focusRange: document.getElementById('oceanFocusRangeValue'),
+    fogStart: document.getElementById('oceanFogStartValue'),
+    fogEnd: document.getElementById('oceanFogEndValue'),
+    gridOpacity: document.getElementById('oceanGridOpacityValue')
+  };
+  const oceanSliderFormatters = {
+    envIntensity: (v)=>Number(v).toFixed(2),
+    lightIntensity: (v)=>Number(v).toFixed(2),
+    exposure: (v)=>Number(v).toFixed(2),
+    sunElevation: (v)=>`${Math.round(Number(v)||0)}°`,
+    sunAzimuth: (v)=>`${Math.round(Number(v)||0)}°`,
+    timeScale: (v)=>Number(v).toFixed(2),
+    choppiness: (v)=>Number(v).toFixed(2),
+    amplitude0: (v)=>Number(v).toFixed(2),
+    amplitude1: (v)=>Number(v).toFixed(2),
+    amplitude2: (v)=>Number(v).toFixed(2),
+    amplitude3: (v)=>Number(v).toFixed(2),
+    amplitude4: (v)=>Number(v).toFixed(2),
+    amplitude5: (v)=>Number(v).toFixed(2),
+    wavelength0: (v)=>Number(v).toFixed(1),
+    wavelength1: (v)=>Number(v).toFixed(1),
+    wavelength2: (v)=>Number(v).toFixed(1),
+    wavelength3: (v)=>Number(v).toFixed(1),
+    wavelength4: (v)=>Number(v).toFixed(1),
+    wavelength5: (v)=>Number(v).toFixed(1),
+    speed0: (v)=>Number(v).toFixed(2),
+    speed1: (v)=>Number(v).toFixed(2),
+    speed2: (v)=>Number(v).toFixed(2),
+    speed3: (v)=>Number(v).toFixed(2),
+    speed4: (v)=>Number(v).toFixed(2),
+    speed5: (v)=>Number(v).toFixed(2),
+    foamAmount: (v)=>Number(v).toFixed(2),
+    foamBias: (v)=>Number(v).toFixed(2),
+    foamScale: (v)=>Number(v).toFixed(2),
+    maxGloss: (v)=>Number(v).toFixed(2),
+    roughnessScale: (v)=>Number(v).toFixed(4),
+    horizonZStart: (v)=>Number(v).toFixed(0),
+    horizonZEnd: (v)=>Number(v).toFixed(0),
+    horizonBoost: (v)=>Number(v).toFixed(2),
+    microScale: (v)=>Number(v).toFixed(3),
+    microFreq: (v)=>Number(v).toFixed(1),
+    microWaveScale: (v)=>Number(v).toFixed(2),
+    bloomStrength: (v)=>Number(v).toFixed(2),
+    vignetteStrength: (v)=>Number(v).toFixed(2),
+    grainAmount: (v)=>Number(v).toFixed(3),
+    rayStrength: (v)=>Number(v).toFixed(2),
+    rayDecay: (v)=>Number(v).toFixed(3),
+    rayExposure: (v)=>Number(v).toFixed(2),
+    lighthouseStrength: (v)=>Number(v).toFixed(2),
+    focusDistance: (v)=>Math.round(Number(v)||0),
+    dofStrength: (v)=>Number(v).toFixed(2),
+    focusRange: (v)=>Math.round(Number(v)||0),
+    fogStart: (v)=>Math.round(Number(v)||0),
+    fogEnd: (v)=>Math.round(Number(v)||0),
+    gridOpacity: (v)=>Number(v).toFixed(2)
+  };
+  const oceanRangeKeys = [
+    'envIntensity','lightIntensity','exposure','sunElevation','sunAzimuth','timeScale','choppiness',
+    'amplitude0','amplitude1','amplitude2','amplitude3','amplitude4','amplitude5',
+    'wavelength0','wavelength1','wavelength2','wavelength3','wavelength4','wavelength5',
+    'speed0','speed1','speed2','speed3','speed4','speed5',
+    'foamAmount','foamBias','foamScale','maxGloss','roughnessScale',
+    'horizonZStart','horizonZEnd','horizonBoost',
+    'microScale','microFreq','microWaveScale',
+    'bloomStrength','vignetteStrength','grainAmount',
+    'rayStrength','rayDecay','rayExposure',
+    'lighthouseStrength','focusDistance','dofStrength','focusRange',
+    'fogStart','fogEnd','gridOpacity'
+  ];
+  const oceanColorKeys = ['skyTopColor','skyMidColor','skyBotColor','deepColor','shallowColor','foamColor','horizonColor','fogColor'];
+  const oceanToggleKeys = ['showGrid','showSphere','showTowers','showFloaters','enableBloom','enableVignette','enableRays','enableLighthouse'];
   let graphicsPanelVisible = false;
   let oceanPanelVisible = false;
 
@@ -19692,12 +20616,16 @@ const UI = (()=>{
   }
 
   function setOceanControlsEnabled(enabled){
+    const settings = Scene.getOceanSettings ? Scene.getOceanSettings() : null;
+    const oceanActive = !!settings?.enabled;
+    const allow = enabled && oceanActive;
     Object.entries(oceanControls).forEach(([key, ctrl])=>{
       if(!ctrl) return;
-      if(key === 'enable'){ ctrl.disabled = false; }
-      else ctrl.disabled = !enabled;
+      if(key === 'enable'){ ctrl.disabled = !enabled; return; }
+      if(key === 'screenshot'){ ctrl.disabled = !allow; return; }
+      ctrl.disabled = !allow;
     });
-    if(oceanPanelHint) oceanPanelHint.style.display = enabled ? 'none' : 'block';
+    if(oceanPanelHint) oceanPanelHint.style.display = allow ? 'none' : 'block';
   }
 
   function updateOceanButton(settings){
@@ -19708,18 +20636,40 @@ const UI = (()=>{
     els.oceanSettingsBtn.classList.toggle('warn', enabled && !presentActive);
   }
 
+  function updateOceanDisplay(key, value){
+    const span = oceanValueDisplays[key];
+    if(!span) return;
+    const formatter = oceanSliderFormatters[key];
+    const num = Number(value);
+    if(formatter){ span.textContent = formatter(num); }
+    else if(Number.isFinite(num)){ span.textContent = num.toFixed(2); }
+    else { span.textContent = value == null ? '' : String(value); }
+  }
+
   function syncOceanSettings(){
     if(!Scene.getOceanSettings) return;
     const settings = Scene.getOceanSettings() || {};
     if(oceanControls.enable) oceanControls.enable.checked = !!settings.enabled;
-    if(oceanControls.timeScale && settings.timeScale != null) oceanControls.timeScale.value = settings.timeScale;
-    if(oceanControls.foamAmount && settings.foamAmount != null) oceanControls.foamAmount.value = settings.foamAmount;
-    if(oceanControls.horizonBoost && settings.horizonBoost != null) oceanControls.horizonBoost.value = settings.horizonBoost;
-    if(oceanControls.microScale && settings.microScale != null) oceanControls.microScale.value = settings.microScale;
-    if(oceanControls.showGrid) oceanControls.showGrid.checked = !!settings.showGrid;
-    if(oceanControls.showTowers) oceanControls.showTowers.checked = !!settings.showTowers;
-    if(oceanControls.showFloaters) oceanControls.showFloaters.checked = !!settings.showFloaters;
-    setOceanControlsEnabled(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false);
+    oceanRangeKeys.forEach((key)=>{
+      const ctrl = oceanControls[key];
+      if(!ctrl) return;
+      const val = settings[key];
+      if(val == null) return;
+      ctrl.value = val;
+      updateOceanDisplay(key, val);
+    });
+    oceanColorKeys.forEach((key)=>{
+      const ctrl = oceanControls[key];
+      if(!ctrl) return;
+      if(settings[key]) ctrl.value = settings[key];
+    });
+    oceanToggleKeys.forEach((key)=>{
+      const ctrl = oceanControls[key];
+      if(!ctrl) return;
+      ctrl.checked = !!settings[key];
+    });
+    const presentActive = Scene.isPresentEnabled ? Scene.isPresentEnabled() : false;
+    setOceanControlsEnabled(presentActive);
     updateOceanButton(settings);
   }
 
@@ -20050,35 +21000,41 @@ const UI = (()=>{
       });
     }
 
-    const oceanRangeBindings = {
-      timeScale:'timeScale',
-      foamAmount:'foamAmount',
-      horizonBoost:'horizonBoost',
-      microScale:'microScale'
-    };
-    Object.entries(oceanRangeBindings).forEach(([key, setting])=>{
+    oceanRangeKeys.forEach((key)=>{
       const ctrl = oceanControls[key];
       if(!ctrl) return;
       ctrl.addEventListener('input',(e)=>{
         const value = parseFloat(e.target.value);
-        Actions.updateOceanSettings({ [setting]: value });
-        syncOceanSettings();
+        if(!Number.isFinite(value)) return;
+        Actions.updateOceanSettings({ [key]: value });
+        updateOceanDisplay(key, value);
       });
     });
 
-    const oceanToggleBindings = {
-      showGrid:'showGrid',
-      showTowers:'showTowers',
-      showFloaters:'showFloaters'
-    };
-    Object.entries(oceanToggleBindings).forEach(([key, setting])=>{
+    oceanColorKeys.forEach((key)=>{
+      const ctrl = oceanControls[key];
+      if(!ctrl) return;
+      ctrl.addEventListener('input',(e)=>{
+        const value = e.target.value;
+        Actions.updateOceanSettings({ [key]: value });
+      });
+    });
+
+    oceanToggleKeys.forEach((key)=>{
       const ctrl = oceanControls[key];
       if(!ctrl) return;
       ctrl.addEventListener('change',(e)=>{
-        Actions.updateOceanSettings({ [setting]: !!e.target.checked });
-        syncOceanSettings();
+        Actions.updateOceanSettings({ [key]: !!e.target.checked });
       });
     });
+
+    if(oceanControls.screenshot && !oceanControls.screenshot._wired){
+      oceanControls.screenshot._wired = true;
+      oceanControls.screenshot.addEventListener('click',(e)=>{
+        e.preventDefault();
+        Scene.captureOceanScreenshot?.();
+      });
+    }
 
     syncGraphicsSettings();
     syncOceanSettings();
