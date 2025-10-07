@@ -6872,9 +6872,12 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
   });
   
   if(enabled){
-    targetList.forEach(targetArr=>{ 
-      console.log(`[CELL_PHYS] Rebuilding colliders for array #${targetArr.id} with enabled=${targetArr.params?.physics?.enabled}`);
-      try{ Scene.debounceColliderRebuild(targetArr); }catch{} 
+    const arraysById = Store.getState().arrays || {};
+    targetList.forEach(targetArr=>{
+      const latest = arraysById[targetArr.id] || null;
+      console.log(`[CELL_PHYS] Rebuilding colliders for array #${targetArr.id} with enabled=${latest?.params?.physics?.enabled}`);
+      if(!latest) return;
+      try{ Scene.debounceColliderRebuild(latest); }catch{}
     });
   }
 
