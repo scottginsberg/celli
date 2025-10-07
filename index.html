@@ -1020,7 +1020,7 @@ function parseArrayIdFromKey(key){
   return Number.isFinite(id) ? id : null;
 }
 
-function gatherFormulaActiveArrayIds(sourceByCell, depsByAnchor, extraIds=[]){
+function computeFormulaActiveArrayIds(sourceByCell, depsByAnchor, extraIds=[]){
   const active = new Set();
   try{
     if(Array.isArray(extraIds)){
@@ -1049,11 +1049,28 @@ function gatherFormulaActiveArrayIds(sourceByCell, depsByAnchor, extraIds=[]){
   return active;
 }
 
+function gatherFormulaActiveArrayIds(sourceByCell, depsByAnchor, extraIds=[]){
+  return computeFormulaActiveArrayIds(sourceByCell, depsByAnchor, extraIds);
+}
+
+let _gatherFormulaFallbackWarned = false;
+function resolveFormulaActiveArrayIds(sourceByCell, depsByAnchor, extraIds=[]){
+  try{
+    return gatherFormulaActiveArrayIds(sourceByCell, depsByAnchor, extraIds);
+  }catch(err){
+    if(!_gatherFormulaFallbackWarned){
+      console.warn('gatherFormulaActiveArrayIds unavailable, using fallback computation', err);
+      _gatherFormulaFallbackWarned = true;
+    }
+    return computeFormulaActiveArrayIds(sourceByCell, depsByAnchor, extraIds);
+  }
+}
+
 function getFormulaActiveArrayIds(){
   try{
     if(typeof Store === 'undefined' || !Store?.getState) return new Set();
     const state = Store.getState();
-    return gatherFormulaActiveArrayIds(state.sourceByCell, state.depsByAnchor);
+    return resolveFormulaActiveArrayIds(state.sourceByCell, state.depsByAnchor);
   }catch{
     return new Set();
   }
@@ -1215,7 +1232,7 @@ const Store = createStore((set,get)=>{
         };
 
         // Enhanced state preservation - keep ALL meaningful data
-        const hostedByFormula = gatherFormulaActiveArrayIds(s.sourceByCell, s.depsByAnchor);
+        const hostedByFormula = resolveFormulaActiveArrayIds(s.sourceByCell, s.depsByAnchor);
         const debugMode = !!s.scene?.physicsDebugAll;
         const arrays = {};
         Object.values(s.arrays).forEach(a=>{
@@ -1664,7 +1681,7 @@ const Store = createStore((set,get)=>{
             extraFormulaIds.push(arr.id);
           }
         });
-        const combinedHosted = gatherFormulaActiveArrayIds(sourceByCell, null, extraFormulaIds);
+        const combinedHosted = resolveFormulaActiveArrayIds(sourceByCell, null, extraFormulaIds);
         Object.values(arrays).forEach(arr=>{
           if(!arr) return;
           const mode = determineCollisionMode(arr, null, { debugMode:false, formulaHostedSet: combinedHosted });
