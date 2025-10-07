@@ -1,15 +1,17 @@
-    const presentBaseColor = FancyGraphics.settings.darkBg ? PRESENT_DARK_BG : PRESENT_LIGHT_BG;
-    const oceanIsActive = !!(OceanBackdrop?.getSettings?.().enabled);
-    if(oceanIsActive){
-      renderer.setClearColor(presentBaseColor, 0);
-      scene.background = null;
-      if(renderer.domElement){ renderer.domElement.style.backgroundColor = 'transparent'; }
-    }else{
-      renderer.setClearColor(presentBaseColor, 1);
-      scene.background = presentBaseColor.clone();
-      if(renderer.domElement){ renderer.domElement.style.backgroundColor = ''; }
+  function isOceanBackdropVisible(){
+    try{
+      const settings = OceanBackdrop.getSettings?.();
+      return !!(settings && settings.enabled && FancyGraphics.enabled);
+    }catch(e){
+      return false;
     }
-      if(renderer?.domElement){ renderer.domElement.style.backgroundColor = ''; }
+  }
+
+    const baseBg = FancyGraphics.settings.darkBg ? PRESENT_DARK_BG : PRESENT_LIGHT_BG;
+    const oceanVisible = isOceanBackdropVisible();
+    renderer.setClearColor(baseBg, oceanVisible ? 0 : 1);
+    scene.background = oceanVisible ? null : baseBg.clone();
       if(FancyGraphics.enabled){
         applyFancyRuntimeSettings();
       }
+    renderer=new THREE.WebGLRenderer({canvas, antialias:true, stencil:true, alpha:true});
