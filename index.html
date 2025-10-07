@@ -6716,13 +6716,12 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
   
   console.log(`[CELL_PHYS] called on array #${arr?.id}, enabled=${enabled}, scope.mode=${scope.mode}, debugForceAll=${debugForceAll}`);
   
-  let targetList;
-  if(debugForceAll){
+  let targetList = targets.filter(Boolean);
+  if(!targetList.length && arr){
+    targetList = [arr];
+  }
+  if(debugForceAll && scope.mode === 'all'){
     targetList = Object.values(Store.getState().arrays || {}).filter(Boolean);
-  } else if(scope.mode === 'all'){
-    targetList = targets.filter(Boolean);
-  } else {
-    targetList = arr ? [arr] : targets.filter(Boolean);
   }
   const seenTargets = new Set();
   targetList = targetList.filter(targetArr => {
