@@ -1171,6 +1171,7 @@ const Store = createStore((set,get)=>{
         Object.values(s.arrays).forEach(a=>{
           const outA = {
             id:a.id, name:a.name, size:a.size, hidden:a.hidden, sealed:a.sealed, offset:a.offset,
+            collisionMode: a.collisionMode === 'physics' ? 'physics' : 'edit',
             fnPolicy: a.fnPolicy ? {
               mode: a.fnPolicy.mode,
               allow: Array.from(a.fnPolicy.allow || []),
@@ -1489,6 +1490,7 @@ const Store = createStore((set,get)=>{
           arrays[a.id] = {
             id:a.id, name:a.name, size:{...a.size}, hidden:a.hidden, sealed:a.sealed, offset:{...a.offset},
             state:'ACTIVE', stableCount:0, lastHash:null, lastDepSig:null,
+            collisionMode: a.collisionMode === 'physics' ? 'physics' : 'edit',
             fnPolicy: a.fnPolicy ? {
               mode: a.fnPolicy.mode || 'ALLOW_ALL',
               allow: new Set(a.fnPolicy.allow || []),
@@ -1513,6 +1515,14 @@ const Store = createStore((set,get)=>{
           // Reserved arrays default hidden if not explicitly saved as visible
           if((a.id===-1) && arrays[a.id].hidden !== true){ arrays[a.id].hidden = true; }
           
+          const savedMode = (a.collisionMode === 'physics') ? 'physics' : (a.collisionMode === 'edit' ? 'edit' : null);
+          if(savedMode){
+            arrays[a.id].collisionMode = savedMode;
+          }
+          if(arrays[a.id].collisionMode !== 'physics' && arrays[a.id].params?.physics?.enabled){
+            arrays[a.id].collisionMode = 'physics';
+          }
+
           Object.entries(a.chunks||{}).forEach(([k,ch])=>{
             const C = new Scene.Chunk(arrays[a.id], ch.coord);
             C.cells = (ch.cells||[]).map(c=>{
@@ -2215,6 +2225,7 @@ const Actions = {
       const arr = {
       id:arrId, name, size:{...size}, hidden, sealed,
       state:'ACTIVE', stableCount:0, lastHash:null, lastDepSig:null,
+      collisionMode:'edit',
       fnPolicy:{mode:'ALLOW_ALL', allow:new Set(), deny:new Set(), tags:new Set()},
       params:{}, locks:new Set(),
       chunks:{}, labels:[], _frame:null, _colliders:[], offset:{...offset}, _occluders:null
@@ -6956,6 +6967,7 @@ tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
       if(arrays[arr.id]){
         arrays[arr.id] = {
           ...arrays[arr.id],
+          collisionMode: effectiveEnabled ? 'physics' : 'edit',
           params: {
             ...arrays[arr.id].params,
             physics: {
@@ -9371,6 +9383,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         const snapshot = {
           avatar: clonePhysicsConfig(Store.getState().avatarPhysics) || null,
           arrays: new Map(),
+          collisionModes: new Map(),
           global: capturePlatformerGlobals()
         };
         Store.setState(state=>{
@@ -9380,12 +9393,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             const nextParams = { ...(arr.params || {}) };
             const prevPhysics = clonePhysicsConfig(nextParams.physics);
             snapshot.arrays.set(id, prevPhysics ?? null);
+            if(!snapshot.collisionModes.has(id)){
+              snapshot.collisionModes.set(id, arr.collisionMode === 'physics' ? 'physics' : 'edit');
+            }
             const debugPhysics = { ...(nextParams.physics || {}), enabled:true, __debugOverride:true };
             const sources = { ...(debugPhysics.__sources || {}) };
             sources.enabled = Number.POSITIVE_INFINITY;
             debugPhysics.__sources = sources;
             nextParams.physics = debugPhysics;
-            const nextArr = { ...arr, params: nextParams };
+            const nextArr = { ...arr, collisionMode: 'physics', params: nextParams };
             arrays[id] = nextArr;
             arraysToRebuild.push(nextArr);
             console.log(`[PHYSICS] Debug override set for array #${id}: enabled=${debugPhysics.enabled}, __debugOverride=${debugPhysics.__debugOverride}`);
@@ -9412,12 +9428,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             if(!debugPhysicsSnapshot.arrays.has(id)){
               debugPhysicsSnapshot.arrays.set(id, prevPhysics ?? null);
             }
+            if(!debugPhysicsSnapshot.collisionModes.has(id)){
+              debugPhysicsSnapshot.collisionModes.set(id, arr.collisionMode === 'physics' ? 'physics' : 'edit');
+            }
             const debugPhysics = { ...(nextParams.physics || {}), enabled:true, __debugOverride:true };
             const sources = { ...(debugPhysics.__sources || {}) };
             sources.enabled = Number.POSITIVE_INFINITY;
             debugPhysics.__sources = sources;
             nextParams.physics = debugPhysics;
-            const nextArr = { ...arr, params: nextParams };
+            const nextArr = { ...arr, collisionMode: 'physics', params: nextParams };
             arrays[id] = nextArr;
             arraysToRebuild.push(nextArr);
             arraysChanged = true;
@@ -9451,16 +9470,20 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         const hasSnapshot = snapshot.arrays.has(id);
         const prev = hasSnapshot ? snapshot.arrays.get(id) : undefined;
         const nextParams = { ...(arr.params || {}) };
+        const savedMode = (snapshot.collisionModes && snapshot.collisionModes.has(id))
+          ? snapshot.collisionModes.get(id)
+          : (prev && prev.enabled ? 'physics' : arr.collisionMode);
+        const restoredMode = savedMode === 'physics' ? 'physics' : 'edit';
         if(prev != null){
           nextParams.physics = clonePhysicsConfig(prev);
-          arrays[id] = { ...arr, params: nextParams };
+          arrays[id] = { ...arr, collisionMode: restoredMode, params: nextParams };
           return;
         }
         delete nextParams.physics;
         if(Object.keys(nextParams).length){
-          arrays[id] = { ...arr, params: nextParams };
+          arrays[id] = { ...arr, collisionMode: restoredMode, params: nextParams };
         } else {
-          const clone = { ...arr };
+          const clone = { ...arr, collisionMode: restoredMode };
           delete clone.params;
           arrays[id] = clone;
         }
@@ -17650,7 +17673,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(!center) return null;
       const distSq = center.distanceToSquared(worldVec);
       const cell = Formula.getCell({arrId:arr.id,x:coord.x,y:coord.y,z:coord.z});
-      return { arr, coord, cell, center, distSq };
+      const collisionMode = arr?.collisionMode === 'physics' ? 'physics' : 'edit';
+      return { arr, coord, cell, center, distSq, collisionMode };
     };
 
     if(preferSelection && sel?.arrayId){
@@ -17673,13 +17697,16 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     // In debug mode, treat all arrays as physics enabled
     const sceneState = Store.getState().scene;
     const debugMode = !!sceneState?.physicsDebugAll;
-    const enabled = !!arr?.params?.physics?.enabled;
+    const collisionMode = arr?.collisionMode === 'physics' ? 'physics' : 'edit';
+    const enabled = collisionMode === 'physics';
+    const arrPhysicsEnabled = !!arr?.params?.physics?.enabled;
     console.log(`[PHYSICS] exitPhysicsOnNonEnabledArray ENTRY: array=${arr.id}`);
     console.log(`[PHYSICS]   scene.physicsDebugAll=${sceneState?.physicsDebugAll}`);
     console.log(`[PHYSICS]   debugMode=${debugMode}`);
-    console.log(`[PHYSICS]   arr.params.physics.enabled=${enabled}`);
+    console.log(`[PHYSICS]   arr.collisionMode=${collisionMode}`);
+    console.log(`[PHYSICS]   arr.params.physics.enabled=${arrPhysicsEnabled}`);
     console.log(`[PHYSICS]   arr.params.physics.__debugOverride=${!!arr?.params?.physics?.__debugOverride}`);
-    
+
     if(debugMode){
       console.log('[PHYSICS] ✓ Debug mode ACTIVE - NOT exiting physics for array', arr.id);
       return false;
@@ -17956,6 +17983,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const world = new THREE.Vector3(cachedPlayerPos.x, cachedPlayerPos.y, cachedPlayerPos.z);
       const hit = locateArrayCollision(world);
       if(!hit){ lastTouchKey=null; return; }
+      const debugMode = !!Store.getState().scene?.physicsDebugAll;
+      if(!debugMode && hit.collisionMode !== 'physics'){ lastTouchKey=null; return; }
       const key = `${hit.arr.id}:${hit.coord.x},${hit.coord.y},${hit.coord.z}`;
       // Removed automatic exit - physics mode should work on any array
       if(key===lastTouchKey) return;
@@ -17977,6 +18006,13 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       if(!hit){ lastLandKey=null; cancelLandingCellAnimation(); return; }
       const key = `${hit.arr.id}:${hit.coord.x},${hit.coord.y},${hit.coord.z}`;
       if(key===lastLandKey) return;
+      const debugMode = !!Store.getState().scene?.physicsDebugAll;
+      if(hit.collisionMode !== 'physics' && !debugMode){
+        lastLandKey = key;
+        exitPhysicsOnNonEnabledArray(hit);
+        cancelLandingCellAnimation();
+        return;
+      }
       lastLandKey = key;
       const cell = hit.cell ?? Formula.getCell({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z});
       const bounceCfg = parseBounceMeta(cell?.meta);
