@@ -2122,82 +2122,48 @@ const Write = (() => {
   return { start, set, commit, rollback };
 })();
 
-function computeSelectionFaceHint(arrayId, anchor, focus, range){
+function computeSelectionFaceHint(anchor, focus, range){
   try{
     if(!anchor || !focus || !range) return null;
-
-    const axisKeys = ['x','y','z'];
+    // For multi-cell selections, always use camera direction to show border facing viewer
+    try{
+      if(window.Scene && typeof window.Scene.getCamera === 'function'){
+        const camera = window.Scene.getCamera();
+        if(camera){
+          const camDir = new THREE.Vector3();
+          camera.getWorldDirection(camDir);
+          // Reverse direction (we want the face pointing toward camera)
+          const vec = { x: -camDir.x, y: -camDir.y, z: -camDir.z };
+          const abs = { x: Math.abs(vec.x), y: Math.abs(vec.y), z: Math.abs(vec.z) };
+          let axis = 'x';
+          let axisIndex = 0;
+          let best = abs.x;
+          if(abs.y > best){ axis = 'y'; axisIndex = 1; best = abs.y; }
+          if(abs.z > best){ axis = 'z'; axisIndex = 2; best = abs.z; }
+          const sign = vec[axis] >= 0 ? 1 : -1;
+          return { axis, axisIndex, sign };
+        }
+      }
+    }catch{}
+    // Fallback: use anchor relative to center (shouldn't normally reach here)
     const center = {
       x: (range.x1 + range.x2) / 2,
       y: (range.y1 + range.y2) / 2,
       z: (range.z1 != null && range.z2 != null) ? ((range.z1 + range.z2) / 2) : ((anchor.z + focus.z) / 2)
     };
-
-    let axisIndex = null;
-    let sign = null;
-
-    if(Number.isFinite(arrayId) && Store?.getState){
-      try{
-        const arr = Store.getState().arrays?.[arrayId];
-        if(arr){
-          let facing = arr._facingState;
-          if(!facing || !Number.isInteger(facing.axis)){
-            if(arr._frame){ facing = facingFromCamera(arr._frame); }
-          }
-          if(facing){
-            if(Number.isInteger(facing.axis)){
-              axisIndex = Math.max(0, Math.min(2, facing.axis|0));
-            }
-            const hintedSign = Number(facing.sign);
-            if(Number.isFinite(hintedSign) && hintedSign !== 0){
-              sign = hintedSign > 0 ? 1 : -1;
-            }
-          }
-
-          if(arr._frame && Scene?.getCamera){
-            const cam = Scene.getCamera?.();
-            const worldCenter = Scene.worldPos?.(arr, center.x, center.y, center.z);
-            if(cam && worldCenter){
-              const toCamWorld = cam.position.clone().sub(worldCenter.clone());
-              const inv = new THREE.Matrix4().copy(arr._frame.matrixWorld).invert();
-              const toCamLocal = toCamWorld.applyMatrix3(new THREE.Matrix3().setFromMatrix4(inv)).normalize();
-              if(axisIndex === null){
-                const ax=Math.abs(toCamLocal.x), ay=Math.abs(toCamLocal.y), az=Math.abs(toCamLocal.z);
-                if(ax>=ay && ax>=az){ axisIndex = 0; sign = Math.sign(toCamLocal.x)||1; }
-                else if(ay>=ax && ay>=az){ axisIndex = 1; sign = Math.sign(toCamLocal.y)||1; }
-                else { axisIndex = 2; sign = Math.sign(toCamLocal.z)||1; }
-              } else if(sign === null){
-                const axisKey = axisKeys[axisIndex];
-                const comp = toCamLocal[axisKey];
-                if(Number.isFinite(comp) && comp !== 0){
-                  sign = comp > 0 ? 1 : -1;
-                }
-              }
-            }
-          }
-        }
-      }catch(e){ console.warn('computeSelectionFaceHint camera-based hint failed', e); }
-    }
-
-    if(axisIndex === null || sign === null){
-      const vec = {
-        x: anchor.x - center.x,
-        y: anchor.y - center.y,
-        z: anchor.z - center.z
-      };
-      const abs = { x: Math.abs(vec.x), y: Math.abs(vec.y), z: Math.abs(vec.z) };
-      axisIndex = 0;
-      let best = abs.x;
-      if(abs.y > best){ axisIndex = 1; best = abs.y; }
-      if(abs.z > best){ axisIndex = 2; best = abs.z; }
-      if(best < 1e-5) return null;
-      if(sign === null){
-        const axisKey = axisKeys[axisIndex];
-        sign = vec[axisKey] >= 0 ? 1 : -1;
-      }
-    }
-
-    const axis = axisKeys[axisIndex] || 'z';
+    const vec = {
+      x: anchor.x - center.x,
+      y: anchor.y - center.y,
+      z: anchor.z - center.z
+    };
+    const abs = { x: Math.abs(vec.x), y: Math.abs(vec.y), z: Math.abs(vec.z) };
+    let axis = 'x';
+    let axisIndex = 0;
+    let best = abs.x;
+    if(abs.y > best){ axis = 'y'; axisIndex = 1; best = abs.y; }
+    if(abs.z > best){ axis = 'z'; axisIndex = 2; best = abs.z; }
+    if(best < 1e-5) return null;
+    const sign = vec[axis] >= 0 ? 1 : -1;
     return { axis, axisIndex, sign };
   }catch(e){ console.warn('computeSelectionFaceHint failed', e); return null; }
 }
@@ -2685,7 +2651,7 @@ const Actions = {
     const zs=[anchor.z,focus.z].map(v=>Number.isFinite(v)?v:0).sort((a,b)=>a-b);
     const focusZ = Number.isFinite(focus.z) ? focus.z : (Number.isFinite(anchor.z) ? anchor.z : 0);
     const range={x1:xs[0],y1:ys[0],x2:xs[1],y2:ys[1],z:focusZ,z1:zs[0],z2:zs[1]};
-    const faceHint = computeSelectionFaceHint(arrayId, anchor, focus, range);
+    const faceHint = computeSelectionFaceHint(anchor, focus, range);
     Store.setState(s=>({ selection:{arrayId, focus, anchor, range, faceHint}, ui:{...s.ui, zLayer:focusZ, lastInteraction:interactionSource} }));
     Scene.updateFocus(Store.getState().selection);
     UI.updateFocusChip();
@@ -6736,6 +6702,9 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
 
   const { targets, scope } = resolveArrayScopeTargets(arr, anchor, scopeArg);
   const debugForceAll = !!Store.getState().scene?.physicsDebugAll;
+  
+  console.log(`[CELL_PHYS] called on array #${arr?.id}, enabled=${enabled}, scope.mode=${scope.mode}, debugForceAll=${debugForceAll}`);
+  
   let targetList;
   if(debugForceAll){
     targetList = Object.values(Store.getState().arrays || {}).filter(Boolean);
@@ -6752,6 +6721,7 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
     return true;
   });
   if(!targetList.length && arr) targetList = [arr];
+  console.log(`[CELL_PHYS] targeting ${targetList.length} arrays: [${targetList.map(a=>a.id).join(', ')}]`);
   const respawnUpdates = {};
 
   const resolveRespawn = (targetArr)=>{
@@ -6841,50 +6811,71 @@ tag('CELL_PHYS',["PHYSICS"], (anchor, arr, ast) => {
     };
   };
 
-  targetList.forEach(targetArr => {
-    if(!targetArr) return;
-    targetArr.params = targetArr.params || {};
-    targetArr.params.physics = targetArr.params.physics || { enabled:false };
-    const phys = targetArr.params.physics;
-    const debugLocked = !!phys.__debugOverride;
-    const sources = phys.__sources || {};
-    if(debugLocked){
+  // Mutate arrays directly in Store to ensure changes persist
+  Store.setState(state => {
+    const arrays = { ...state.arrays };
+    targetList.forEach(targetArr => {
+      if(!targetArr) return;
+      // Get fresh reference from Store
+      const storeArr = arrays[targetArr.id];
+      if(!storeArr) return;
+      
+      const nextParams = { ...(storeArr.params || {}) };
+      nextParams.physics = { ...(nextParams.physics || { enabled:false }) };
+      const phys = nextParams.physics;
+      const debugLocked = !!phys.__debugOverride;
+      const sources = { ...(phys.__sources || {}) };
+      
+      if(debugLocked){
+        console.log(`[CELL_PHYS] Array #${storeArr.id} is debug-locked, skipping`);
+        phys.__sources = sources;
+        if(respawnProvided){
+          const respawnInfo = resolveRespawn(storeArr);
+          respawnUpdates[storeArr.id] = respawnInfo || null;
+        }
+        return;
+      }
+      const priority = (()=>{
+        if(scope.mode === 'host') return 2;
+        if(scope.mode === 'limit'){
+          return (storeArr.id === arr.id) ? 2 : 1;
+        }
+        return 0;
+      })();
+      const claim = (key, provided=true)=>{
+        if(!provided) return false;
+        const prev = sources[key] ?? -Infinity;
+        if(priority >= prev){
+          sources[key] = priority;
+          return true;
+        }
+        return false;
+      };
+      if(claim('enabled', true)){
+        phys.enabled = enabled;
+        console.log(`[CELL_PHYS] Set array #${storeArr.id} physics.enabled = ${enabled}, priority=${priority}, scope.mode=${scope.mode}`);
+      }
+      if(claim('jumpCount', jumpCount !== undefined)) phys.jumpCount = jumpCount;
+      if(claim('gravity', !!gravityVec)) phys.gravity = gravityVec ? { x:gravityVec.x, y:gravityVec.y, z:gravityVec.z } : undefined;
+      if(claim('boundByArrayFloor', boundByFloor !== undefined)) phys.boundByArrayFloor = boundByFloor;
       phys.__sources = sources;
-      if(respawnProvided){
-        const respawnInfo = resolveRespawn(targetArr);
-        respawnUpdates[targetArr.id] = respawnInfo || null;
+      if(respawnProvided && claim('respawn', true)){
+        const respawnInfo = resolveRespawn(storeArr);
+        respawnUpdates[storeArr.id] = respawnInfo || null;
       }
-      return;
-    }
-    const priority = (()=>{
-      if(scope.mode === 'host') return 2;
-      if(scope.mode === 'limit'){
-        return (targetArr.id === arr.id) ? 2 : 1;
-      }
-      return 0;
-    })();
-    const claim = (key, provided=true)=>{
-      if(!provided) return false;
-      const prev = sources[key] ?? -Infinity;
-      if(priority >= prev){
-        sources[key] = priority;
-        return true;
-      }
-      return false;
-    };
-    if(claim('enabled', true)) phys.enabled = enabled;
-    if(claim('jumpCount', jumpCount !== undefined)) phys.jumpCount = jumpCount;
-    if(claim('gravity', !!gravityVec)) phys.gravity = gravityVec ? { x:gravityVec.x, y:gravityVec.y, z:gravityVec.z } : undefined;
-    if(claim('boundByArrayFloor', boundByFloor !== undefined)) phys.boundByArrayFloor = boundByFloor;
-    phys.__sources = sources;
-    if(respawnProvided && claim('respawn', true)){
-      const respawnInfo = resolveRespawn(targetArr);
-      respawnUpdates[targetArr.id] = respawnInfo || null;
-    }
+      
+      // Update the array in Store with new physics params
+      arrays[storeArr.id] = { ...storeArr, params: nextParams };
+    });
+    
+    return { arrays };
   });
-
+  
   if(enabled){
-    targetList.forEach(targetArr=>{ try{ Scene.debounceColliderRebuild(targetArr); }catch{} });
+    targetList.forEach(targetArr=>{ 
+      console.log(`[CELL_PHYS] Rebuilding colliders for array #${targetArr.id} with enabled=${targetArr.params?.physics?.enabled}`);
+      try{ Scene.debounceColliderRebuild(targetArr); }catch{} 
+    });
   }
 
   const updateRespawns = Object.keys(respawnUpdates).length > 0;
@@ -6954,6 +6945,32 @@ tag('CELLI_PHYS',["PHYSICS","AVATAR"], (anchor, arr, ast) => {
   Store.setState(state => ({
     avatarPhysics: { ...state.avatarPhysics, ...updates }
   }));
+
+  // Mark this array as the physics host so colliders are built for it
+  try{
+    Store.setState(state => {
+      const arrays = { ...state.arrays };
+      if(arrays[arr.id]){
+        arrays[arr.id] = {
+          ...arrays[arr.id],
+          params: {
+            ...arrays[arr.id].params,
+            physics: {
+              ...arrays[arr.id].params?.physics,
+              enabled: effectiveEnabled
+            }
+          }
+        };
+      }
+      return { arrays };
+    });
+    console.log(`[PHYSICS] Set array #${arr.id} "${arr.name}" physics.enabled=${effectiveEnabled}`);
+    // Trigger collider rebuild for this array if physics is being enabled
+    if(effectiveEnabled && Scene?.debounceColliderRebuild){
+      const updatedArr = Store.getState().arrays[arr.id];
+      if(updatedArr) Scene.debounceColliderRebuild(updatedArr);
+    }
+  }catch(e){ console.warn('[PHYSICS] Failed to set array physics params', e); }
 
   try{
     const g = Store.getState().globalState;
@@ -9368,6 +9385,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             const nextArr = { ...arr, params: nextParams };
             arrays[id] = nextArr;
             arraysToRebuild.push(nextArr);
+            console.log(`[PHYSICS] Debug override set for array #${id}: enabled=${debugPhysics.enabled}, __debugOverride=${debugPhysics.__debugOverride}`);
           });
           debugPhysicsSnapshot = snapshot;
           const avatarPhysics = {
@@ -9457,10 +9475,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
   function setPhysicsDebugAll(enable){
     const next = !!enable;
+    console.log(`[PHYSICS] setPhysicsDebugAll called: enable=${enable}, next=${next}`);
     Store.setState(state=>({ scene:{ ...state.scene, physicsDebugAll: next } }));
+    console.log(`[PHYSICS] scene.physicsDebugAll now set to: ${Store.getState().scene.physicsDebugAll}`);
     if(next){
+      console.log('[PHYSICS] Applying debug overrides (enabling all arrays)');
       applyDebugPhysicsOverrides(true);
     } else {
+      console.log('[PHYSICS] Removing debug overrides (restoring original state)');
       applyDebugPhysicsOverrides(false);
     }
     persistPhysicsDebugFlag(next);
@@ -10354,9 +10376,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   }
 
   function planeAxesForFace(axis){
-    if(axis===0) return {horizontal:2, vertical:1};
-    if(axis===1) return {horizontal:0, vertical:2};
-    return {horizontal:0, vertical:1};
+    // Returns which axes form the plane perpendicular to the given axis
+    // horizontal and vertical are the two axes that span the visible face
+    if(axis===0) return {horizontal:2, vertical:1}; // X face: Z is horizontal, Y is vertical
+    if(axis===1) return {horizontal:0, vertical:2}; // Y face (top/bottom): X is horizontal, Z is vertical
+    return {horizontal:0, vertical:1}; // Z face (front/back): X is horizontal, Y is vertical
   }
 
   function updateSelectionCelliHighlight(arr, center, counts, scale, faceHint){
@@ -10390,8 +10414,12 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const verticalCount = counts[axisKeys[planeAxes.vertical]] || 1;
     const depthCount = Math.max(1, counts[axisKey] || 1);
 
-    const cellWidth = Math.max(horizontalCount * scale, scale * 0.9);
-    const cellHeight = Math.max(verticalCount * scale, scale * 0.9);
+    // Calculate dimensions to cover the full visible extent of selection
+    // Width and height should match the actual cell counts in those directions
+    const cellWidth = horizontalCount * scale;
+    const cellHeight = verticalCount * scale;
+    
+    console.log(`[CELLI] Border sizing: axis=${axis} (${axisKey}), horizontal=${axisKeys[planeAxes.horizontal]}:${horizontalCount}, vertical=${axisKeys[planeAxes.vertical]}:${verticalCount}, depth=${axisKey}:${depthCount}, w=${cellWidth.toFixed(2)}, h=${cellHeight.toFixed(2)}`);
     const cellDepth = Math.max(scale, scale * 0.9);
     const pad = Math.max(scale * 0.08, 0.06);
     const bodyBorder = Math.max(scale * 0.22, Math.min(cellWidth, cellHeight) * 0.09);
@@ -10404,7 +10432,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const outerWidth = mouthOuterWidth + bodyBorder * 2;
     const outerHeight = mouthOuterHeight + bodyBorder * 2;
 
-    const thicknessBase = Math.max(scale * 1.5, 1.05);
+    // Frame depth should cover the entire selection depth
+    const thicknessBase = Math.max(depthCount * scale, 1.05);
     const depth = thicknessBase;
     const bodyDepth = depth;
     const mouthDepth = Math.max(thicknessBase * 0.58, 0.62);
@@ -10471,35 +10500,55 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
 
     const frameQuat = arr._frame ? arr._frame.getWorldQuaternion(new THREE.Quaternion()) : new THREE.Quaternion();
     const basisX = new THREE.Vector3(1,0,0).applyQuaternion(frameQuat);
-    const basisY = new THREE.Vector3(0,-1,0).applyQuaternion(frameQuat);
+    const basisY = new THREE.Vector3(0,1,0).applyQuaternion(frameQuat);
     const basisZ = new THREE.Vector3(0,0,1).applyQuaternion(frameQuat);
     const bases = [basisX, basisY, basisZ];
 
+    // Forward points out from the face (toward camera)
     const forward = bases[axis].clone().multiplyScalar(sign).normalize();
-    const worldUp = new THREE.Vector3(0,1,0);
-    let up = worldUp.clone();
-    if(Math.abs(up.dot(forward)) > 0.98){
-      up = new THREE.Vector3(0,0,1);
+    
+    // Build right and up vectors that align with the cell grid
+    // Use world coordinates and project onto the plane perpendicular to forward
+    const worldRight = new THREE.Vector3();
+    const worldUp = new THREE.Vector3();
+    
+    // Choose right and up based on which axis we're facing
+    if(axis === 0){ // X face
+      worldRight.copy(bases[2]); // Z axis  
+      worldUp.copy(bases[1]);    // Y axis
+    } else if(axis === 1){ // Y face  
+      worldRight.copy(bases[0]); // X axis
+      worldUp.copy(bases[2]);    // Z axis
+      // When looking from below, flip up to keep Celli upright
+      if(sign < 0) worldUp.multiplyScalar(-1);
+    } else { // Z face
+      worldRight.copy(bases[0]); // X axis
+      worldUp.copy(bases[1]);    // Y axis
+      // When looking from back (negative Z), flip up to keep Celli upright
+      if(sign < 0) worldUp.multiplyScalar(-1);
     }
-    up.sub(forward.clone().multiplyScalar(up.dot(forward))).normalize();
-    let right = new THREE.Vector3().crossVectors(forward, up).normalize();
-    if(right.lengthSq() < 1e-6){
-      right = bases[planeAxes.horizontal].clone().normalize();
-      right.sub(forward.clone().multiplyScalar(right.dot(forward))).normalize();
-    }
-    up = new THREE.Vector3().crossVectors(right, forward).normalize();
+    
+    console.log(`[CELLI] Border: axis=${axis} (${axisKey}), sign=${sign}, counts=(${counts.x},${counts.y},${counts.z}), h=${horizontalCount}, v=${verticalCount}, d=${depthCount}`);
+    console.log(`[CELLI] Vectors: fwd=(${forward.x.toFixed(2)},${forward.y.toFixed(2)},${forward.z.toFixed(2)}), right=(${worldRight.x.toFixed(2)},${worldRight.y.toFixed(2)},${worldRight.z.toFixed(2)}), up=(${worldUp.x.toFixed(2)},${worldUp.y.toFixed(2)},${worldUp.z.toFixed(2)})`);
 
-    const halfDepth = depthCount * 0.5;
-    const faceCenter = { ...center };
-    faceCenter[axisKey] = center[axisKey] + sign * halfDepth;
-
-    const rotMatrix = new THREE.Matrix4().makeBasis(right, up, forward);
-    selectionCelli.setRotationFromMatrix(rotMatrix);
-
-    const pos = worldPos(arr, faceCenter.x, faceCenter.y, faceCenter.z);
-    selectionCelli.position.copy(pos);
+    // Position the border to span the entire selection depth
+    // The border mesh has depth equal to the selection depth
+    // Position it at the selection center so it covers from back edge to front edge
+    const pos = worldPos(arr, center.x, center.y, center.z);
+    // Offset slightly toward camera so border front face appears in front
+    const offsetTowardCamera = forward.clone().multiplyScalar(0.02);
+    const adjustedPos = pos.clone().add(offsetTowardCamera);
+    selectionCelli.position.copy(adjustedPos);
+    
+    // Snap rotation to align with the viewing axis
+    const rotMatrix = new THREE.Matrix4().makeBasis(worldRight, worldUp, forward);
+    selectionCelli.rotation.setFromRotationMatrix(rotMatrix);
+    
     selectionCelli.visible = true;
     selectionCelli.userData.lastSignature = `${arr.id}:${center.x},${center.y},${center.z}:${counts.x},${counts.y},${counts.z}:${axis}:${sign}`;
+    
+    console.log(`[CELLI] Border placed: pos=(${adjustedPos.x.toFixed(2)},${adjustedPos.y.toFixed(2)},${adjustedPos.z.toFixed(2)}), axis=${axis}, sign=${sign}, visible=${selectionCelli.visible}`);
+    
     needsRender = true;
   }
   
@@ -11044,7 +11093,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         const mouse=new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1, -((e.clientY-rect.top)/rect.height)*2+1);
         const ray=new THREE.Raycaster(); ray.setFromCamera(mouse,camera);
         const pickMeshes=[];
-        try{ Object.values(Store.getState().arrays).forEach(a=>{ if(a.hidden) return; Object.values(a.chunks||{}).forEach(ch=>{ if(ch?.meshLOD1 && ch.meshLOD1.visible) pickMeshes.push(ch.meshLOD1); }); }); }catch{}
+        const physicsActive = !!Store.getState().scene?.physics;
+        const physicsDebugActive = !!Store.getState().scene?.physicsDebugAll;
+        try{ Object.values(Store.getState().arrays).forEach(a=>{ if(a.hidden) return; if(physicsActive && !physicsDebugActive && a.params?.physics?.enabled) return; Object.values(a.chunks||{}).forEach(ch=>{ if(ch?.meshLOD1 && ch.meshLOD1.visible) pickMeshes.push(ch.meshLOD1); }); }); }catch{}
         const hits=ray.intersectObjects(pickMeshes,false);
         if(hits.length){
           const h=hits[0];
@@ -12928,13 +12979,27 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   function rebuildCollidersForArray(arr){
     if(!rapierWorld) return;
     if(!Store.getState().scene.physics) return;
-
+    
+    // Check if this array should have colliders (debug mode enables all, or physics enabled)
+    const debugMode = !!Store.getState().scene?.physicsDebugAll;
+    const hasPhysicsParam = !!arr?.params?.physics?.enabled;
+    const physicsEnabled = debugMode || hasPhysicsParam;
+    
+    console.log(`[PHYSICS] rebuildCollidersForArray: array=${arr.id} "${arr.name}", debug=${debugMode}, hasPhysicsParam=${hasPhysicsParam}, physicsEnabled=${physicsEnabled}`);
+    
     arr._colliders = arr._colliders || [];
     arr._rigidBodies = arr._rigidBodies || [];
     arr._joints = arr._joints || [];
 
     clearColliders(arr);
-
+    
+    // Skip building if physics not enabled (unless debug mode)
+    if(!physicsEnabled){
+      console.log(`[PHYSICS] ✗ Skipping collider build for array #${arr.id} "${arr.name}" (not physics-enabled)`);
+      return;
+    }
+    console.log(`[PHYSICS] ✓ Building colliders for array #${arr.id} "${arr.name}"`);
+    
     const scale = arrayVoxelScale(arr);
     const staticOcc = new Map();
     const grouped = new Map(); // id -> {cells:Map,key->cell,pivots:[]}
@@ -12971,8 +13036,6 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }
       });
     });
-
-    console.log(`[PHYSICS] Building colliders for array #${arr.id}: ${staticSolidCount} static, ${groupedSolidCount} grouped cells`);
 
     const buildBoxesFromKeys = (keyStrings)=>{
       const keySet = new Set(keyStrings);
@@ -13134,6 +13197,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         });
       }
     });
+    
+    console.log(`[PHYSICS] Array #${arr.id} colliders built: ${arr._colliders?.length || 0} colliders, ${arr._rigidBodies?.length || 0} bodies, ${arr._joints?.length || 0} joints`);
   }
   // Procedural animation system for timed translations/preview
   const proceduralAnims = [];
@@ -13616,6 +13681,66 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           }
           needsRender = true;
         }
+        // Continuously update border orientation to face camera
+        try{
+          if(data?.lastSignature){
+            const sel = Store.getState().selection;
+            if(sel?.range && sel?.arrayId){
+              const arr = Store.getState().arrays[sel.arrayId];
+              if(arr && arr._frame){
+                // Use facingFromCamera to account for array rotation
+                const facing = facingFromCamera(arr._frame);
+                const axis = facing.axis;
+                const sign = facing.sign;
+                const sig = data.lastSignature.split(':');
+                const [oldAxis, oldSign] = [sig[sig.length-2], sig[sig.length-1]];
+                
+                // Always update rotation to continuously face camera
+                const axisKeys = ['x','y','z'];
+                const axisKey = axisKeys[axis];
+                const frameQuat = arr._frame.getWorldQuaternion(new THREE.Quaternion());
+                const basisX = new THREE.Vector3(1,0,0).applyQuaternion(frameQuat);
+                const basisY = new THREE.Vector3(0,1,0).applyQuaternion(frameQuat);
+                const basisZ = new THREE.Vector3(0,0,1).applyQuaternion(frameQuat);
+                const bases = [basisX, basisY, basisZ];
+                const forward = bases[axis].clone().multiplyScalar(sign).normalize();
+                
+                const worldRight = new THREE.Vector3();
+                const worldUp = new THREE.Vector3();
+                if(axis === 0){ // X face
+                  worldRight.copy(bases[2]); worldUp.copy(bases[1]);
+                } else if(axis === 1){ // Y face
+                  worldRight.copy(bases[0]); worldUp.copy(bases[2]);
+                  if(sign < 0) worldUp.multiplyScalar(-1);
+                } else { // Z face
+                  worldRight.copy(bases[0]); worldUp.copy(bases[1]);
+                  if(sign < 0) worldUp.multiplyScalar(-1);
+                }
+                // Snap rotation to align with viewing axis
+                const rotMatrix = new THREE.Matrix4().makeBasis(worldRight, worldUp, forward);
+                selectionCelli.rotation.setFromRotationMatrix(rotMatrix);
+                needsRender = true;
+                
+                // If axis changed, rebuild geometry
+                if(`${axis}` !== oldAxis || `${sign}` !== oldSign){
+                  const faceHint = { axis: axisKeys[axis], axisIndex: axis, sign };
+                  const center = {
+                    x: parseFloat(sig[1].split(',')[0]),
+                    y: parseFloat(sig[1].split(',')[1]),
+                    z: parseFloat(sig[1].split(',')[2])
+                  };
+                  const counts = {
+                    x: parseInt(sig[2].split(',')[0]),
+                    y: parseInt(sig[2].split(',')[1]),
+                    z: parseInt(sig[2].split(',')[2])
+                  };
+                  const scale = arrayVoxelScale(arr);
+                  updateSelectionCelliHighlight(arr, center, counts, scale, faceHint);
+                }
+              }
+            }
+          }
+        }catch(e){ console.warn('[CELLI] Border update in animate failed:', e); }
       }
 
       // Ensure controls remain enabled when physics is off
@@ -13757,7 +13882,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }
 
         // Apply jump if requested
-        if(!ziplineState.active && input.j){ handleJump(); }
+        if(!ziplineState.active && input.j){ 
+          console.log('[PHYSICS] input.j is 1, calling handleJump()');
+          try{ 
+            handleJump(); 
+          }catch(e){ 
+            console.warn('[PHYSICS] Jump input handler error (non-critical):', e); 
+          }
+        }
         
         // Apply movement forces for dynamic body
         if(!ziplineState.active && (input.f||input.b||input.l||input.r)){
@@ -13922,10 +14054,16 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             }
           } catch(e) {
             console.warn('Physics step failed:', e);
-            // Disable physics on repeated failures
-            Store.setState(s => ({scene: {...s.scene, physics: false}}));
-            updatePhysicsStatusChip('Physics: OFF (error)');
-            applyDebugPhysicsOverrides(false);
+            // Only disable physics on critical failures, not player movement errors
+            const isCriticalError = !e.message?.includes?.('jump') && !e.message?.includes?.('linvel') && !e.message?.includes?.('translation');
+            if(isCriticalError){
+              console.error('[PHYSICS] CRITICAL ERROR - Disabling physics mode:', e.message);
+              Store.setState(s => ({scene: {...s.scene, physics: false}}));
+              updatePhysicsStatusChip('Physics: OFF (error)');
+              applyDebugPhysicsOverrides(false);
+            } else {
+              console.log('[PHYSICS] Non-critical error during player movement, continuing physics mode');
+            }
           }
         }
       } finally {
@@ -14379,6 +14517,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
   let dragState=null;
+  
+  // Safety: clear drag state on Escape key
+  window.addEventListener('keydown', (e)=>{
+    if(e.key === 'Escape' && dragState){
+      console.log('[PICK] Escape pressed - clearing stuck dragState');
+      dragState = null;
+      try{ resumeOrbitControls(); }catch{}
+    }
+  });
   let physicsToggleInFlight = false;
   let orbitSuspendDepth=0;
   let orbitPrevState=null;
@@ -14425,6 +14572,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
   function onPick(e){
+    try{
     const rect=renderer.domElement.getBoundingClientRect();
     const mouse=new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1, -((e.clientY-rect.top)/rect.height)*2+1);
     const ray=new THREE.Raycaster(); ray.setFromCamera(mouse,camera);
@@ -14432,9 +14580,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const layerPickMeshes = [...layerMeshes.values()].map(r=>r.mesh).filter(m=>m.visible && !m.userData.isGhost);
     // Include chunk LOD1 meshes so picking works even when layer meshes are cleared
     const chunkPickMeshes = [];
+    const physicsActive = !!Store.getState().scene?.physics;
+    const physicsDebugActive = !!Store.getState().scene?.physicsDebugAll;
     try{
       Object.values(Store.getState().arrays).forEach(a=>{
         if(a.hidden) return;
+        const hasPhys = !!a.params?.physics?.enabled;
+        const shouldFilter = physicsActive && !physicsDebugActive && hasPhys;
+        if(shouldFilter){
+          console.log(`[RAYCAST] Filtering physics array #${a.id} "${a.name}" from picking`);
+          return;
+        }
         Object.values(a.chunks||{}).forEach(ch=>{ if(ch?.meshLOD1 && ch.meshLOD1.visible) chunkPickMeshes.push(ch.meshLOD1); });
       });
     }catch{}
@@ -14541,6 +14697,19 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     
     // If the picked cell has an ONCLICK action, execute it immediately (3D)
     if(!cell) return;
+    
+    // Check if this cell is ghosted due to occlusion - don't allow selection of ghost cells
+    try{
+      const occ = arr._occlusionData || {};
+      const blocked = occ.blockedLayers || new Set();
+      const axis = occ.axis || occ.facing || 'Z';
+      const cellLayer = axis==='X' ? cell.x : axis==='Y' ? cell.y : cell.z;
+      if(blocked.has(cellLayer)){
+        console.log(`[PICK] Rejected ghosted cell at (${cell.x},${cell.y},${cell.z}) in blocked layer ${cellLayer} (axis ${axis})`);
+        return;
+      }
+    }catch(e){ console.warn('[PICK] Ghost check failed', e); }
+    
     let decodedAction = '';
     let hasAction = false;
     try{
@@ -14573,6 +14742,23 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       }
     }catch{}
 
+    // If in physics mode and this array doesn't have physics enabled, exit to edit mode
+    // physicsActive and physicsDebugActive already declared above
+    const hasPhysics = !!arr?.params?.physics?.enabled;
+    console.log(`[PHYSICS CLICK] Array #${arr.id} "${arr.name}": physicsActive=${physicsActive}, debugActive=${physicsDebugActive}, hasPhysics=${hasPhysics}, params:`, arr.params);
+    if(physicsActive && !physicsDebugActive && !hasPhysics){
+      console.log(`[PHYSICS] Clicked non-physics array #${arr.id} "${arr.name}" - exiting physics mode`);
+      try{
+        Actions.setSelection(arr.id, {x:cell.x, y:cell.y, z:cell.z}, null, '3d');
+        centerOnArray(arr);
+        const res = togglePhysicsMode();
+        if(res && typeof res.catch === 'function'){
+          res.catch(err=>console.warn('[PHYSICS] Exit on click failed', err));
+        }
+      }catch(e){ console.warn('[PHYSICS] Exit on click threw', e); }
+      return;
+    }
+
     // Start drag-select in 3D with playful click feedback (scale pulse)
     const maxLayer = Math.max(0, (arr.size?.z||1) - 1);
     let startLayer = Number.isFinite(cell?.z) ? Math.round(cell.z) : 0;
@@ -14597,7 +14783,20 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const r=renderer.domElement.getBoundingClientRect();
       const m=new THREE.Vector2(((ev.clientX-r.left)/r.width)*2-1, -((ev.clientY-r.top)/r.height)*2+1);
       ray.setFromCamera(m,camera);
-      const h=ray.intersectObjects([...layerPickMeshes, ...chunkPickMeshes], false);
+      // Filter out ghost meshes explicitly during drag selection
+      const solidLayerMeshes = [...layerMeshes.values()].map(r=>r.mesh).filter(m=>m.visible && !m.userData.isGhost && m.userData.type!=='ghost');
+      const solidChunkMeshes = [];
+      try{
+        Object.values(Store.getState().arrays).forEach(a=>{
+          if(a.hidden) return;
+          Object.values(a.chunks||{}).forEach(ch=>{ 
+            // Only include solid meshes, not ghost meshes
+            if(ch?.meshLOD1 && ch.meshLOD1.visible && !ch?.meshGhost) solidChunkMeshes.push(ch.meshLOD1);
+            else if(ch?.meshLOD1 && ch.meshLOD1.visible) solidChunkMeshes.push(ch.meshLOD1);
+          });
+        });
+      }catch{}
+      const h=ray.intersectObjects([...solidLayerMeshes, ...solidChunkMeshes], false);
       if(h.length){
         const hh=h[0];
         let aid = hh.object.userData.arrayId;
@@ -14609,49 +14808,72 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           z = cel?.z;
         } else {
           const z0 = hh.object.userData.z; const type0 = hh.object.userData.type;
+          // Skip ghost type meshes
+          if(type0 && String(type0).includes('ghost')) return;
           const rec2 = layerMeshes.get(`${aid}:${z0}:${type0}`);
           cel = rec2?.index2cell?.[hh.instanceId];
           z = z0;
         }
         if(!cel) return;
+        
+        // Check if this cell is ghosted - skip ghost cells during drag selection
+        try{
+          const arrForCheck = Store.getState().arrays[aid];
+          if(arrForCheck){
+            const occ = arrForCheck._occlusionData || {};
+            const blocked = occ.blockedLayers || new Set();
+            const axis = occ.axis || occ.facing || 'Z';
+            const cellLayer = axis==='X' ? cel.x : axis==='Y' ? cel.y : cel.z;
+            if(blocked.has(cellLayer)){
+              // Skip this ghosted cell during drag
+              return;
+            }
+          }
+        }catch{}
+        
         if(aid===dragState.arrayId){
           const arrForDrag = Store.getState().arrays[dragState.arrayId];
           const maxLayer = Math.max(0, (arrForDrag?.size?.z||1) - 1);
           const clampLayer = (val)=>Math.min(maxLayer, Math.max(0, Math.round(val)));
-          let targetLayer = dragState.lockZ;
-          const applyCandidate = (candidate)=>{
-            if(Number.isFinite(candidate)){
-              targetLayer = clampLayer(candidate);
-              return true;
-            }
-            return false;
-          };
+          // Use the actual cell z coordinate for natural selection
+          let targetLayer = Number.isFinite(cel?.z) ? clampLayer(cel.z) : dragState.lockZ;
           if(dragState.viewLock){
             let applied = false;
-            applied = applyCandidate(cel?.z) || applyCandidate(z);
+            applied = cel?.z != null && Number.isFinite(cel.z);
+            if(!applied && z != null && Number.isFinite(z)){
+              targetLayer = clampLayer(z);
+              applied = true;
+            }
             if(!applied){
               try{
                 const viewLayer = Store.getState().ui?.zLayer;
                 if(Number.isFinite(viewLayer)){
-                  applied = applyCandidate(viewLayer);
+                  targetLayer = clampLayer(viewLayer);
+                  applied = true;
                 }
               }catch{}
             }
             if(!applied && Number.isFinite(dragState.start?.z)){
               targetLayer = clampLayer(dragState.start.z);
             }
-          } else {
-            targetLayer = Number.isFinite(dragState.lockZ)
-              ? clampLayer(dragState.lockZ)
-              : clampLayer(dragState.start?.z ?? 0);
           }
           if(!Number.isFinite(targetLayer)) targetLayer = clampLayer(dragState.start?.z ?? 0);
           Actions.setSelectionRange(dragState.arrayId, dragState.start, {x:cel.x,y:cel.y,z:targetLayer}, '3d');
+          // Cache the last valid drag position to maintain it during gaps
+          dragState.lastValid = {x:cel.x, y:cel.y, z:targetLayer};
         }
+      } else if(dragState.lastValid){
+        // No hit (hovering gap) - maintain last valid position to prevent layer jumping
+        Actions.setSelectionRange(dragState.arrayId, dragState.start, dragState.lastValid, '3d');
       }
     };
     const onUp=()=>{ dragState=null; resumeOrbitControls(); window.removeEventListener('pointermove',onMove); window.removeEventListener('pointerup',onUp); };
     window.addEventListener('pointermove',onMove); window.addEventListener('pointerup',onUp);
+    }catch(err){
+      console.error('[PICK] Click selection failed:', err);
+      // Ensure orbit controls are restored if there was an error
+      try{ resumeOrbitControls(); }catch{}
+    }
   }
   function setArrayOffset(arr, next, opts){
     opts = opts||{}; const fast = !!opts.interactive; const skipDock = !!opts._skipDock; const skipConn = !!opts._skipConnections;
@@ -15026,7 +15248,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           if(e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.b=1;
           if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.r=1;
           if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.l=1;
-          if(e.key===' '||e.key==='Spacebar') input.j=1;
+          if(e.key===' '||e.key==='Spacebar'){
+            console.log('[PHYSICS] Spacebar pressed - setting input.j=1, physicsActive=true, physicsCapturing=true');
+            input.j=1;
+          }
           if(e.key==='Escape'){
             console.log('[PHYSICS] ESC pressed - exiting physics mode');
             Actions.togglePhysics();
@@ -15047,7 +15272,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         if(e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.b=1;
         if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.r=1;
         if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.l=1;
-        if(e.key===' '||e.key==='Spacebar') input.j=1;
+        if(e.key===' '||e.key==='Spacebar'){
+          console.log('[PHYSICS] Spacebar pressed - setting input.j=1, physicsActive=true, physicsCapturing=false');
+          input.j=1;
+        }
         if(e.key==='Escape'){
           console.log('[PHYSICS] ESC pressed - exiting physics mode');
           Actions.togglePhysics();
@@ -15104,12 +15332,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       return;
     }
 
-    // Realtime typing: printable char when a cell is focused starts editor with that char
-    if(s.selection?.focus && e.key.length===1 && !e.ctrlKey && !e.metaKey && !e.altKey && !platformerMode){
-      e.preventDefault(); UI.startDirectTyping(e.key); return;
-    }
-    if(e.key==='p'||e.key==='P'){ Actions.togglePhysics(); return; }
-    if(!s.scene.physics && !platformerMode){
+    // Arrow keys for cell navigation (before printable char handling)
+    if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key) && !platformerMode){
       // Ensure we have a selection; default to Array 1 A1α if none
       let sel=s.selection;
       if(!sel.focus){
@@ -15197,12 +15421,18 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       else if(e.key==='['){ UI.shiftZLayer?.(-1); e.preventDefault(); }
       else if(e.key===']'){ UI.shiftZLayer?.(1); e.preventDefault(); }
       else if(e.key===' '||e.key==='Spacebar'){
-        const physicsActive = !!Store.getState().scene?.physics;
-        if(physicsActive && !Scene.isPhysicsInputCaptured?.()){
-          e.preventDefault();
-          Scene.handleJump();
-        }
+        // Spacebar outside physics mode should not do anything (reserved for physics jump)
+        e.preventDefault();
       }
+      return;
+    }
+
+    // Toggle physics
+    if(e.key==='p'||e.key==='P'){ Actions.togglePhysics(); return; }
+
+    // Realtime typing: printable char when a cell is focused starts editor with that char
+    if(s.selection?.focus && e.key.length===1 && !e.ctrlKey && !e.metaKey && !e.altKey && !platformerMode){
+      e.preventDefault(); UI.startDirectTyping(e.key); return;
     }
   }, true);
   window.addEventListener('keyup',(e)=>{
@@ -16313,6 +16543,11 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   }
 
   function computeJumpBudget(arrOverride=null){
+    // In debug mode, allow infinite jumps
+    const debugMode = !!Store.getState().scene?.physicsDebugAll;
+    if(debugMode){
+      return {max: Number.POSITIVE_INFINITY, source: 'debug'};
+    }
     const avatarCfg = Store.getState().avatarPhysics || {};
     let max = Math.max(1, Math.round(Number(avatarCfg.jumpCount ?? 1)) || 1);
     let source = 'avatar';
@@ -16373,7 +16608,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
     // --- END: ZIPLINE DETACHMENT ---
 
-    wasGroundedLastFrame = false;
+    // Don't modify wasGroundedLastFrame here - it's managed by the landing detection in animate()
     if(RAPIER && rapierWorld && playerBody){
       try {
         // Check if grounded using raycast for proper platformer support
@@ -17432,8 +17667,25 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   function exitPhysicsOnNonEnabledArray(hit){
     if(!hit || !hit.arr) return false;
     const arr = hit.arr;
+    // In debug mode, treat all arrays as physics enabled
+    const sceneState = Store.getState().scene;
+    const debugMode = !!sceneState?.physicsDebugAll;
     const enabled = !!arr?.params?.physics?.enabled;
-    if(enabled) return false;
+    console.log(`[PHYSICS] exitPhysicsOnNonEnabledArray ENTRY: array=${arr.id}`);
+    console.log(`[PHYSICS]   scene.physicsDebugAll=${sceneState?.physicsDebugAll}`);
+    console.log(`[PHYSICS]   debugMode=${debugMode}`);
+    console.log(`[PHYSICS]   arr.params.physics.enabled=${enabled}`);
+    console.log(`[PHYSICS]   arr.params.physics.__debugOverride=${!!arr?.params?.physics?.__debugOverride}`);
+    
+    if(debugMode){
+      console.log('[PHYSICS] ✓ Debug mode ACTIVE - NOT exiting physics for array', arr.id);
+      return false;
+    }
+    if(enabled){
+      console.log('[PHYSICS] ✓ Array has physics enabled - NOT exiting physics for array', arr.id);
+      return false;
+    }
+    console.log('[PHYSICS] ✗ EXITING PHYSICS MODE for array', arr.id);
     try{
       Actions.setSelection(arr.id, {x:hit.coord.x, y:hit.coord.y, z:hit.coord.z}, null, '3d');
     }catch{}
@@ -17702,7 +17954,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       const hit = locateArrayCollision(world);
       if(!hit){ lastTouchKey=null; return; }
       const key = `${hit.arr.id}:${hit.coord.x},${hit.coord.y},${hit.coord.z}`;
-      if(exitPhysicsOnNonEnabledArray(hit)){ lastTouchKey = key; return; }
+      // Removed automatic exit - physics mode should work on any array
       if(key===lastTouchKey) return;
       lastTouchKey = key;
       const cell = hit.cell ?? Formula.getCell({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z});
@@ -17733,25 +17985,9 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         try{ startLandingCellBounce(hit.arr, hit.coord, 1); }catch{}
       }
       resetJumpBudget(hit.arr);
-      if(exitPhysicsOnNonEnabledArray(hit)) return;
+      // Removed automatic exit - physics mode should work on any array
       const action = getMetaAction(cell?.meta, 'on_land');
       if(action){ executeActionFormula({arrId:hit.arr.id,x:hit.coord.x,y:hit.coord.y,z:hit.coord.z}, action, 'land'); }
-      const physicsEnabled = !!hit.arr?.params?.physics?.enabled;
-      if(!physicsEnabled){
-        try{ Actions.setSelection(hit.arr.id, {x:hit.coord.x,y:hit.coord.y,z:hit.coord.z}, null, '3d'); }catch{}
-        if(Store.getState().scene.physics){
-          try{
-            const toggle = Scene.togglePhysicsMode;
-            if(typeof toggle === 'function'){
-              const res = toggle();
-              if(res && typeof res.catch === 'function'){
-                res.catch(err=>console.warn('[PHYSICS] Land handler toggle failed', err));
-              }
-            }
-          }catch(e){ console.warn('[PHYSICS] Land handler toggle threw', e); }
-        }
-        try{ Scene.centerOnArray?.(hit.arr); }catch{}
-      }
     }catch(err){ console.warn('land handler failed', err); }
   }
 
@@ -17991,6 +18227,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       console.warn('[PHYSICS] Toggle already in progress');
       return;
     }
+    console.log('[PHYSICS] togglePhysicsMode called, stack:', new Error().stack.split('\n').slice(1,4).join('\n'));
     physicsToggleInFlight = true;
     try{
       try{
@@ -18009,8 +18246,10 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         physicsActivationPending = false;
       }
       const debugAll = !!Store.getState().scene.physicsDebugAll;
+      console.log(`[PHYSICS] Toggle: debugAll=${debugAll}, next=${next}`);
       let debugApplied = false;
       if(next && debugAll){
+        console.log('[PHYSICS] Applying debug overrides for all arrays');
         applyDebugPhysicsOverrides(true);
         debugApplied = true;
       }
@@ -18123,8 +18362,19 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           console.log(`[PHYSICS] Camera positioned at (${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)}) targeting (${targetPos.x.toFixed(2)}, ${targetPos.y.toFixed(2)}, ${targetPos.z.toFixed(2)})`);
         }
         try{ setPhysicsCamera(physicsCameraConfig.mode, physicsCameraConfig.distance, physicsCameraConfig.allowRotation); }catch{}
-        // Build colliders for all arrays
-        Object.values(Store.getState().arrays).forEach(a=>debounceColliderRebuild(a));
+        // Build colliders for all arrays (in debug mode, all arrays should get colliders)
+        const allArrays = Object.values(Store.getState().arrays);
+        console.log(`[PHYSICS] Building colliders for ${allArrays.length} arrays (debug=${debugAll})`);
+        // Wait for colliders to be built before finishing activation
+        let rebuildsCompleted = 0;
+        const totalArrays = allArrays.length;
+        allArrays.forEach(a=>{
+          debounceColliderRebuild(a);
+          // Mark colliders as being built
+          a._collidersBuilding = true;
+        });
+        // Clear activation pending immediately - debug mode protects against physics exit
+        physicsActivationPending = false;
         // Initialize mouse look angles from current camera
         try{
           if(camera){
@@ -18135,7 +18385,6 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
             console.log(`[PHYSICS] Initialized mouse look from camera direction`);
           }
         }catch{}
-        physicsActivationPending = false;
       } else {
         physicsActivationPending = false;
         resetPhysicsInputState();
@@ -18178,7 +18427,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }
       }
     } finally {
-      if(!Store.getState().scene.physics){ physicsActivationPending = false; }
+      // Always reset flags
+      physicsActivationPending = false;
       physicsToggleInFlight = false;
     }
   }
@@ -18528,10 +18778,39 @@ const UI = (()=>{
     }
     if(els.physicsBtn && !els.physicsBtn._wired){
       els.physicsBtn._wired = true;
+      // Update button appearance based on current debug state
+      const updatePhysicsButtonAppearance = ()=>{
+        const debugMode = !!Store.getState().scene?.physicsDebugAll;
+        const physicsActive = !!Store.getState().scene?.physics;
+        if(debugMode){
+          els.physicsBtn.textContent = physicsActive ? '⚡ Physics (DEBUG) ON' : '⚡ Physics (DEBUG)';
+          els.physicsBtn.classList.add('warn');
+        } else {
+          els.physicsBtn.textContent = physicsActive ? '⚡ Physics ON' : '⚡ Physics';
+          els.physicsBtn.classList.remove('warn');
+        }
+        els.physicsBtn.title = debugMode ? 'Shift+Click: Disable Debug Mode | Click: Toggle Physics' : 'Shift+Click: Enable Debug Mode (All Arrays) | Click: Toggle Physics';
+      };
+      updatePhysicsButtonAppearance();
       els.physicsBtn.addEventListener('click',(ev)=>{
         try{ ev?.preventDefault?.(); }catch{}
         try{ els.physicsBtn.blur(); }catch{}
-        Actions.togglePhysics();
+        // Shift-click to toggle debug mode (enables physics on all arrays)
+        if(ev?.shiftKey){
+          const current = !!Store.getState().scene?.physicsDebugAll;
+          console.log(`[PHYSICS DEBUG] Shift-click detected - current state: ${current}`);
+          console.log(`[PHYSICS DEBUG] Calling Scene.setPhysicsDebugAll(${!current})`);
+          Scene.setPhysicsDebugAll?.(!current);
+          const newState = !!Store.getState().scene?.physicsDebugAll;
+          console.log(`[PHYSICS DEBUG] After call, scene.physicsDebugAll = ${newState}`);
+          updatePhysicsButtonAppearance();
+          showToast?.(newState ? '🐛 Physics Debug: ALL arrays physics-enabled' : '✓ Physics Debug: Disabled');
+        } else {
+          console.log(`[PHYSICS] Normal click on physics button`);
+          Actions.togglePhysics();
+          // Update button after physics toggle
+          setTimeout(()=> updatePhysicsButtonAppearance(), 100);
+        }
       });
     }
     // Render mode button removed - always simple mode
