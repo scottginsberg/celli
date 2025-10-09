@@ -34,3 +34,18 @@
               beacon = pow(beacon, 1.25);
               base += lighthouseColor * beacon;
                 gl_FragColor = vec4(vec3(circle * 0.7), 1.0);
+    rayStrength:0.68,
+    rayDecay:0.955,
+    rayExposure:0.58,
+    lighthouseStrength:0.55,
+          const fogBlend = THREE.MathUtils.clamp(distFactor * 0.65 + fogFactor * 0.5, 0, 1);
+            .lerp(fogTone, fogBlend)
+            .lerp(farTone, distFactor * 0.55 + fogFactor * 0.45);
+          tone.multiplyScalar(THREE.MathUtils.lerp(0.92, 0.56, distFactor));
+          tone.offsetHSL(0, 0, THREE.MathUtils.randFloatSpread(0.03));
+            float falloff = clamp(brightness * 0.45, 0.0, 1.0);
+          rayColor:{value:new THREE.Color(0xc0d7f3)},
+          lighthouseColor:{value:new THREE.Color(0xffc67a)}
+              base += rayColor * (rays * 0.75);
+              base += lighthouseColor * (beacon * 0.6);
+                gl_FragColor = vec4(vec3(circle * 0.45), 1.0);
