@@ -67,8 +67,7 @@
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;overscroll-behavior:none}
-canvas#oceanCanvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;z-index:0;pointer-events:none}
-canvas#view{position:fixed;inset:0;width:100vw;height:100vh;display:block;z-index:1}
+canvas#view{position:fixed;inset:0;width:100vw;height:100vh;display:block}
 /* Intro overlay gradient that sits above 3D and behind sheet */
 #introOverlay{position:fixed;inset:0;z-index:10000;pointer-events:none;
   background:linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #93c5fd 100%);
@@ -827,6 +826,10 @@ document.addEventListener('click', function(e){
 
     <div class="stack" style="gap:10px;">
       <div class="title" style="font-size:14px;">Grid Overlay</div>
+      <label class="stack" style="gap:4px;">
+        <span class="sub">Grid Density <span id="oceanGridDensityValue"></span></span>
+        <input type="range" id="oceanGridDensity" min="32" max="256" step="32">
+      </label>
       <label class="stack" style="gap:4px;">
         <span class="sub">Grid Opacity <span id="oceanGridOpacityValue"></span></span>
         <input type="range" id="oceanGridOpacity" min="0" max="1" step="0.01">
@@ -9644,7 +9647,8 @@ const Scene = (()=>{
     showSphere:true,
     showTowers:true,
     showFloaters:true,
-    timeScale:1.0,
+    timeScale:0.2,
+    gridDensity:64,
     choppiness:2.0,
     amplitude0:0.85,
     amplitude1:0.45,
@@ -9675,12 +9679,12 @@ const Scene = (()=>{
     horizonColor:'#cfeaff',
     horizonZStart:60.0,
     horizonZEnd:260.0,
-    horizonBoost:1.35,
+    horizonBoost:1.10,
     microScale:0.035,
     microFreq:18.0,
     microWaveScale:0.3,
     enableBloom:true,
-    bloomStrength:1.4,
+    bloomStrength:0.25,
     enableVignette:true,
     vignetteStrength:0.85,
     grainAmount:0.015,
@@ -9713,17 +9717,17 @@ const Scene = (()=>{
       new THREE.Vector2(-1.0, -0.2).normalize(),
       new THREE.Vector2(0.4, 0.9).normalize()
     ];
-    const towerParams = { count:16, minRadius:120, maxRadius:600, azimuthSpread:0.6 };
-    const MAX_LIGHTHOUSE = 4;
+    const waveParams={
+      A:[0.85,0.45,0.28,0.18,0.12,0.08],
+      L:[35.0,16.5,8.2,4.5,2.8,1.8],
+      S:[0.95,1.15,1.3,1.45,1.6,1.8]
+    };
+    // Temporary vectors for calculations
     const tmpVec3 = new THREE.Vector3();
     const tmpVec2 = new THREE.Vector2();
-
-    const state = {
+    const state={
       settings:{...OceanDefaults},
-      canvas:null,
-      renderer:null,
-      scene:null,
-      camera:null,
+      group:null,
       sky:null,
       skyUniforms:null,
       water:null,
@@ -9732,78 +9736,58 @@ const Scene = (()=>{
       gridAttr:null,
       gridConfig:null,
       ball:null,
-      towerGroup:null,
-      floatGroup:null,
+      structures:[],
       floaters:[],
-      towers:[],
+      voxelStructures:[],
       lighthousePositions:[],
-      lights:{ambient:null, dir:null},
-      post:null,
-      time:0,
       baseHeight:-6,
-      presentActive:false,
-      ready:false,
-      lastSize:{w:0,h:0}
+      time:0,
+      presentActive:false
     };
 
-    function ensureCanvas(){
-      if(state.canvas) return;
-      const canvas = document.createElement('canvas');
-      canvas.id = 'oceanCanvas';
-      canvas.style.display = 'none';
-      canvas.style.pointerEvents = 'none';
-      const mainCanvas = document.getElementById('view');
-      if(mainCanvas && mainCanvas.parentNode){
-        mainCanvas.parentNode.insertBefore(canvas, mainCanvas);
-      } else {
-        document.body.appendChild(canvas);
-      }
-      state.canvas = canvas;
-    }
+    const L_OCCLUSION=1;
+    const towerParams={ count:16, minRadius:120, maxRadius:600, azimuthSpread:0.6 };
+    const MAX_LIGHTHOUSE_BEACONS=4;
 
-    function ensureRenderer(){
-      if(state.renderer) return;
-      ensureCanvas();
-      const renderer = new THREE.WebGLRenderer({ canvas: state.canvas, antialias:true, alpha:false });
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = state.settings.exposure;
-      state.renderer = renderer;
-    }
-
-    function buildScene(){
-      if(state.scene) return;
-      state.scene = new THREE.Scene();
-      state.scene.fog = new THREE.FogExp2(0x0e2744, 0.02);
-      state.camera = new THREE.PerspectiveCamera(60, window.innerWidth / Math.max(1, window.innerHeight), 0.1, 5000);
-      state.camera.position.set(2.2, 1.4, 2.2);
-      state.camera.lookAt(0, 0.4, 0);
+    function ensureGroup(){
+      if(state.group) return;
+      state.group=new THREE.Group();
+      state.group.name='OceanBackdrop';
+      state.group.visible=false;
       createSky();
       createWater();
       createGrid();
       createBuoy();
-      addMonumentalStructures();
-      createLights();
+      createStructures();
+      createOceanLights();
+      if(scene) scene.add(state.group);
     }
-
-    function createLights(){
-      const ambient = new THREE.AmbientLight(0xbfdfff, state.settings.envIntensity);
-      const dir = new THREE.DirectionalLight(0xffffff, state.settings.lightIntensity);
+    
+    function createOceanLights(){
+      // Dedicated lighting for ocean scene (matches data-lake.html)
+      const lights = new THREE.Group();
+      lights.name = 'OceanLights';
+      
+      // Ambient light for base illumination
+      const ambient = new THREE.AmbientLight(0xbfdfff, 0.25);
+      lights.add(ambient);
+      
+      // Main directional light (key light)
+      const dir = new THREE.DirectionalLight(0xffffff, 0.55);
       dir.position.set(-3, 7, -4);
-      state.scene.add(ambient);
-      state.scene.add(dir);
-      state.lights.ambient = ambient;
-      state.lights.dir = dir;
+      dir.castShadow = false;
+      lights.add(dir);
+      
+      state.oceanLights = { ambient, directional: dir };
+      state.group.add(lights);
     }
 
     function createSky(){
       const geo = new THREE.SphereGeometry(1200, 32, 16);
       const uniforms = {
-        top:{ value:new THREE.Color(state.settings.skyTopColor) },
-        mid:{ value:new THREE.Color(state.settings.skyMidColor) },
-        bot:{ value:new THREE.Color(state.settings.skyBotColor) }
+        top:{value:new THREE.Color(0x8ec1ea)},
+        mid:{value:new THREE.Color(0x63aee3)},
+        bot:{value:new THREE.Color(0x092c4d)}
       };
       const mat = new THREE.ShaderMaterial({
         side:THREE.BackSide,
@@ -9812,13 +9796,14 @@ const Scene = (()=>{
         fragmentShader:`varying vec3 v; uniform vec3 top,mid,bot; void main(){ float h=normalize(v).y*.5+.5; vec3 c=mix(bot,mid,smoothstep(0.,.45,h)); c=mix(c,top,smoothstep(.45,1.,h)); gl_FragColor=vec4(c,1.); }`
       });
       const sky = new THREE.Mesh(geo, mat);
+      sky.name='OceanSky';
       state.sky = sky;
       state.skyUniforms = uniforms;
-      state.scene.add(sky);
+      state.group.add(sky);
     }
 
     function createWater(){
-      const SIZE = 1200;
+      const SIZE = 120;
       const SEG = 256;
       const STEP = SIZE / SEG;
       const HALF = SIZE / 2;
@@ -9828,9 +9813,9 @@ const Scene = (()=>{
       const uniforms = {
         uTime:{value:0},
         sunDir:{value:new THREE.Vector3(0.5,0.6,0.3).normalize()},
-        deep:{value:new THREE.Color(state.settings.deepColor)},
-        shallow:{value:new THREE.Color(state.settings.shallowColor)},
-        foamColor:{value:new THREE.Color(state.settings.foamColor)},
+        deep:{value:new THREE.Color(0x0b345a)},
+        shallow:{value:new THREE.Color(0x1e6aa2)},
+        foamColor:{value:new THREE.Color(0xffffff)},
         Q:{value:state.settings.choppiness},
         foamAmt:{value:state.settings.foamAmount},
         foamBias:{value:state.settings.foamBias},
@@ -9841,17 +9826,17 @@ const Scene = (()=>{
         microFreq:{value:state.settings.microFreq},
         microWaveScale:{value:state.settings.microWaveScale},
         nearFade:{value:20.0},
-        farFade:{value:260.0},
-        horizonCol:{value:new THREE.Color(state.settings.horizonColor)},
-        horizonZStart:{value:state.settings.horizonZStart},
-        horizonZEnd:{value:state.settings.horizonZEnd},
+        farFade:{value:200.0},
+        horizonCol:{value:new THREE.Color(0xcfeaff)},
+        horizonZStart:{value:60.0},
+        horizonZEnd:{value:260.0},
         horizonBoost:{value:state.settings.horizonBoost},
-        A0:{value:state.settings.amplitude0}, A1:{value:state.settings.amplitude1}, A2:{value:state.settings.amplitude2},
-        A3:{value:state.settings.amplitude3}, A4:{value:state.settings.amplitude4}, A5:{value:state.settings.amplitude5},
-        L0:{value:state.settings.wavelength0}, L1:{value:state.settings.wavelength1}, L2:{value:state.settings.wavelength2},
-        L3:{value:state.settings.wavelength3}, L4:{value:state.settings.wavelength4}, L5:{value:state.settings.wavelength5},
-        S0:{value:state.settings.speed0}, S1:{value:state.settings.speed1}, S2:{value:state.settings.speed2},
-        S3:{value:state.settings.speed3}, S4:{value:state.settings.speed4}, S5:{value:state.settings.speed5}
+        A0:{value:waveParams.A[0]}, A1:{value:waveParams.A[1]}, A2:{value:waveParams.A[2]},
+        A3:{value:waveParams.A[3]}, A4:{value:waveParams.A[4]}, A5:{value:waveParams.A[5]},
+        L0:{value:waveParams.L[0]}, L1:{value:waveParams.L[1]}, L2:{value:waveParams.L[2]},
+        L3:{value:waveParams.L[3]}, L4:{value:waveParams.L[4]}, L5:{value:waveParams.L[5]},
+        S0:{value:waveParams.S[0]}, S1:{value:waveParams.S[1]}, S2:{value:waveParams.S[2]},
+        S3:{value:waveParams.S[3]}, S4:{value:waveParams.S[4]}, S5:{value:waveParams.S[5]}
       };
       const mat = new THREE.ShaderMaterial({
         transparent:true,
@@ -9969,15 +9954,16 @@ const Scene = (()=>{
       const water = new THREE.Mesh(geo, mat);
       water.position.y = state.baseHeight;
       water.renderOrder = -10;
+      water.name='OceanWater';
       state.water = water;
       state.waterUniforms = uniforms;
-      state.scene.add(water);
+      state.group.add(water);
     }
 
     function createGrid(){
       const baseConfig = state.gridConfig || {};
-      const GRID_SEG = baseConfig.SEG ?? 256;
-      const SIZE = baseConfig.SIZE ?? 600;
+      const GRID_SEG = state.settings.gridDensity ?? 64;
+      const SIZE = baseConfig.SIZE ?? 120;
       const STEP = SIZE / GRID_SEG;
       const HALF = SIZE / 2;
       state.gridConfig = { ...baseConfig, GRID_SEG, GRID_STEP:STEP, HALF };
@@ -9999,15 +9985,16 @@ const Scene = (()=>{
       const mat = new THREE.LineBasicMaterial({
         color:0xbfe7ff,
         transparent:true,
-        opacity:state.settings.gridOpacity,
+        opacity:0.35,
         depthWrite:false,
         depthTest:true
       });
       const grid = new THREE.LineSegments(geo, mat);
       grid.renderOrder = 999;
+      grid.name='OceanGrid';
       state.grid = grid;
       state.gridAttr = geo.getAttribute('position');
-      state.scene.add(grid);
+      state.group.add(grid);
     }
 
     function createBuoy(){
@@ -10017,16 +10004,18 @@ const Scene = (()=>{
       );
       ball.position.set(0, state.baseHeight + 0.7, -2.5);
       ball.userData.base = { x:0, z:-2.5, height:0.55 };
+      ball.name='OceanBuoy';
       state.ball = ball;
-      state.scene.add(ball);
+      state.group.add(ball);
     }
 
-    function addMonumentalStructures(){
-      state.floaters.length = 0;
-      state.towers.length = 0;
+    function createStructures(){
+      state.voxelStructures.length = 0;
       state.lighthousePositions.length = 0;
       const voxel = new THREE.BoxGeometry(4.5, 4.5, 4.5);
       const towerGroup = new THREE.Group();
+      towerGroup.name='OceanTowers';
+      state.group.add(towerGroup);
       const towers = [];
       for(let c=0; c<towerParams.count; c++){
         const instances = 450;
@@ -10037,6 +10026,7 @@ const Scene = (()=>{
           emissive:0x000000
         });
         const mesh = new THREE.InstancedMesh(voxel, mat, instances);
+        mesh.name=`OceanTowerCluster${c}`;
         mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
         const radius = THREE.MathUtils.randFloat(towerParams.minRadius, towerParams.maxRadius);
         const baseAng = (c / towerParams.count) * Math.PI * 2;
@@ -10065,19 +10055,20 @@ const Scene = (()=>{
           mesh.setMatrixAt(i++, matrix);
         }
         mesh.count = Math.min(i, instances);
-        mesh.layers.enable(1);
+        mesh.layers.enable(L_OCCLUSION);
         towerGroup.add(mesh);
         towers.push(mesh);
-        if(state.lighthousePositions.length < MAX_LIGHTHOUSE && Math.random() < 0.5){
+        state.voxelStructures.push(mesh);
+        if(state.lighthousePositions.length < MAX_LIGHTHOUSE_BEACONS && Math.random() < 0.5){
           const topY = baseY + (H * 2.75);
           state.lighthousePositions.push(new THREE.Vector3(base.x, topY, base.z));
         }
       }
-      state.towerGroup = towerGroup;
-      state.towers = towers;
-      state.scene.add(towerGroup);
+      state.structures = towers;
 
       const floatGroup = new THREE.Group();
+      floatGroup.name='OceanFloaters';
+      state.group.add(floatGroup);
       const floatGeom = new THREE.BoxGeometry(3, 3, 3);
       const floaters = [];
       for(let i=0; i<60; i++){
@@ -10104,201 +10095,250 @@ const Scene = (()=>{
         light.castShadow = false;
         floatGroup.add(mesh);
         floatGroup.add(light);
-        floaters.push({ mesh, light, floatSpeed:THREE.MathUtils.randFloat(0.3,0.7), floatOffset:Math.random()*Math.PI*2 });
+        const record = { mesh, light, floatSpeed:THREE.MathUtils.randFloat(0.3,0.7), floatOffset:Math.random()*Math.PI*2 };
+        floaters.push(record);
+        state.voxelStructures.push(record);
       }
-      state.floatGroup = floatGroup;
       state.floaters = floaters;
-      state.scene.add(floatGroup);
     }
 
-    function makeMat(frag){
-      return new THREE.ShaderMaterial({
-        uniforms:{
-          t:{value:null}, t2:{value:null}, t3:{value:null}, t4:{value:null}, depthTex:{value:null},
-          res:{value:new THREE.Vector2(window.innerWidth, window.innerHeight)},
+    // Ocean Post-Processing Pipeline (matches data-lake.html exactly)
+    function initPostProcessing(){
+      if(state.post) return;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const rtScene = new THREE.WebGLRenderTarget(w, h, { 
+        depthTexture: new THREE.DepthTexture(), 
+        depthBuffer: true,
+        stencilBuffer: false,
+        samples: 4 // MSAA antialiasing
+      });
+      const rtHalfA = new THREE.WebGLRenderTarget(Math.max(1, w/2), Math.max(1, h/2));
+      const rtHalfB = new THREE.WebGLRenderTarget(Math.max(1, w/2), Math.max(1, h/2));
+      const rtOcc = new THREE.WebGLRenderTarget(Math.max(1, w/2), Math.max(1, h/2));
+      const rtOccBlur = new THREE.WebGLRenderTarget(Math.max(1, w/2), Math.max(1, h/2));
+      const rtLighthouse = new THREE.WebGLRenderTarget(Math.max(1, w/2), Math.max(1, h/2));
+      const fsQuad = new THREE.PlaneGeometry(2, 2);
+      
+      // Blur shader for bloom
+      const blurFrag = `
+        varying vec2 vUv; uniform sampler2D t; uniform vec2 res;
+        void main(){
+          vec2 px = 1.0/res; float w[5];
+          w[0]=0.204164; w[1]=0.304005; w[2]=0.193783; w[3]=0.072184; w[4]=0.017864;
+          vec3 c = texture2D(t, vUv).rgb * w[0];
+          for(int i=1;i<5;i++){
+            c += texture2D(t, vUv + vec2(float(i)*px.x,0.)).rgb*w[i];
+            c += texture2D(t, vUv - vec2(float(i)*px.x,0.)).rgb*w[i];
+          }
+          gl_FragColor = vec4(c,1.0);
+        }`;
+      const blurH = new THREE.ShaderMaterial({
+        uniforms: { t:{value:null}, res:{value:new THREE.Vector2(w,h)} },
+        vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
+        fragmentShader: blurFrag,
+        depthTest: false, depthWrite: false
+      });
+      const blurV = new THREE.ShaderMaterial({
+        uniforms: { t:{value:null}, res:{value:new THREE.Vector2(w,h)} },
+        vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
+        fragmentShader: blurFrag.replace('vec2(float(i)*px.x,0.)','vec2(0.,float(i)*px.y)'),
+        depthTest: false, depthWrite: false
+      });
+      
+      // God rays shader
+      const raysMat = new THREE.ShaderMaterial({
+        uniforms: {
+          t:{value:null}, 
+          res:{value:new THREE.Vector2(w/2,h/2)},
+          sunPos:{value:new THREE.Vector2(0.5,0.2)},
+          rayDecay:{value:state.settings.rayDecay},
+          rayExposure:{value:state.settings.rayExposure}
+        },
+        vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
+        fragmentShader: `
+          varying vec2 vUv; uniform sampler2D t; uniform vec2 res;
+          uniform vec2 sunPos; uniform float rayDecay; uniform float rayExposure;
+          float sampleOcclusion(vec2 uv) {
+            vec2 px = 1.0 / res;
+            float c = texture2D(t, uv).r;
+            c += texture2D(t, uv + vec2(px.x, 0.0)).r * 0.5;
+            c += texture2D(t, uv - vec2(px.x, 0.0)).r * 0.5;
+            c += texture2D(t, uv + vec2(0.0, px.y)).r * 0.5;
+            c += texture2D(t, uv - vec2(0.0, px.y)).r * 0.5;
+            return c / 3.0;
+          }
+          void main(){
+            vec2 delta = sunPos - vUv;
+            float dist = length(delta);
+            vec2 stepv = delta / 96.0;
+            vec2 uv = vUv;
+            float illum = 0.0;
+            float decay = 1.0;
+            for(int i=0;i<96;i++){
+              uv += stepv;
+              float light = sampleOcclusion(uv);
+              illum += light * decay;
+              decay *= rayDecay;
+            }
+            float col = illum * rayExposure / (1.0 + dist*1.5);
+            gl_FragColor = vec4(vec3(col), 1.0);
+          }`,
+        depthTest: false, depthWrite: false
+      });
+      
+      // Lighthouse beams shader
+      const lighthouseMat = new THREE.ShaderMaterial({
+        uniforms: {
+          lighthousePos:{value:[new THREE.Vector3(),new THREE.Vector3(),new THREE.Vector3(),new THREE.Vector3()]},
+          lighthouseCount:{value:0},
+          beamSize:{value:0.08}
+        },
+        vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
+        fragmentShader: `
+          varying vec2 vUv;
+          uniform vec3 lighthousePos[4];
+          uniform int lighthouseCount;
+          uniform float beamSize;
+          void main(){
+            float brightness = 0.0;
+            for(int i=0; i<4; i++){
+              if(i >= lighthouseCount) break;
+              vec2 pos = lighthousePos[i].xy;
+              float dist = length(vUv - pos);
+              brightness += smoothstep(beamSize, beamSize * 0.3, dist);
+            }
+            gl_FragColor = vec4(vec3(brightness), 1.0);
+          }`,
+        depthTest: false, depthWrite: false
+      });
+      
+      // Composite shader (DOF + fog + bloom + vignette + grain + rays + lighthouse)
+      const compMat = new THREE.ShaderMaterial({
+        uniforms: {
+          t:{value:null}, t2:{value:null}, t3:{value:null}, t4:{value:null},
+          depthTex:{value:null},
+          res:{value:new THREE.Vector2(w,h)},
           strength:{value:state.settings.bloomStrength},
           time:{value:0},
           vig:{value:state.settings.vignetteStrength},
           grain:{value:state.settings.grainAmount},
-          enableBloom:{value: state.settings.enableBloom ? 1 : 0},
-          enableVig:{value: state.settings.enableVignette ? 1 : 0},
+          enableBloom:{value:state.settings.enableBloom ? 1 : 0},
+          enableVig:{value:state.settings.enableVignette ? 1 : 0},
           focusDist:{value:state.settings.focusDistance},
           dofStrength:{value:state.settings.dofStrength},
           focusRange:{value:state.settings.focusRange},
-          camNear:{value:state.camera ? state.camera.near : 0.1},
-          camFar:{value:state.camera ? state.camera.far : 5000},
+          camNear:{value:0.1},
+          camFar:{value:5000},
           fogStart:{value:state.settings.fogStart},
           fogEnd:{value:state.settings.fogEnd},
           fogCol:{value:new THREE.Color(state.settings.fogColor)},
-          enableRays:{value: state.settings.enableRays ? 1 : 0},
+          enableRays:{value:state.settings.enableRays ? 1 : 0},
           rayStrength:{value:state.settings.rayStrength},
-          rayDecay:{value:state.settings.rayDecay},
-          rayExposure:{value:state.settings.rayExposure},
-          sunPos:{value:new THREE.Vector2(0.5,0.2)},
           rayColor:{value:new THREE.Color(0xcde9ff)},
-          enableLighthouse:{value: state.settings.enableLighthouse ? 1 : 0},
+          enableLighthouse:{value:state.settings.enableLighthouse ? 1 : 0},
           lighthouseStrength:{value:state.settings.lighthouseStrength},
-          lighthouseColor:{value:new THREE.Color(0xffd89a)},
-          lighthousePos:{value:[new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()]},
-          lighthouseCount:{value:0},
-          beamSize:{value:0.08}
+          lighthouseColor:{value:new THREE.Color(0xffd89a)}
         },
-        vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
-        fragmentShader:frag,
-        depthTest:false,
-        depthWrite:false
+        vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
+        fragmentShader: `
+          varying vec2 vUv;
+          uniform sampler2D t; uniform sampler2D t2; uniform sampler2D t3; uniform sampler2D t4;
+          uniform sampler2D depthTex; uniform vec2 res;
+          uniform float strength, time, vig, grain; uniform int enableBloom, enableVig;
+          uniform float focusDist, dofStrength, focusRange, camNear, camFar, fogStart, fogEnd;
+          uniform vec3 fogCol;
+          uniform int enableRays; uniform float rayStrength; uniform vec3 rayColor;
+          uniform int enableLighthouse; uniform float lighthouseStrength; uniform vec3 lighthouseColor;
+          
+          float linearizeDepth(float z){
+            float ndc = z*2.0 - 1.0;
+            return (2.0*camNear*camFar) / (camFar + camNear - ndc*(camFar - camNear));
+          }
+          
+          float rnd(vec2 p){
+            return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453);
+          }
+          
+          vec3 dofBlur(sampler2D tex, float radius){
+            vec2 px = 1.0/res;
+            vec3 c = texture2D(tex, vUv).rgb * 0.28;
+            c += texture2D(tex, vUv + px*vec2( radius, 0.0)).rgb * 0.12;
+            c += texture2D(tex, vUv + px*vec2(-radius, 0.0)).rgb * 0.12;
+            c += texture2D(tex, vUv + px*vec2(0.0,  radius)).rgb * 0.12;
+            c += texture2D(tex, vUv + px*vec2(0.0, -radius)).rgb * 0.12;
+            c += texture2D(tex, vUv + px*vec2( radius,  radius)).rgb * 0.09;
+            c += texture2D(tex, vUv + px*vec2(-radius,  radius)).rgb * 0.09;
+            c += texture2D(tex, vUv + px*vec2( radius, -radius)).rgb * 0.09;
+            c += texture2D(tex, vUv + px*vec2(-radius, -radius)).rgb * 0.09;
+            return c;
+          }
+          
+          void main(){
+            float z = texture2D(depthTex, vUv).r;
+            float depth = linearizeDepth(z);
+            
+            // DOF - only apply to far objects (ocean), keep near objects (arrays) sharp
+            // Near threshold: objects closer than 40 units are always sharp
+            float nearThreshold = 40.0;
+            float dofMask = smoothstep(nearThreshold, nearThreshold + 20.0, depth);
+            float coc = smoothstep(0.0, focusRange, abs(depth - focusDist)) * dofMask;
+            float rad = coc * dofStrength * 6.0;
+            vec3 base = dofBlur(t, rad);
+            
+            // Layered atmospheric fog
+            float ff1 = smoothstep(fogStart, fogEnd * 0.5, depth);
+            float ff2 = smoothstep(fogEnd * 0.5, fogEnd, depth);
+            float ff3 = smoothstep(fogEnd, fogEnd * 1.8, depth);
+            vec3 fogLayer1 = fogCol * 0.45;
+            vec3 fogLayer2 = fogCol * 0.75;
+            vec3 fogLayer3 = fogCol * 0.95;
+            base = mix(base, fogLayer1, ff1 * 0.4);
+            base = mix(base, fogLayer2, ff2 * 0.5);
+            base = mix(base, fogLayer3, ff3 * 0.7);
+            
+            // Bloom
+            vec3 bloom = texture2D(t2, vUv).rgb * strength;
+            if(enableBloom==1) base += bloom;
+            
+            // God rays
+            if(enableRays==1){
+              float r = texture2D(t3, vUv).r;
+              base += rayColor * r * rayStrength;
+            }
+            
+            // Lighthouse beams
+            if(enableLighthouse==1){
+              float lh = texture2D(t4, vUv).r;
+              base += lighthouseColor * lh * lighthouseStrength;
+            }
+            
+            // Vignette
+            vec2 uv = vUv*2.0-1.0;
+            float v = smoothstep(1.4, 0.2/vig, dot(uv,uv));
+            if(enableVig==1) base *= v;
+            
+            // Film grain
+            float g = (rnd(vUv*res + time)-0.5) * (grain*2.0);
+            base += g;
+            
+            gl_FragColor = vec4(base, 1.0);
+          }`,
+        depthTest: false, depthWrite: false
       });
-    }
-
-    function initPostProcessing(){
-      if(state.post) return;
-      const rtScene = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { depthTexture:new THREE.DepthTexture(), depthBuffer:true });
-      const rtHalfA = new THREE.WebGLRenderTarget(Math.max(1, window.innerWidth/2), Math.max(1, window.innerHeight/2));
-      const rtHalfB = new THREE.WebGLRenderTarget(Math.max(1, window.innerWidth/2), Math.max(1, window.innerHeight/2));
-      const rtOcc = new THREE.WebGLRenderTarget(Math.max(1, window.innerWidth/2), Math.max(1, window.innerHeight/2));
-      const rtOccBlur = new THREE.WebGLRenderTarget(Math.max(1, window.innerWidth/2), Math.max(1, window.innerHeight/2));
-      const rtLighthouse = new THREE.WebGLRenderTarget(Math.max(1, window.innerWidth/2), Math.max(1, window.innerHeight/2));
-      const fsQuad = new THREE.PlaneGeometry(2,2);
-      const blurFrag = `
-  varying vec2 vUv; uniform sampler2D t; uniform vec2 res;
-  void main(){
-    vec2 px = 1.0/res; float w[5];
-    w[0]=0.204164; w[1]=0.304005; w[2]=0.193783; w[3]=0.072184; w[4]=0.017864;
-    vec3 c = texture2D(t, vUv).rgb * w[0];
-    for(int i=1;i<5;i++){
-      c += texture2D(t, vUv + vec2(float(i)*px.x,0.)).rgb*w[i];
-      c += texture2D(t, vUv - vec2(float(i)*px.x,0.)).rgb*w[i];
-    }
-    gl_FragColor = vec4(c,1.0);
-  }`;
-      const blurH = makeMat(blurFrag);
-      const blurV = makeMat(blurFrag.replace('vec2(float(i)*px.x,0.)','vec2(0.,float(i)*px.y)'));
-      const raysFrag = `
-  varying vec2 vUv; uniform sampler2D t; uniform vec2 res;
-  uniform vec2 sunPos; uniform float rayDecay; uniform float rayExposure;
-  float sampleOcclusion(vec2 uv) {
-    vec2 px = 1.0 / res;
-    float c = texture2D(t, uv).r;
-    c += texture2D(t, uv + vec2(px.x, 0.0)).r * 0.5;
-    c += texture2D(t, uv - vec2(px.x, 0.0)).r * 0.5;
-    c += texture2D(t, uv + vec2(0.0, px.y)).r * 0.5;
-    c += texture2D(t, uv - vec2(0.0, px.y)).r * 0.5;
-    return c / 3.0;
-  }
-  void main(){
-    vec2 delta = sunPos - vUv;
-    float dist = length(delta);
-    vec2 stepv = delta / 96.0;
-    vec2 uv = vUv;
-    float illum = 0.0;
-    float decay = 1.0;
-    for(int i=0;i<96;i++){
-      uv += stepv;
-      float light = sampleOcclusion(uv);
-      illum += light * decay;
-      decay *= rayDecay;
-    }
-    float col = illum * rayExposure / (1.0 + dist*1.5);
-    gl_FragColor = vec4(vec3(col), 1.0);
-  }`;
-      const raysMat = makeMat(raysFrag);
-      const lighthouseMat = new THREE.ShaderMaterial({
-        uniforms:{
-          lighthousePos:{value:[new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()]},
-          lighthouseCount:{value:0},
-          beamSize:{value:0.08}
-        },
-        vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
-        fragmentShader:`
-  varying vec2 vUv; 
-  uniform vec3 lighthousePos[4];
-  uniform int lighthouseCount;
-  uniform float beamSize;
-  void main(){
-    float brightness = 0.0;
-    for(int i=0; i<4; i++){
-      if(i >= lighthouseCount) break;
-      vec2 pos = lighthousePos[i].xy;
-      float dist = length(vUv - pos);
-      brightness += smoothstep(beamSize, beamSize * 0.3, dist);
-    }
-    gl_FragColor = vec4(vec3(brightness), 1.0);
-  }`,
-        depthTest:false,
-        depthWrite:false
-      });
-      const compFrag = `
-  varying vec2 vUv; 
-  uniform sampler2D t; uniform sampler2D t2; uniform sampler2D t3; uniform sampler2D t4;
-  uniform sampler2D depthTex; uniform vec2 res;
-  uniform float strength, time, vig, grain; uniform int enableBloom, enableVig;
-  uniform float focusDist, dofStrength, focusRange, camNear, camFar, fogStart, fogEnd; uniform vec3 fogCol;
-  uniform int enableRays; uniform float rayStrength; uniform vec3 rayColor;
-  uniform int enableLighthouse; uniform float lighthouseStrength; uniform vec3 lighthouseColor;
-  float linearizeDepth(float z){ float ndc = z*2.0 - 1.0; return (2.0*camNear*camFar) / (camFar + camNear - ndc*(camFar - camNear)); }
-  float rnd(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
-  vec3 dofBlur(sampler2D tex, float radius){
-    vec2 px = 1.0/res; vec3 c = texture2D(tex, vUv).rgb * 0.28;
-    c += texture2D(tex, vUv + px* vec2( radius, 0.0)).rgb * 0.12;
-    c += texture2D(tex, vUv + px* vec2(-radius,0.0)).rgb * 0.12;
-    c += texture2D(tex, vUv + px* vec2(0.0,  radius)).rgb * 0.12;
-    c += texture2D(tex, vUv + px* vec2(0.0, -radius)).rgb * 0.12;
-    c += texture2D(tex, vUv + px* vec2( radius, radius)).rgb * 0.09;
-    c += texture2D(tex, vUv + px* vec2(-radius, radius)).rgb * 0.09;
-    c += texture2D(tex, vUv + px* vec2( radius,-radius)).rgb * 0.09;
-    c += texture2D(tex, vUv + px* vec2(-radius,-radius)).rgb * 0.09; return c;
-  }
-  void main(){
-    float z = texture2D(depthTex, vUv).r; float depth = linearizeDepth(z);
-    float coc = smoothstep(0.0, focusRange, abs(depth - focusDist));
-    float rad = coc * dofStrength * 6.0;
-    vec3 base = dofBlur(t, rad);
-    float ff1 = smoothstep(fogStart, fogEnd * 0.5, depth);
-    float ff2 = smoothstep(fogEnd * 0.5, fogEnd, depth);
-    float ff3 = smoothstep(fogEnd, fogEnd * 1.8, depth);
-    vec3 fogLayer1 = fogCol * 0.45;
-    vec3 fogLayer2 = fogCol * 0.75;
-    vec3 fogLayer3 = fogCol * 0.95;
-    base = mix(base, fogLayer1, ff1 * 0.4);
-    base = mix(base, fogLayer2, ff2 * 0.5);
-    base = mix(base, fogLayer3, ff3 * 0.7);
-    vec3 bloom = texture2D(t2, vUv).rgb * strength; if(enableBloom==1) base += bloom;
-    if(enableRays==1){ float r = texture2D(t3, vUv).r; base += rayColor * r * rayStrength; }
-    if(enableLighthouse==1){ float lh = texture2D(t4, vUv).r; base += lighthouseColor * lh * lighthouseStrength; }
-    vec2 uv = vUv*2.0-1.0; float v = smoothstep(1.4, 0.2/vig, dot(uv,uv)); if(enableVig==1) base *= v;
-    float g = (rnd(vUv*res + time)-0.5) * (grain*2.0); base += g;
-    gl_FragColor = vec4(base, 1.0);
-  }`;
-      const compMat = makeMat(compFrag);
+      
       const screenScene = new THREE.Scene();
       const screenCam = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
       const screenMesh = new THREE.Mesh(fsQuad, compMat);
       screenScene.add(screenMesh);
+      
       state.post = {
         rtScene, rtHalfA, rtHalfB, rtOcc, rtOccBlur, rtLighthouse,
         blurH, blurV, raysMat, lighthouseMat, compMat,
-        screenScene, screenCam, fsQuad,
-        PP:{
-          enableBloom:state.settings.enableBloom,
-          enableVig:state.settings.enableVignette,
-          bloom:state.settings.bloomStrength,
-          vignette:state.settings.vignetteStrength,
-          grain:state.settings.grainAmount,
-          focus:state.settings.focusDistance,
-          dof:state.settings.dofStrength,
-          focusRange:state.settings.focusRange,
-          fogStart:state.settings.fogStart,
-          fogEnd:state.settings.fogEnd,
-          enableRays:state.settings.enableRays,
-          rayStr:state.settings.rayStrength,
-          rayDecay:state.settings.rayDecay,
-          rayExposure:state.settings.rayExposure,
-          enableLighthouse:state.settings.enableLighthouse,
-          lighthouseStr:state.settings.lighthouseStrength
-        }
+        screenScene, screenCam, fsQuad
       };
     }
-
+    
     function resizePostTargets(w, h){
       if(!state.post) return;
       state.post.rtScene.setSize(w, h);
@@ -10308,34 +10348,162 @@ const Scene = (()=>{
       state.post.rtOcc.setSize(Math.max(1, w/2), Math.max(1, h/2));
       state.post.rtOccBlur.setSize(Math.max(1, w/2), Math.max(1, h/2));
       state.post.rtLighthouse.setSize(Math.max(1, w/2), Math.max(1, h/2));
-      state.post.blurH.uniforms.res.value.set(w, h);
-      state.post.blurV.uniforms.res.value.set(w, h);
-      state.post.compMat.uniforms.res.value.set(w, h);
-      state.post.raysMat.uniforms.res.value.set(Math.max(1, w/2), Math.max(1, h/2));
-    }
-
-    function handleResize(){
-      if(!state.renderer || !state.canvas) return;
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      if(state.lastSize.w === w && state.lastSize.h === h) return;
-      state.lastSize = { w, h };
-      state.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-      state.renderer.setSize(w, h);
-      if(state.camera){
-        state.camera.aspect = w / Math.max(1,h);
-        state.camera.updateProjectionMatrix();
+      [state.post.blurH, state.post.blurV, state.post.compMat].forEach(m=>{
+        if(m.uniforms.res) m.uniforms.res.value.set(w, h);
+      });
+      if(state.post.raysMat.uniforms.res){
+        state.post.raysMat.uniforms.res.value.set(Math.max(1,w/2), Math.max(1,h/2));
       }
-      resizePostTargets(w, h);
+    }
+    
+    function syncPostSettings(){
+      if(!state.post) return;
+      const c = state.post.compMat.uniforms;
+      const mainCam = Scene?.getCamera?.();
+      if(mainCam){
+        c.camNear.value = mainCam.near;
+        c.camFar.value = mainCam.far;
+      }
+      c.enableBloom.value = state.settings.enableBloom ? 1 : 0;
+      c.enableVig.value = state.settings.enableVignette ? 1 : 0;
+      c.strength.value = state.settings.bloomStrength;
+      c.vig.value = state.settings.vignetteStrength;
+      c.grain.value = state.settings.grainAmount;
+      c.focusDist.value = state.settings.focusDistance;
+      c.dofStrength.value = state.settings.dofStrength;
+      c.focusRange.value = state.settings.focusRange;
+      c.fogStart.value = state.settings.fogStart;
+      c.fogEnd.value = state.settings.fogEnd;
+      c.fogCol.value.set(state.settings.fogColor);
+      c.enableRays.value = state.settings.enableRays ? 1 : 0;
+      c.rayStrength.value = state.settings.rayStrength;
+      c.enableLighthouse.value = state.settings.enableLighthouse ? 1 : 0;
+      c.lighthouseStrength.value = state.settings.lighthouseStrength;
+      state.post.raysMat.uniforms.rayDecay.value = state.settings.rayDecay;
+      state.post.raysMat.uniforms.rayExposure.value = state.settings.rayExposure;
+    }
+    
+    function renderOceanWithPost(time){
+      if(!state.presentActive || !state.post) return false;
+      const mainRenderer = renderer;
+      const mainCamera = camera;
+      const mainScene = scene;
+      if(!mainRenderer || !mainCamera || !mainScene) return false;
+      
+      try{
+        const post = state.post;
+        
+        // Render FULL SCENE (ocean + arrays together) with ocean post-processing
+        // Ocean is positioned far back, so proper depth testing ensures arrays show in front
+        
+        // Render entire scene to texture with depth
+        mainRenderer.setRenderTarget(post.rtScene);
+        mainRenderer.setClearColor(0x000000, 1);
+        mainRenderer.clear();
+        mainRenderer.render(mainScene, mainCamera);
+        
+        // Bloom (horizontal blur)
+        post.blurH.uniforms.t.value = post.rtScene.texture;
+        post.blurH.uniforms.res.value.set(post.rtHalfA.width, post.rtHalfA.height);
+        mainRenderer.setRenderTarget(post.rtHalfA);
+        mainRenderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurH)), post.screenCam);
+        
+        // Bloom (horizontal blur again)
+        post.blurH.uniforms.t.value = post.rtHalfA.texture;
+        mainRenderer.setRenderTarget(post.rtHalfB);
+        mainRenderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurH)), post.screenCam);
+        
+        // Bloom (vertical blur)
+        post.blurV.uniforms.t.value = post.rtHalfB.texture;
+        post.blurV.uniforms.res.value.set(post.rtHalfA.width, post.rtHalfA.height);
+        mainRenderer.setRenderTarget(post.rtHalfA);
+        mainRenderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurV)), post.screenCam);
+        
+        // God rays occlusion pass
+        const sunWorld = tmpVec3.copy(state.waterUniforms.sunDir.value).multiplyScalar(1000);
+        const proj = sunWorld.project(mainCamera);
+        const sunUV = tmpVec2.set(proj.x*0.5+0.5, proj.y*0.5+0.5);
+        
+        mainRenderer.setRenderTarget(post.rtOcc);
+        mainRenderer.setClearColor(0x000000, 1);
+        mainRenderer.clear();
+        
+        if(proj.z < 1.0){
+          // Draw sun disk
+          const sunDiskMat = new THREE.ShaderMaterial({
+            uniforms: { sunPos:{value:sunUV.clone()}, sunSize:{value:0.15} },
+            vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
+            fragmentShader: `
+              varying vec2 vUv; uniform vec2 sunPos; uniform float sunSize;
+              void main(){
+                float dist = length(vUv - sunPos);
+                float circle = smoothstep(sunSize, sunSize * 0.5, dist);
+                gl_FragColor = vec4(vec3(circle), 1.0);
+              }`,
+            depthTest: false, depthWrite: false
+          });
+          mainRenderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, sunDiskMat)), post.screenCam);
+          
+          // Render ocean towers as occluders (black)
+          const oldMaterials = [];
+          const testLayer = new THREE.Layers();
+          testLayer.set(L_OCCLUSION);
+          state.group.traverse(obj=>{
+            if((obj.isMesh || obj.isInstancedMesh) && obj.layers.test(testLayer)){
+              oldMaterials.push({obj, mat:obj.material});
+              obj.material = new THREE.MeshBasicMaterial({color:0x000000});
+            }
+          });
+          mainRenderer.render(mainScene, mainCamera);
+          oldMaterials.forEach(({obj,mat})=> obj.material = mat);
+        }
+        
+        // Blur occlusion map
+        post.blurH.uniforms.t.value = post.rtOcc.texture;
+        post.blurH.uniforms.res.value.set(post.rtOcc.width, post.rtOcc.height);
+        mainRenderer.setRenderTarget(post.rtOccBlur);
+        mainRenderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurH)), post.screenCam);
+        
+        post.blurV.uniforms.t.value = post.rtOccBlur.texture;
+        post.blurV.uniforms.res.value.set(post.rtOcc.width, post.rtOcc.height);
+        mainRenderer.setRenderTarget(post.rtOcc);
+        mainRenderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurV)), post.screenCam);
+        
+        // Generate god rays
+        post.raysMat.uniforms.t.value = post.rtOcc.texture;
+        post.raysMat.uniforms.sunPos.value.copy(sunUV);
+        mainRenderer.setRenderTarget(post.rtHalfB);
+        mainRenderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.raysMat)), post.screenCam);
+        
+        // Generate lighthouse beams
+        post.lighthouseMat.uniforms.lighthouseCount.value = Math.min(state.lighthousePositions.length, 4);
+        for(let i=0; i<Math.min(state.lighthousePositions.length,4); i++){
+          const pos = state.lighthousePositions[i].clone().project(mainCamera);
+          post.lighthouseMat.uniforms.lighthousePos.value[i].set(pos.x*0.5+0.5, pos.y*0.5+0.5, pos.z);
+        }
+        mainRenderer.setRenderTarget(post.rtLighthouse);
+        mainRenderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.lighthouseMat)), post.screenCam);
+        
+        // Final composite to screen
+        post.compMat.uniforms.t.value = post.rtScene.texture;
+        post.compMat.uniforms.t2.value = post.rtHalfA.texture;
+        post.compMat.uniforms.t3.value = post.rtHalfB.texture;
+        post.compMat.uniforms.t4.value = post.rtLighthouse.texture;
+        post.compMat.uniforms.depthTex.value = post.rtScene.depthTexture;
+        post.compMat.uniforms.time.value = time * 60.0;
+        
+        mainRenderer.setRenderTarget(null);
+        mainRenderer.render(post.screenScene, post.screenCam);
+        
+        return true;
+      }catch(e){
+        console.warn('[OCEAN] Post-processing error:', e);
+        return false;
+      }
     }
 
     function getWaveParams(){
-      const s = state.settings;
-      return {
-        A:[s.amplitude0,s.amplitude1,s.amplitude2,s.amplitude3,s.amplitude4,s.amplitude5],
-        L:[s.wavelength0,s.wavelength1,s.wavelength2,s.wavelength3,s.wavelength4,s.wavelength5],
-        S:[s.speed0,s.speed1,s.speed2,s.speed3,s.speed4,s.speed5]
-      };
+      return waveParams;
     }
 
     function sampleChoppy(x,z,t,Q){
@@ -10365,14 +10533,14 @@ const Scene = (()=>{
     }
 
     function updateFloaters(dt){
-      const active = state.presentActive && state.settings.showFloaters;
+      const active = state.settings.showFloaters && state.presentActive;
       state.floaters.forEach(item=>{
         const vis = active;
         if(item.mesh) item.mesh.visible = vis;
         if(item.light) item.light.visible = vis;
         if(!vis) return;
         const bob = Math.sin(state.time * item.floatSpeed + item.floatOffset) * 2.5;
-        const baseY = item.mesh?.userData?.baseY ?? state.baseHeight;
+        const baseY = item.mesh?.userData?.baseY ?? item.baseY ?? state.baseHeight;
         const y = baseY + bob;
         if(item.mesh){
           item.mesh.position.y = y;
@@ -10382,8 +10550,8 @@ const Scene = (()=>{
         if(item.light){
           item.light.position.y = y;
           const pulse = 0.85 + Math.sin(state.time * 2.0 + item.floatOffset) * 0.15;
-          const baseIntensity = item.light.userData?.baseIntensity ?? item.light.intensity;
-          item.light.intensity = baseIntensity * pulse * state.settings.envIntensity;
+          const baseIntensity = item.light.userData?.baseIntensity ?? item.baseIntensity ?? item.light.intensity;
+          item.light.intensity = baseIntensity * pulse;
         }
       });
     }
@@ -10420,248 +10588,91 @@ const Scene = (()=>{
     }
 
     function updateBuoy(){
-      if(!state.ball || !state.presentActive || !state.settings.showSphere) return;
-      const base = state.ball.userData.base || {x:0,z:0,height:0.55};
-      const sample = sampleChoppy(base.x, base.z, state.time, state.settings.choppiness);
+      if(!state.ball || !state.presentActive) return;
+      const base = state.ball.userData.base || {x:state.ball.position.x, z:state.ball.position.z, height:0.55};
+      const Q = state.settings.choppiness;
+      const sample = sampleChoppy(base.x, base.z, state.time, Q);
       const micro = sampleMicroRipples(sample.x, sample.z, state.time);
       state.ball.position.set(sample.x, state.baseHeight + sample.y + micro + base.height, sample.z);
-      state.ball.visible = true;
     }
 
-    function syncCamera(){
-      if(!state.camera || !camera) return;
+    function updateSunDir(){
+      if(!state.waterUniforms) return;
+      let dir=null;
       try{
-        state.camera.fov = camera.fov;
-        state.camera.aspect = (window.innerWidth) / Math.max(1, window.innerHeight);
-        state.camera.near = 0.1;
-        state.camera.far = 5000;
-        state.camera.updateProjectionMatrix();
-        state.camera.position.copy(camera.position);
-        const target = controls?.target ? controls.target : tmpVec3.set(0,0.4,0);
-        state.camera.lookAt(target);
+        if(FancyGraphics?.lights?.key){
+          dir=FancyGraphics.lights.key.position.clone().normalize();
+        }else if(baseLightsGroup){
+          const light=baseLightsGroup.children?.find?.(c=>c.isDirectionalLight);
+          if(light){
+            dir=light.position.clone().normalize();
+          }
+        }
       }catch{}
-    }
-
-    function updateSunDirection(){
-      const elev = THREE.MathUtils.degToRad(state.settings.sunElevation);
-      const az = THREE.MathUtils.degToRad(state.settings.sunAzimuth);
-      tmpVec3.set(Math.sin(az)*Math.cos(elev), Math.sin(elev), Math.cos(az)*Math.cos(elev)).normalize();
-      if(state.waterUniforms){ state.waterUniforms.sunDir.value.copy(tmpVec3); }
-      if(state.lights.dir){ state.lights.dir.position.copy(tmpVec3).multiplyScalar(100); }
-    }
-
-    function syncPostSettings(){
-      if(!state.post) return;
-      const PP = state.post.PP;
-      PP.enableBloom = state.settings.enableBloom;
-      PP.enableVig = state.settings.enableVignette;
-      PP.bloom = state.settings.bloomStrength;
-      PP.vignette = state.settings.vignetteStrength;
-      PP.grain = state.settings.grainAmount;
-      PP.focus = state.settings.focusDistance;
-      PP.dof = state.settings.dofStrength;
-      PP.focusRange = state.settings.focusRange;
-      PP.fogStart = state.settings.fogStart;
-      PP.fogEnd = state.settings.fogEnd;
-      PP.enableRays = state.settings.enableRays;
-      PP.rayStr = state.settings.rayStrength;
-      PP.rayDecay = state.settings.rayDecay;
-      PP.rayExposure = state.settings.rayExposure;
-      PP.enableLighthouse = state.settings.enableLighthouse;
-      PP.lighthouseStr = state.settings.lighthouseStrength;
-      state.post.compMat.uniforms.enableBloom.value = PP.enableBloom ? 1 : 0;
-      state.post.compMat.uniforms.enableVig.value = PP.enableVig ? 1 : 0;
-      state.post.compMat.uniforms.strength.value = PP.bloom;
-      state.post.compMat.uniforms.vig.value = PP.vignette;
-      state.post.compMat.uniforms.grain.value = PP.grain;
-      state.post.compMat.uniforms.focusDist.value = PP.focus;
-      state.post.compMat.uniforms.dofStrength.value = PP.dof;
-      state.post.compMat.uniforms.focusRange.value = PP.focusRange;
-      state.post.compMat.uniforms.fogStart.value = PP.fogStart;
-      state.post.compMat.uniforms.fogEnd.value = PP.fogEnd;
-      state.post.compMat.uniforms.fogCol.value.set(state.settings.fogColor);
-      state.post.compMat.uniforms.enableRays.value = PP.enableRays ? 1 : 0;
-      state.post.compMat.uniforms.rayStrength.value = PP.rayStr;
-      state.post.compMat.uniforms.enableLighthouse.value = PP.enableLighthouse ? 1 : 0;
-      state.post.compMat.uniforms.lighthouseStrength.value = PP.lighthouseStr;
-      state.post.blurH.uniforms.strength.value = PP.bloom;
-      state.post.blurV.uniforms.strength.value = PP.bloom;
+      if(!dir){ dir=new THREE.Vector3(0.5,0.6,0.3).normalize(); }
+      state.waterUniforms.sunDir.value.copy(dir);
     }
 
     function applySettings(){
-      ensureResources();
-      if(state.skyUniforms){
-        state.skyUniforms.top.value.set(state.settings.skyTopColor);
-        state.skyUniforms.mid.value.set(state.settings.skyMidColor);
-        state.skyUniforms.bot.value.set(state.settings.skyBotColor);
-      }
       if(state.waterUniforms){
-        state.waterUniforms.deep.value.set(state.settings.deepColor);
-        state.waterUniforms.shallow.value.set(state.settings.shallowColor);
-        state.waterUniforms.foamColor.value.set(state.settings.foamColor);
         state.waterUniforms.Q.value = state.settings.choppiness;
         state.waterUniforms.foamAmt.value = state.settings.foamAmount;
         state.waterUniforms.foamBias.value = state.settings.foamBias;
         state.waterUniforms.foamScale.value = state.settings.foamScale;
-        state.waterUniforms.maxGloss.value = state.settings.maxGloss;
-        state.waterUniforms.roughnessScale.value = state.settings.roughnessScale;
         state.waterUniforms.microScale.value = state.settings.microScale;
         state.waterUniforms.microFreq.value = state.settings.microFreq;
         state.waterUniforms.microWaveScale.value = state.settings.microWaveScale;
-        state.waterUniforms.horizonCol.value.set(state.settings.horizonColor);
-        state.waterUniforms.horizonZStart.value = state.settings.horizonZStart;
-        state.waterUniforms.horizonZEnd.value = state.settings.horizonZEnd;
         state.waterUniforms.horizonBoost.value = state.settings.horizonBoost;
-        const params = getWaveParams();
-        const keys = ['A','L','S'];
-        keys.forEach((key, idx)=>{
-          const arr = params[key];
-          arr.forEach((val, i)=>{
-            const uniformName = key + i;
-            if(state.waterUniforms[uniformName]) state.waterUniforms[uniformName].value = val;
-          });
-        });
+        state.waterUniforms.maxGloss.value = state.settings.maxGloss;
+        state.waterUniforms.roughnessScale.value = state.settings.roughnessScale;
       }
-      if(state.grid){
-        state.grid.material.opacity = state.settings.gridOpacity;
-        state.grid.visible = state.presentActive && state.settings.showGrid;
-      }
-      if(state.ball){
-        state.ball.visible = state.presentActive && state.settings.showSphere;
-      }
-      state.towers.forEach(mesh=>{ if(mesh) mesh.visible = state.presentActive && state.settings.showTowers; });
+      if(state.grid) state.grid.visible = state.presentActive && state.settings.showGrid;
+      state.structures.forEach(mesh=>{ if(mesh) mesh.visible = state.presentActive && state.settings.showTowers; });
       state.floaters.forEach(item=>{
         const vis = state.presentActive && state.settings.showFloaters;
         if(item.mesh) item.mesh.visible = vis;
         if(item.light) item.light.visible = vis;
       });
-      if(state.renderer){
-        state.renderer.toneMappingExposure = state.settings.exposure;
-      }
-      if(state.lights.ambient){
-        state.lights.ambient.intensity = state.settings.envIntensity;
-      }
-      if(state.lights.dir){
-        state.lights.dir.intensity = state.settings.lightIntensity;
-      }
-      syncPostSettings();
-      updateSunDirection();
     }
 
-    function renderWithPost(tNow){
-      if(!state.post || !state.renderer) return;
-      const renderer = state.renderer;
-      const scene = state.scene;
-      const camera = state.camera;
-      const post = state.post;
-      renderer.setRenderTarget(post.rtScene);
-      renderer.render(scene, camera);
-      post.blurH.uniforms.t.value = post.rtScene.texture;
-      renderer.setRenderTarget(post.rtHalfA);
-      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurH)), post.screenCam);
-      post.blurH.uniforms.t.value = post.rtHalfA.texture;
-      renderer.setRenderTarget(post.rtHalfB);
-      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurH)), post.screenCam);
-      post.blurV.uniforms.t.value = post.rtHalfB.texture;
-      renderer.setRenderTarget(post.rtHalfA);
-      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurV)), post.screenCam);
-      const sunWorld = tmpVec3.copy(state.waterUniforms.sunDir.value).multiplyScalar(1000);
-      const proj = sunWorld.project(camera);
-      const sunUV = tmpVec2.set(proj.x*0.5+0.5, proj.y*0.5+0.5);
-      renderer.setRenderTarget(post.rtOcc);
-      renderer.setClearColor(0x000000,1);
-      renderer.clear();
-      if(proj.z < 1.0){
-        const sunDiskMat = new THREE.ShaderMaterial({
-          uniforms:{ sunPos:{value:sunUV.clone()}, sunSize:{value:0.15} },
-          vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.); }`,
-          fragmentShader:`varying vec2 vUv; uniform vec2 sunPos; uniform float sunSize; void main(){ float dist=length(vUv-sunPos); float circle=smoothstep(sunSize, sunSize*0.5, dist); gl_FragColor=vec4(vec3(circle),1.0); }`,
-          depthTest:false,
-          depthWrite:false
-        });
-        renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, sunDiskMat)), post.screenCam);
-        const oldMat = [];
-        state.towers.forEach(mesh=>{
-          oldMat.push(mesh.material);
-          mesh.material = new THREE.MeshBasicMaterial({ color:0x000000 });
-        });
-        renderer.render(state.towerGroup, camera);
-        state.towers.forEach((mesh, idx)=>{ mesh.material = oldMat[idx]; });
-      }
-      renderer.setClearColor(0x0b1a2a,1);
-      post.blurH.uniforms.t.value = post.rtOcc.texture;
-      renderer.setRenderTarget(post.rtOccBlur);
-      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurH)), post.screenCam);
-      post.blurV.uniforms.t.value = post.rtOccBlur.texture;
-      renderer.setRenderTarget(post.rtOcc);
-      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.blurV)), post.screenCam);
-      post.raysMat.uniforms.t.value = post.rtOcc.texture;
-      post.raysMat.uniforms.sunPos.value.copy(sunUV);
-      renderer.setRenderTarget(post.rtHalfB);
-      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.raysMat)), post.screenCam);
-      post.lighthouseMat.uniforms.lighthouseCount.value = Math.min(state.lighthousePositions.length, 4);
-      for(let i=0;i<Math.min(state.lighthousePositions.length,4);i++){
-        const pos = state.lighthousePositions[i].clone().project(camera);
-        post.lighthouseMat.uniforms.lighthousePos.value[i].set(pos.x*0.5+0.5, pos.y*0.5+0.5, pos.z);
-      }
-      renderer.setRenderTarget(post.rtLighthouse);
-      renderer.render(new THREE.Scene().add(new THREE.Mesh(post.fsQuad, post.lighthouseMat)), post.screenCam);
-      post.compMat.uniforms.t.value = post.rtScene.texture;
-      post.compMat.uniforms.t2.value = post.rtHalfA.texture;
-      post.compMat.uniforms.t3.value = post.rtHalfB.texture;
-      post.compMat.uniforms.t4.value = post.rtLighthouse.texture;
-      post.compMat.uniforms.depthTex.value = post.rtScene.depthTexture;
-      post.compMat.uniforms.time.value = tNow * 60.0;
-      renderer.setRenderTarget(null);
-      renderer.render(post.screenScene, post.screenCam);
-    }
-
-    function ensureResources(){
-      if(state.ready) return;
-      ensureRenderer();
-      buildScene();
-      initPostProcessing();
-      handleResize();
-      window.addEventListener('resize', handleResize, { passive:true });
-      state.ready = true;
-      applySettings();
-    }
 
     function update(dt){
-      if(!state.settings.enabled){
-        if(state.canvas) state.canvas.style.display = 'none';
-        state.presentActive = false;
+      if(!state.group) return;
+      if(!state.settings.enabled) {
+        state.presentActive=false;
+        state.group.visible=false;
         return;
       }
-      ensureResources();
-      const active = updateVisibility();
+      const active=updateVisibility();
       if(!active) return;
-      const delta = Number.isFinite(dt) ? dt : 0.016;
-      const speed = Math.max(0, state.settings.timeScale || 0);
-      state.time += delta * speed;
-      if(state.waterUniforms) state.waterUniforms.uTime.value = state.time;
-      syncCamera();
-      updateSunDirection();
+      const delta=Number.isFinite(dt) ? dt : 0.016;
+      const speed=Math.max(0, state.settings.timeScale||0);
+      state.time += delta * (speed || 0);
+      if(state.waterUniforms){ state.waterUniforms.uTime.value = state.time; }
+      updateSunDir();
       updateBuoy();
       updateGrid();
       updateFloaters(delta);
-      renderWithPost((performance && performance.now ? performance.now()/1000 : Date.now()/1000));
     }
 
     function updateVisibility(){
-      ensureResources();
+      if(!state.group) return false;
       state.presentActive = !!(state.settings.enabled && FancyGraphics?.enabled);
-      if(state.canvas) state.canvas.style.display = state.presentActive ? '' : 'none';
-      if(state.grid) state.grid.visible = state.presentActive && state.settings.showGrid;
-      if(state.ball) state.ball.visible = state.presentActive && state.settings.showSphere;
-      state.towers.forEach(mesh=>{ if(mesh) mesh.visible = state.presentActive && state.settings.showTowers; });
-      state.floaters.forEach(item=>{
-        const vis = state.presentActive && state.settings.showFloaters;
-        if(item.mesh) item.mesh.visible = vis;
-        if(item.light) item.light.visible = vis;
-      });
+      state.group.visible = state.presentActive;
+      if(!state.presentActive) return false;
+      // Initialize post-processing on first activation
+      if(state.presentActive && !state.post){
+        initPostProcessing();
+      }
+      // Add atmospheric fog when ocean is active
+      if(scene && state.presentActive && !scene.fog){
+        scene.fog = new THREE.FogExp2(0x5aaee3, 0.0008);
+      } else if(scene && !state.presentActive && scene.fog){
+        scene.fog = null;
+      }
+      applySettings();
       syncPostSettings();
-      return state.presentActive;
+      return true;
     }
 
     function setEnabled(flag){
@@ -10691,46 +10702,35 @@ const Scene = (()=>{
       return { ...state.settings, active: state.presentActive };
     }
 
-    function init(){
-      ensureResources();
-      applySettings();
-      updateVisibility();
-    }
-
-    function perfNow(){
-      return (performance && performance.now ? performance.now()/1000 : Date.now()/1000);
-    }
-
-    function captureScreenshot(){
-      ensureResources();
-      const oldExposure = state.renderer.toneMappingExposure;
-      const oldBloom = state.settings.bloomStrength;
-      const oldRay = state.settings.rayStrength;
-      state.renderer.toneMappingExposure = oldExposure * 1.25;
-      state.settings.bloomStrength = oldBloom * 1.35;
-      state.settings.rayStrength = oldRay * 1.2;
-      syncPostSettings();
-      renderWithPost(perfNow());
-      const url = state.renderer.domElement.toDataURL('image/png');
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'ocean-shot.png';
-      a.click();
-      state.renderer.toneMappingExposure = oldExposure;
-      state.settings.bloomStrength = oldBloom;
-      state.settings.rayStrength = oldRay;
-      syncPostSettings();
+    function recreateGrid(){
+      try{
+        // Remove old grid
+        if(state.grid){
+          state.group.remove(state.grid);
+          state.grid.geometry?.dispose?.();
+          state.grid.material?.dispose?.();
+          state.grid = null;
+          state.gridAttr = null;
+        }
+        // Rebuild with new density
+        createGrid();
+        console.log('[OCEAN] Grid recreated with density:', state.settings.gridDensity);
+      }catch(e){
+        console.warn('[OCEAN] recreateGrid failed:', e);
+      }
     }
 
     return {
-      init,
+      init:ensureGroup,
       update,
       setEnabled,
       updateSettings,
       getSettings,
       applySettings,
       refreshVisibility:updateVisibility,
-      captureScreenshot
+      renderWithPost:renderOceanWithPost,
+      resizePost:resizePostTargets,
+      recreateGrid
     };
   })();
 let rapierWorld=null, controller=null, playerBody=null, playerCollider=null, staticPhysicsBody=null;
@@ -11639,6 +11639,17 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         Store.setState(s=>({ scene:{ ...s.scene, ocean:{ ...(s.scene?.ocean||{}), ...stored } } }));
         try{ UI?.syncOceanSettings?.(); }catch{}
       }catch{}
+      // Auto-configure FancyGraphics for optimal ocean atmosphere
+      if(flag && FancyGraphics?.settings){
+        FancyGraphics.settings.mirror = false;
+        FancyGraphics.settings.bloomEnabled = true;
+        FancyGraphics.settings.bloomStrength = 0.25;
+        FancyGraphics.settings.bloomRadius = 0.5;
+        FancyGraphics.settings.fogEnabled = true;
+        FancyGraphics.settings.fogDensity = 0.008;
+        try{ applyFancyRuntimeSettings?.(); }catch{}
+        try{ UI?.syncGraphicsSettings?.(); }catch{}
+      }
       needsRender = true;
       return actual;
     }
@@ -11887,15 +11898,36 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     canvas.height = Math.max(1, Math.floor(h * dpr));
     ctx.scale(dpr, dpr);
 
-    // rounded white pill + text
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.strokeStyle = 'rgba(0,0,0,0.10)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(r,0);
-    ctx.arcTo(w,0,w,h,r); ctx.arcTo(w,h,0,h,r); ctx.arcTo(0,h,0,0,r); ctx.arcTo(0,0,w,0,r);
-    ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#1f2937';
+    // Check if present mode is active
+    const isPresentMode = Scene.isPresentEnabled ? Scene.isPresentEnabled() : false;
+
+    if(isPresentMode){
+      // Crystal background for present mode (matches other UI elements)
+      ctx.fillStyle = 'rgba(17, 24, 39, 0.66)'; // slate-900 @ ~66%
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(r,0.5);
+      ctx.arcTo(w-0.5,0.5,w-0.5,h-0.5,r); 
+      ctx.arcTo(w-0.5,h-0.5,0.5,h-0.5,r); 
+      ctx.arcTo(0.5,h-0.5,0.5,0.5,r); 
+      ctx.arcTo(0.5,0.5,w-0.5,0.5,r);
+      ctx.closePath(); 
+      ctx.fill(); 
+      ctx.stroke();
+      ctx.fillStyle = '#cfe0ff'; // Light blue text for dark background
+    } else {
+      // rounded white pill for normal mode
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.strokeStyle = 'rgba(0,0,0,0.10)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(r,0);
+      ctx.arcTo(w,0,w,h,r); ctx.arcTo(w,h,0,h,r); ctx.arcTo(0,h,0,0,r); ctx.arcTo(0,0,w,0,r);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#1f2937';
+    }
+    
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `700 ${fontSize}px 'Inter', sans-serif`;
     ctx.fillText(text, w/2, h/2);
@@ -11919,6 +11951,8 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     const aspect = w/h;
     // Slightly reduce width/height to avoid a stretched look while preserving aspect
     mesh.scale.set(1.0*aspect, 1.0, 1);   // world-unit size
+    // Proper render order: above voxels (100-300) but below transparent UI (2000+)
+    mesh.renderOrder = 500; 
     mesh.userData.isLabel = true;
     return markBillboard(mesh);
   }
@@ -12735,15 +12769,42 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     baseLightsGroup = new THREE.Group();
     baseLightsGroup.name = 'BaseLighting';
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.7);
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x8899aa, 0.7);
-    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-    dir.position.set(8, 12, 6);
-    dir.castShadow = false;
+    // Three-point lighting setup (always present, independent of floor modes)
+    const strength = (FancyGraphics?.settings?.lightStrength ?? 1) || 1;
+    const defaults = FancyGraphics?.lightDefaults || { key: 2.8, fill: 1.4, rim: 1.0, hemi: 0.6 };
+    
+    // Key light (main)
+    const key = new THREE.DirectionalLight(0xffffff, defaults.key * strength);
+    key.position.set(-8, 14, 10);
+    key.castShadow = false;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.near = 0.5;
+    key.shadow.camera.far = 200;
+    key.shadow.camera.left = -80;
+    key.shadow.camera.right = 80;
+    key.shadow.camera.top = 80;
+    key.shadow.camera.bottom = -80;
+    key.shadow.bias = -0.0008;
+    
+    // Fill light
+    const fill = new THREE.DirectionalLight(0xffffff, defaults.fill * strength);
+    fill.position.set(10, 6, 12);
+    fill.castShadow = false;
+    
+    // Rim/back light
+    const rim = new THREE.DirectionalLight(0xffffff, defaults.rim * strength);
+    rim.position.set(0, 8, -14);
+    rim.castShadow = false;
+    
+    // Ambient and hemisphere
+    const ambient = new THREE.AmbientLight(0xffffff, 0.4 * strength);
+    const hemi = new THREE.HemisphereLight(0xdbeafe, 0x0f172a, defaults.hemi * strength);
 
+    baseLightsGroup.add(key);
+    baseLightsGroup.add(fill);
+    baseLightsGroup.add(rim);
     baseLightsGroup.add(ambient);
     baseLightsGroup.add(hemi);
-    baseLightsGroup.add(dir);
 
     scene.add(baseLightsGroup);
     updateBaseLightingVisibility();
@@ -12821,6 +12882,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth,window.innerHeight);
       updateFancyComposerSize();
+      try{ OceanBackdrop.resizePost(window.innerWidth, window.innerHeight); }catch{}
     });
     renderer.domElement.addEventListener('pointerdown', onPick);
     // 3D hover sync: highlight cell under cursor
@@ -13024,7 +13086,7 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
           opacity: 0.0,     // fully invisible (colorWrite=false still ensures no color)
           side: THREE.FrontSide,
           depthTest: true,
-          depthWrite: false,
+          depthWrite: true, // Write depth to ensure proper occlusion
           toneMapped: false,
           colorWrite: false
         });
@@ -14520,6 +14582,15 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   }
 
   function updateFocus(sel){
+    // Hide celli during derez effect
+    if(celliDerezState.active){
+      if(celli) celli.visible = false;
+      if(arrayaAvatar) arrayaAvatar.setVisible(false);
+      focusMarker.visible=false;
+      selectionCelli.visible=false;
+      return;
+    }
+    
     if(!sel.arrayId||!sel.focus){
       focusMarker.visible=false;
       selectionCelli.visible=false;
@@ -15390,14 +15461,266 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
   // Expose for external calls post-IIFE; also mirror on window for robustness
   try{ Scene.addTimedTranslation = addTimedTranslation; }catch{}
   try{ window.__addTimedTranslation = addTimedTranslation; }catch{}
+  
+  // ===== Celli Derez Effect =====
+  const derezEffects = [];
+  const celliDerezState = { active: false, lastY: null, respawnScheduled: false, respawnTime: 0, respawnData: null };
+  let derezParticleGeometry = null;
+  
+  function triggerCelliDerez(worldPos){
+    if(!scene || !THREE || celliDerezState.active) return;
+    try{
+      const base = new THREE.Group();
+      const px = Number.isFinite(worldPos?.x) ? worldPos.x : 0;
+      const py = Number.isFinite(worldPos?.y) ? worldPos.y : 0;
+      const pz = Number.isFinite(worldPos?.z) ? worldPos.z : 0;
+      base.position.set(px, py + 0.4, pz);
+      
+      // Rotate Celli to face the camera
+      if(camera){
+        const camPos = camera.position.clone();
+        const celliPos = new THREE.Vector3(px, py + 0.4, pz);
+        const direction = new THREE.Vector3().subVectors(camPos, celliPos);
+        direction.y = 0; // Keep rotation only on horizontal plane
+        direction.normalize();
+        const angle = Math.atan2(direction.x, direction.z);
+        base.rotation.y = angle;
+      }
+
+      const layout = [
+        { size: [0.36, 0.48, 0.28], offset: [0, -0.05, 0], color: 0xf59e0b },
+        { size: [0.32, 0.24, 0.24], offset: [0, 0.32, 0], color: 0xfcd34d },
+        { size: [0.08, 0.08, 0.05], offset: [-0.1, 0.36, 0.12], color: 0x1f2937 },
+        { size: [0.08, 0.08, 0.05], offset: [0.1, 0.36, 0.12], color: 0x1f2937 },
+        { size: [0.14, 0.06, 0.05], offset: [0, 0.26, 0.13], color: 0x1f2937 },
+        { size: [0.08, 0.06, 0.05], offset: [-0.16, 0.3, 0.12], color: 0xec4899 },
+        { size: [0.08, 0.06, 0.05], offset: [0.16, 0.3, 0.12], color: 0xec4899 },
+        { size: [0.36, 0.08, 0.12], offset: [0, 0.5, 0], color: 0xfcd34d },
+        { size: [0.16, 0.12, 0.08], offset: [-0.24, 0.5, 0], color: 0xf59e0b },
+        { size: [0.16, 0.12, 0.08], offset: [0.24, 0.5, 0], color: 0xf59e0b },
+        { size: [0.12, 0.4, 0.12], offset: [-0.26, -0.2, 0], color: 0xf59e0b },
+        { size: [0.12, 0.4, 0.12], offset: [0.26, -0.2, 0], color: 0xf59e0b },
+        { size: [0.12, 0.24, 0.12], offset: [-0.12, -0.46, 0], color: 0xf59e0b },
+        { size: [0.12, 0.24, 0.12], offset: [0.12, -0.46, 0], color: 0xf59e0b }
+      ];
+
+      const voxels = [];
+      const boundsMin = new THREE.Vector3(Infinity, Infinity, Infinity);
+      const boundsMax = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+
+      layout.forEach(part=>{
+        const geo = new THREE.BoxGeometry(part.size[0], part.size[1], part.size[2]);
+        const mat = new THREE.MeshStandardMaterial({
+          color: part.color,
+          emissive: new THREE.Color(part.color),
+          emissiveIntensity: 0.2,
+          transparent: true,
+          opacity: 1,
+          depthWrite: false
+        });
+        mat.toneMapped = false;
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(part.offset[0], part.offset[1], part.offset[2]);
+        base.add(mesh);
+        voxels.push({ mesh, geometry: geo, material: mat });
+
+        const half = new THREE.Vector3(part.size[0] / 2, part.size[1] / 2, part.size[2] / 2);
+        boundsMin.x = Math.min(boundsMin.x, mesh.position.x - half.x);
+        boundsMin.y = Math.min(boundsMin.y, mesh.position.y - half.y);
+        boundsMin.z = Math.min(boundsMin.z, mesh.position.z - half.z);
+        boundsMax.x = Math.max(boundsMax.x, mesh.position.x + half.x);
+        boundsMax.y = Math.max(boundsMax.y, mesh.position.y + half.y);
+        boundsMax.z = Math.max(boundsMax.z, mesh.position.z + half.z);
+      });
+
+      const glow = new THREE.PointLight(0xfcd34d, 0, 3.5, 2);
+      glow.position.set(0, 0.45, 0);
+      base.add(glow);
+
+      scene.add(base);
+
+      derezEffects.push({
+        group: base,
+        voxels,
+        bounds: { min: boundsMin, max: boundsMax },
+        particles: [],
+        light: glow,
+        stage: 'glow',
+        stageTime: 0,
+        totalTime: 0
+      });
+
+      celliDerezState.active = true;
+      if(celli){ celli.visible = false; }
+      needsRender = true;
+    }catch(e){
+      console.warn('Failed to trigger Celli derez effect', e);
+      celliDerezState.active = false;
+      if(celli){ celli.visible = true; }
+    }
+  }
+
+  function cleanupDerezEffect(effect){
+    try{
+      if(effect.particles){
+        effect.particles.forEach(p=>{
+          if(p?.mesh){
+            effect.group?.remove(p.mesh);
+            try{ p.material?.dispose?.(); }catch{}
+          }
+        });
+        effect.particles.length = 0;
+      }
+      if(effect.light){
+        try{ effect.group?.remove(effect.light); }catch{}
+      }
+      if(effect.group){
+        try{ scene.remove(effect.group); }catch{}
+      }
+    }catch(e){
+      console.warn('Failed to cleanup derez effect', e);
+    }
+    effect.voxels = [];
+    celliDerezState.active = false;
+    
+    // Trigger delayed respawn if scheduled
+    if(celliDerezState.respawnScheduled && celliDerezState.respawnData){
+      const data = celliDerezState.respawnData;
+      console.log('[DEREZ] Animation complete, executing delayed respawn');
+      if(playerBody){
+        playerBody.setTranslation(data.pos, true);
+        playerBody.setLinvel({x: 0, y: 0, z: 0}, true);
+        cachedPlayerPos.set(data.pos.x, data.pos.y, data.pos.z);
+        jumpVelocity = 0;
+        landingSquashTime = 0;
+        wasGroundedLastFrame = false;
+        lastLandKey = null;
+      }
+      // Re-enable camera controls
+      if(controls){
+        try{ controls.enabled = true; }catch{}
+      }
+      celliDerezState.respawnScheduled = false;
+      celliDerezState.respawnData = null;
+    }
+    
+    if(celli){ celli.visible = true; }
+    needsRender = true;
+  }
+
+  function updateDerezEffects(deltaMs){
+    if(!derezEffects.length) return;
+    const deltaSec = deltaMs / 1000;
+    for(let i = derezEffects.length - 1; i >= 0; i--){
+      const effect = derezEffects[i];
+      if(!effect) continue;
+      effect.stageTime += deltaMs;
+      effect.totalTime += deltaMs;
+      needsRender = true;
+
+      if(effect.stage === 'glow'){
+        const glowT = Math.min(1, effect.stageTime / 350);
+        const pulse = 0.94 + 0.08 * Math.sin(glowT * Math.PI);
+        effect.voxels.forEach(v=>{
+          if(!v?.mesh || !v.material) return;
+          v.mesh.scale.set(pulse, pulse, pulse);
+          v.material.emissiveIntensity = 0.6 + 1.8 * glowT;
+          v.material.opacity = 1;
+        });
+        if(effect.light){
+          effect.light.intensity = THREE.MathUtils.lerp(0, 3.2, glowT);
+        }
+        if(effect.stageTime >= 350){
+          effect.stage = 'burst';
+          effect.stageTime = 0;
+          if(effect.light){ effect.light.intensity = 0; }
+          if(!derezParticleGeometry){
+            derezParticleGeometry = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+          }
+          const colorPool = effect.voxels.map(v=>v.material?.color?.getHex?.() ?? 0xf59e0b);
+          const particleCount = Math.max(24, colorPool.length * 6);
+          const bounds = effect.bounds;
+          effect.voxels.forEach(v=>{
+            if(!v) return;
+            if(v.mesh){
+              effect.group?.remove(v.mesh);
+            }
+            try{ v.geometry?.dispose?.(); }catch{}
+            try{ v.material?.dispose?.(); }catch{}
+          });
+          effect.voxels = [];
+          effect.particles = [];
+          for(let j = 0; j < particleCount; j++){
+            const colorHex = colorPool[j % colorPool.length];
+            const material = new THREE.MeshStandardMaterial({
+              color: colorHex,
+              emissive: new THREE.Color(colorHex),
+              emissiveIntensity: 1.3,
+              transparent: true,
+              opacity: 1,
+              depthWrite: false
+            });
+            material.toneMapped = false;
+            const particle = new THREE.Mesh(derezParticleGeometry, material);
+            const rx = THREE.MathUtils.lerp(bounds.min.x, bounds.max.x, Math.random());
+            const ry = THREE.MathUtils.lerp(bounds.min.y, bounds.max.y, Math.random());
+            const rz = THREE.MathUtils.lerp(bounds.min.z, bounds.max.z, Math.random());
+            particle.position.set(rx, ry, rz);
+            particle.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+            effect.group.add(particle);
+            effect.particles.push({
+              mesh: particle,
+              material,
+              velocity: new THREE.Vector3((Math.random()-0.5)*2.2, Math.random()*2.4 + 1.8, (Math.random()-0.5)*2.2),
+              spin: new THREE.Vector3((Math.random()-0.5)*4, (Math.random()-0.5)*4, (Math.random()-0.5)*4)
+            });
+          }
+        }
+      } else if(effect.stage === 'burst'){
+        const fade = Math.min(1, effect.stageTime / 700);
+        if(effect.particles){
+          effect.particles.forEach(p=>{
+            if(!p?.mesh || !p.material) return;
+            p.velocity.y -= 6 * deltaSec;
+            p.velocity.x *= 0.97;
+            p.velocity.z *= 0.97;
+            p.mesh.position.addScaledVector(p.velocity, deltaSec);
+            p.mesh.rotation.x += p.spin.x * deltaSec;
+            p.mesh.rotation.y += p.spin.y * deltaSec;
+            p.mesh.rotation.z += p.spin.z * deltaSec;
+            const life = Math.max(0, 1 - fade);
+            p.material.opacity = life;
+            p.material.emissiveIntensity = 1.3 * life;
+            p.mesh.scale.setScalar(THREE.MathUtils.lerp(1, 0.6, fade));
+          });
+        }
+        if(effect.stageTime >= 700){
+          cleanupDerezEffect(effect);
+          derezEffects.splice(i, 1);
+          continue;
+        }
+      }
+    }
+  }
+  // ===== End Derez Effect =====
+  
   let lastFrame = 0;
   function animate(time){
     // Limit to 60fps and drive via single chain
-    if(time - lastFrame < 16){ __rafId = requestAnimationFrame(animate); return; }
+    const deltaRaw = lastFrame ? (time - lastFrame) : 16;
+    if(deltaRaw < 16){ __rafId = requestAnimationFrame(animate); return; }
+    const deltaMs = Math.min(64, deltaRaw);
     lastFrame = time;
     try {
+      updateDerezEffects(deltaMs);
       Scene.updateDeleteEffects?.(16);
       if(arrayaAvatar) arrayaAvatar.update(time * 0.001);
+      
+      // Reset derez lastY when not in physics mode
+      const physicsActive = !!Store.getState().scene?.physics;
+      if(!physicsActive){
+        celliDerezState.lastY = null;
+      }
       
       // Update avatars every frame for continuous camera tracking
       const sel = Store.getState().selection;
@@ -15705,16 +16028,57 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
                 respawnPos = { ...respawns[hostArrId].world };
               }
             }catch{}
-            if(p.y < 0 && respawnPos){
-              console.log('[PHYSICS] Fell off world, respawning at spawn point');
-              playerBody.setTranslation(respawnPos, true);
-              playerBody.setLinvel({x: 0, y: 0, z: 0}, true);
-              cachedPlayerPos.set(respawnPos.x, respawnPos.y, respawnPos.z);
-              jumpVelocity = 0;
-              landingSquashTime = 0;
-              wasGroundedLastFrame = false;
-              lastLandKey = null;
+            
+            // Check for derez effect trigger
+            let respawned = false;
+            const prevY = celliDerezState.lastY;
+            const crossedZero = (prevY != null && prevY > 0 && p.y < 0);
+            if(p.y < 0){
+              if(crossedZero && !celliDerezState.active && respawnPos){
+                console.log('[DEREZ] Triggering derez animation, respawn delayed');
+                triggerCelliDerez({ x: p.x, y: 0, z: p.z });
+                // Freeze physics during animation
+                if(playerBody){
+                  playerBody.setLinvel({x: 0, y: 0, z: 0}, true);
+                  playerBody.setAngvel({x: 0, y: 0, z: 0}, true);
+                }
+                // Pause camera controls during animation
+                if(controls){
+                  try{ controls.enabled = false; }catch{}
+                }
+                // Schedule respawn after derez animation completes (~1050ms)
+                celliDerezState.respawnScheduled = true;
+                celliDerezState.respawnData = { pos: respawnPos };
+                respawned = true;
+              } else if(respawnPos && !celliDerezState.active){
+                // Immediate respawn if no derez animation
+                console.log('[PHYSICS] Fell off world, respawning at spawn point');
+                playerBody.setTranslation(respawnPos, true);
+                playerBody.setLinvel({x: 0, y: 0, z: 0}, true);
+                cachedPlayerPos.set(respawnPos.x, respawnPos.y, respawnPos.z);
+                jumpVelocity = 0;
+                landingSquashTime = 0;
+                wasGroundedLastFrame = false;
+                lastLandKey = null;
+                respawned = true;
+              }
+            }
+            if(!respawned){
+              celliDerezState.lastY = cachedPlayerPos.y;
             } else {
+              celliDerezState.lastY = null;
+            }
+            
+            // Skip physics updates during derez animation
+            if(celliDerezState.active && celliDerezState.respawnScheduled){
+              // Keep player frozen at derez position
+              if(playerBody){
+                const derezPos = { x: p.x, y: Math.max(-10, p.y), z: p.z };
+                playerBody.setTranslation(derezPos, true);
+                playerBody.setLinvel({x: 0, y: 0, z: 0}, true);
+                playerBody.setAngvel({x: 0, y: 0, z: 0}, true);
+              }
+            } else if(!respawned){
               // Sync jumpVelocity with actual physics velocity for animation
               const vel = playerBody.linvel();
               jumpVelocity = vel.y * 2; // Scale for animation sensitivity
@@ -16245,9 +16609,28 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
         }
       }
       OceanBackdrop.update(dtFancy);
+    } else {
+      // Ocean should update even when FancyGraphics is disabled
+      const dt = deltaMs / 1000;
+      OceanBackdrop.update(dt);
     }
 
-    if(FancyGraphics.enabled && FancyGraphics.composer){
+    // Ocean post-processing takes priority when active
+    const oceanSettings = OceanBackdrop.getSettings();
+    const useOceanPost = oceanSettings && oceanSettings.active;
+    
+    if(useOceanPost){
+      // Use ocean's custom post-processing pipeline
+      const didRender = OceanBackdrop.renderWithPost(time * 0.001);
+      if(!didRender){
+        // Fallback if ocean post fails
+        if(FancyGraphics.enabled && FancyGraphics.composer){
+          FancyGraphics.composer.render();
+        } else {
+          renderer.render(scene,camera);
+        }
+      }
+    } else if(FancyGraphics.enabled && FancyGraphics.composer){
       FancyGraphics.composer.render();
     } else {
       renderer.render(scene,camera); // Simple rendering in build mode
@@ -20278,16 +20661,14 @@ let physicsCameraConfig = { mode:'free', distance:10, allowRotation:false };
     }
   }
 
- return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, hydrateAll, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, setOceanEnabled, updateOceanSettings, getOceanSettings, captureOceanScreenshot:()=>{
-   try{ return OceanBackdrop.captureScreenshot?.(); }catch(e){ console.warn('[OCEAN] capture screenshot failed', e); return null; }
- }, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsDebugAll, setPhysicsCamera, resetContactCache, setPhysicsSpawn, isPhysicsInputCaptured:()=>syncPhysicsInputCapture(), facingFromCamera, getViewAxisForArray:(arrOrFrame, observer)=>{
-    try{
-      if(!arrOrFrame) return null;
-      const frame = arrOrFrame.matrixWorld ? arrOrFrame : (arrOrFrame._frame || null);
-      if(!frame) return null;
-      return viewAxisForArray(frame, observer);
-    }catch(e){ console.warn('getViewAxisForArray failed', e); return null; }
-  }};
+ return {init, renderArray, renderChunk, renderLayer, updateFocus, centerOnArray, syncVisibility, setGridVisible, setAxesVisible, rebuildCollidersForArray, debounceColliderRebuild, setHighlightMode, setCameraLock, setViewMode, initAvatars, updateAvatars, addTimedPreview, handleJump, spawnPlayerAt, getCamera:()=>camera, getControls:()=>controls, updateValueSprite, setArrayOffset, reconcileAllArrays, setupRenderer, setupLighting, addConnection, removeConnection, createArraySnapshot, worldPos, getScene:()=>scene, getLayerMesh:(key)=>layerMeshes.get(key), rotateArrayAround, cellWorldPos, startDatafallDelete, updateDeleteEffects, removeArrayGraphics, refreshArray, hydrateAll, updateArrayLabelPlacement, dockOffsetFor, Chunk, ChunkManager, localPos, createCellMaterial, GEO_VOXEL, getCell:getCellFast, captureCamera, restoreCamera, updateCellColor:(arrId, coord)=>updateCellColor(arrId, coord), togglePresentMode, isPresentEnabled, getGraphicsSettings, updateGraphicsSettings, setOceanEnabled, updateOceanSettings, getOceanSettings, upsertCellLight, removeCellLight, refreshLightsForArray, togglePhysicsMode, setPhysicsDebugAll, setPhysicsCamera, resetContactCache, setPhysicsSpawn, isPhysicsInputCaptured:()=>syncPhysicsInputCapture(), facingFromCamera, triggerCelliDerez, celliDerezState, getViewAxisForArray:(arrOrFrame, observer)=>{
+   try{
+     if(!arrOrFrame) return null;
+     const frame = arrOrFrame.matrixWorld ? arrOrFrame : (arrOrFrame._frame || null);
+     if(!frame) return null;
+     return viewAxisForArray(frame, observer);
+   }catch(e){ console.warn('getViewAxisForArray failed', e); return null; }
+ }};
 })();
 
 /* ===========================
@@ -20429,6 +20810,7 @@ const UI = (()=>{
     fogStart: document.getElementById('oceanFogStart'),
     fogEnd: document.getElementById('oceanFogEnd'),
     fogColor: document.getElementById('oceanFogColor'),
+    gridDensity: document.getElementById('oceanGridDensity'),
     gridOpacity: document.getElementById('oceanGridOpacity')
   };
   const oceanValueDisplays = {
@@ -20480,6 +20862,7 @@ const UI = (()=>{
     focusRange: document.getElementById('oceanFocusRangeValue'),
     fogStart: document.getElementById('oceanFogStartValue'),
     fogEnd: document.getElementById('oceanFogEndValue'),
+    gridDensity: document.getElementById('oceanGridDensityValue'),
     gridOpacity: document.getElementById('oceanGridOpacityValue')
   };
   const oceanSliderFormatters = {
@@ -20531,6 +20914,7 @@ const UI = (()=>{
     focusRange: (v)=>Math.round(Number(v)||0),
     fogStart: (v)=>Math.round(Number(v)||0),
     fogEnd: (v)=>Math.round(Number(v)||0),
+    gridDensity: (v)=>Math.round(Number(v)||0),
     gridOpacity: (v)=>Number(v).toFixed(2)
   };
   const oceanRangeKeys = [
@@ -20544,7 +20928,7 @@ const UI = (()=>{
     'bloomStrength','vignetteStrength','grainAmount',
     'rayStrength','rayDecay','rayExposure',
     'lighthouseStrength','focusDistance','dofStrength','focusRange',
-    'fogStart','fogEnd','gridOpacity'
+    'fogStart','fogEnd','gridDensity','gridOpacity'
   ];
   const oceanColorKeys = ['skyTopColor','skyMidColor','skyBotColor','deepColor','shallowColor','foamColor','horizonColor','fogColor'];
   const oceanToggleKeys = ['showGrid','showSphere','showTowers','showFloaters','enableBloom','enableVignette','enableRays','enableLighthouse'];
@@ -20892,7 +21276,15 @@ const UI = (()=>{
       graphicsClose.addEventListener('click',(e)=>{ e.preventDefault(); hideGraphicsPanel(); });
     }
     if(els.oceanSettingsBtn){
-      els.oceanSettingsBtn.onclick=()=>{ toggleOceanPanel(); };
+      els.oceanSettingsBtn.onclick=()=>{ 
+        // Auto-enable ocean when opening settings
+        Actions.setOceanEnabled(true);
+        if(!(Scene.isPresentEnabled ? Scene.isPresentEnabled() : false)){
+          Actions.togglePresentMode();
+          syncPresentUI(true);
+        }
+        toggleOceanPanel(); 
+      };
     }
     if(oceanClose && !oceanClose._wired){
       oceanClose._wired = true;
@@ -21008,6 +21400,14 @@ const UI = (()=>{
         if(!Number.isFinite(value)) return;
         Actions.updateOceanSettings({ [key]: value });
         updateOceanDisplay(key, value);
+        // Rebuild grid when density changes
+        if(key === 'gridDensity'){
+          try{
+            OceanBackdrop?.recreateGrid?.();
+          }catch(e){
+            console.warn('Failed to rebuild ocean grid:', e);
+          }
+        }
       });
     });
 
