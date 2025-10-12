@@ -1806,34 +1806,34 @@ const localTime = celliTime - data.dropDelay;
  posX = THREE.MathUtils.lerp(data.targetX, letterOffsetX + monoX, greenProgress);
  posY = THREE.MathUtils.lerp(data.targetY, monoY, greenProgress);
  
- voxel.position.x = posX;
- voxel.position.y = posY;
- voxel.scale.set(data.baseScale * 0.95, data.baseScale * 0.95, data.baseScale * 0.95);
- } else if (snapElapsed < vibrateDuration + jiggleDuration + greenTransitionDuration + flatHoldDuration) {
- // Hold as flat green pixels in mono-spaced positions
- bloomPass.strength = 0.0;
- voxel.material.color.setRGB(0.0, 1.0, 0.0);
- voxel.material.opacity = 1.0;
- 
- // Hold at mono-spaced positions
- const monoSpacing = 0.022;
- const monoX = data.gridCol * monoSpacing;
- const monoY = -data.gridRow * monoSpacing;
- const letterOffsetX = data.letterIdx * 5 * monoSpacing;
- 
- voxel.position.x = letterOffsetX + monoX;
- voxel.position.y = monoY;
- voxel.scale.set(data.baseScale * 0.95, data.baseScale * 0.95, data.baseScale * 0.95);
- } else {
- // After flat hold, start move to corner
- if (!celliMoveToCornerStarted) {
- celliMoveToCornerStarted = true;
- celliMoveToCornerTime = t;
- bloomPass.strength = 0.0;
- console.log('%c[GREEN] ?? Move to corner started at t = ' + t, 'background: #0a0; color: #fff; font-weight: bold; padding: 4px;');
- console.log('%c[GREEN] ✓ NOW READY: Press Shift to trigger HELL transformation!', 'background: #ff0; color: #000; font-size: 16px; font-weight: bold; padding: 8px;');
- }
- }
+			voxel.position.x = posX;
+			voxel.position.y = posY;
+			voxel.scale.set(data.baseScale * 0.95, data.baseScale * 0.95, data.baseScale * 0.95);
+		} else if (snapElapsed < vibrateDuration + jiggleDuration + greenTransitionDuration + flatHoldDuration + 1.8) {
+			// Hold as flat green pixels in mono-spaced positions (includes pause after HELL forms)
+			bloomPass.strength = 0.0;
+			voxel.material.color.setRGB(0.0, 1.0, 0.0);
+			voxel.material.opacity = 1.0;
+			
+			// Hold at mono-spaced positions
+			const monoSpacing = 0.022;
+			const monoX = data.gridCol * monoSpacing;
+			const monoY = -data.gridRow * monoSpacing;
+			const letterOffsetX = data.letterIdx * 5 * monoSpacing;
+			
+			voxel.position.x = letterOffsetX + monoX;
+			voxel.position.y = monoY;
+			voxel.scale.set(data.baseScale * 0.95, data.baseScale * 0.95, data.baseScale * 0.95);
+		} else {
+			// After flat hold + pause, start move to corner
+			if (!celliMoveToCornerStarted) {
+				celliMoveToCornerStarted = true;
+				celliMoveToCornerTime = t;
+				bloomPass.strength = 0.0;
+				console.log('%c[GREEN] ?? Move to corner started at t = ' + t, 'background: #0a0; color: #fff; font-weight: bold; padding: 4px;');
+				console.log('%c[GREEN] ✓ NOW READY: Press Shift to trigger HELL transformation!', 'background: #ff0; color: #000; font-size: 16px; font-weight: bold; padding: 8px;');
+			}
+		}
  
  // Move CELLI to corner animation (runs after flat hold)
  if (celliMoveToCornerStarted) {
@@ -53569,110 +53569,204 @@ frame();
 });
 
 // --- TEST button logic: Load and play test.mp3 ---
+console.log('%c🔍 SCRIPT EXECUTION CHECKPOINT 1: Starting TEST button initialization', 'background: #ff9800; color: #000; font-size: 14px; font-weight: bold; padding: 8px;');
+
+// Wait for DOM to be ready
+setTimeout(() => {
+console.log('%c🔍 CHECKPOINT 2: Inside setTimeout - DOM should be ready', 'background: #ff9800; color: #000; font-size: 14px; font-weight: bold; padding: 8px;');
+
 const testAudioBtn = document.getElementById('testAudioBtn');
-console.log('%c🔍 INITIALIZING TEST BUTTON', 'background: #ff9800; color: #000; font-size: 14px; font-weight: bold; padding: 8px;');
-console.log('🔍 testAudioBtn element:', testAudioBtn);
-console.log('🔍 Button exists:', !!testAudioBtn);
+console.log('🔍 testAudioBtn lookup result:', testAudioBtn);
+console.log('🔍 testAudioBtn is null?', testAudioBtn === null);
+console.log('🔍 testAudioBtn is undefined?', testAudioBtn === undefined);
+console.log('🔍 testAudioBtn truthy?', !!testAudioBtn);
+console.log('🔍 document.readyState:', document.readyState);
+
+// List all buttons to verify
+const allButtons = document.querySelectorAll('button');
+console.log('🔍 All buttons in document:', allButtons.length);
+allButtons.forEach((btn, i) => {
+  console.log(`  Button ${i}: id="${btn.id || '(no id)'}", text="${btn.textContent.trim().substring(0, 20)}"`);
+});
 
 if (testAudioBtn) {
-console.log('✅ TEST button found in DOM');
-console.log('🔍 Button ID:', testAudioBtn.id);
-console.log('🔍 Button innerHTML:', testAudioBtn.innerHTML);
-console.log('🔍 Button classList:', testAudioBtn.classList);
+  console.log('%c✅ TEST BUTTON FOUND!', 'background: #0f0; color: #000; font-size: 14px; font-weight: bold; padding: 8px;');
+  console.log('🔍 Button properties:', {
+    id: testAudioBtn.id,
+    tagName: testAudioBtn.tagName,
+    innerHTML: testAudioBtn.innerHTML,
+    disabled: testAudioBtn.disabled,
+    style: testAudioBtn.getAttribute('style'),
+    parentElement: testAudioBtn.parentElement?.tagName
+  });
 
-// Create an HTML5 Audio element for test.mp3 (works with file:// protocol)
-let testAudio = null;
+  // Create an HTML5 Audio element for test.mp3 (works with file:// protocol)
+  let testAudio = null;
 
-testAudioBtn.addEventListener('click', () => {
-console.log('%c🔊 TEST BUTTON CLICKED!', 'background: #0f0; color: #000; font-size: 16px; font-weight: bold; padding: 8px;');
-console.log('🔊 Click event registered successfully!');
-console.log('🔊 Timestamp:', new Date().toISOString());
-console.log('🔊 Document location:', window.location.href);
-console.log('🔊 Document base URI:', document.baseURI);
+  // Test if event listener is attached
+  console.log('%c🔍 CHECKPOINT 3: Attaching click event listener', 'background: #ff9800; color: #000; font-size: 14px; font-weight: bold; padding: 8px;');
+  
+  testAudioBtn.addEventListener('click', (event) => {
+    console.log('%c🔊🔊🔊 TEST BUTTON CLICKED! 🔊🔊🔊', 'background: #0f0; color: #000; font-size: 18px; font-weight: bold; padding: 10px;');
+    console.log('🔊 Event object:', event);
+    console.log('🔊 Event target:', event.target);
+    console.log('🔊 Event currentTarget:', event.currentTarget);
+    console.log('🔊 Event type:', event.type);
+    console.log('🔊 Timestamp:', new Date().toISOString());
+    console.log('🔊 Performance now:', performance.now());
+    console.log('🔊 Document location:', window.location.href);
+    console.log('🔊 Document base URI:', document.baseURI);
+    console.log('🔊 Current working directory (approx):', window.location.pathname);
 
-try {
-// Destroy previous audio instance if it exists
-if (testAudio) {
-console.log('🔊 Cleaning up previous audio instance');
-testAudio.pause();
-testAudio.src = '';
-}
+    try {
+      console.log('%c🔊 INSIDE TRY BLOCK', 'background: #ffff00; color: #000; font-size: 14px; font-weight: bold; padding: 4px;');
+      
+      // Destroy previous audio instance if it exists
+      if (testAudio) {
+        console.log('🔊 Cleaning up previous audio instance');
+        testAudio.pause();
+        testAudio.src = '';
+      }
 
-// Try multiple path variations
-const paths = [
-'test.mp3',
-'./test.mp3',
-'c:/Users/Scott/Desktop/test.mp3',
-'C:/Users/Scott/Desktop/test.mp3',
-'file:///c:/Users/Scott/Desktop/test.mp3'
-];
+      // Try multiple path variations
+      const paths = [
+        'test.mp3',
+        './test.mp3',
+        '../test.mp3',
+        'c:/Users/Scott/Desktop/test.mp3',
+        'C:/Users/Scott/Desktop/test.mp3',
+        'file:///c:/Users/Scott/Desktop/test.mp3',
+        'file:///C:/Users/Scott/Desktop/test.mp3'
+      ];
 
-console.log('🔊 Trying path variations:', paths);
+      console.log('🔊 Trying path variations:', paths);
+      console.log('🔊 window.location.href:', window.location.href);
+      console.log('🔊 window.location.origin:', window.location.origin);
 
-// Use the first path
-const audioPath = paths[0];
-console.log(`🔊 Creating Audio element with path: "${audioPath}"`);
+      // Use the first path
+      const audioPath = paths[0];
+      console.log(`%c🔊 Creating Audio element with path: "${audioPath}"`, 'background: #00ffff; color: #000; font-weight: bold; padding: 4px;');
 
-// Create new Audio element (HTML5 Audio works with file:// protocol)
-testAudio = new Audio(audioPath);
-console.log('🔊 Audio element created:', testAudio);
-console.log('🔊 Audio.src:', testAudio.src);
+      // Create new Audio element (HTML5 Audio works with file:// protocol)
+      testAudio = new Audio(audioPath);
+      console.log('🔊 Audio element created successfully');
+      console.log('🔊 Audio constructor:', testAudio.constructor.name);
+      console.log('🔊 Audio.src (resolved):', testAudio.src);
+      console.log('🔊 Audio.currentSrc:', testAudio.currentSrc);
+      console.log('🔊 Audio.readyState:', testAudio.readyState);
+      console.log('🔊 Audio.networkState:', testAudio.networkState);
 
-// Add event listeners for debugging
-testAudio.addEventListener('loadeddata', () => {
-console.log('✅ Audio file loaded successfully!');
-console.log(`✅ Duration: ${testAudio.duration.toFixed(2)} seconds`);
-}, { once: true });
+      // Add event listeners for debugging
+      testAudio.addEventListener('loadstart', () => {
+        console.log('%c✅ loadstart: Browser has started to load the audio', 'background: #90EE90; color: #000; padding: 4px;');
+      });
 
-testAudio.addEventListener('canplay', () => {
-console.log('✅ Audio can play (buffered enough data)');
-}, { once: true });
+      testAudio.addEventListener('loadedmetadata', () => {
+        console.log('%c✅ loadedmetadata: Audio metadata loaded', 'background: #90EE90; color: #000; padding: 4px;');
+        console.log(`✅ Duration: ${testAudio.duration} seconds`);
+      });
 
-testAudio.addEventListener('playing', () => {
-console.log('✅ Audio is now playing!');
-}, { once: true });
+      testAudio.addEventListener('loadeddata', () => {
+        console.log('%c✅ loadeddata: Audio file loaded successfully!', 'background: #90EE90; color: #000; padding: 4px;');
+        console.log(`✅ Duration: ${testAudio.duration.toFixed(2)} seconds`);
+      });
 
-testAudio.addEventListener('ended', () => {
-console.log('✅ Audio playback finished');
-}, { once: true });
+      testAudio.addEventListener('canplay', () => {
+        console.log('%c✅ canplay: Audio can play (buffered enough data)', 'background: #90EE90; color: #000; padding: 4px;');
+      });
 
-testAudio.addEventListener('error', (e) => {
-console.error('❌ Audio loading error!');
-console.error(`❌ Error code: ${testAudio.error?.code}`);
-console.error(`❌ Error message: ${testAudio.error?.message}`);
-const errorMessages = {
-1: 'MEDIA_ERR_ABORTED - The user aborted the audio loading',
-2: 'MEDIA_ERR_NETWORK - A network error occurred while loading',
-3: 'MEDIA_ERR_DECODE - The audio file is corrupted or in an unsupported format',
-4: 'MEDIA_ERR_SRC_NOT_SUPPORTED - The audio source was not found or is not supported'
-};
-alert(`Cannot play test.mp3!\n\nError: ${errorMessages[testAudio.error?.code] || 'Unknown error'}\n\nMake sure:\n1. test.mp3 exists on Desktop (c:\\Users\\Scott\\Desktop\\test.mp3)\n2. The file is a valid MP3\n3. Check browser console for details`);
-});
+      testAudio.addEventListener('canplaythrough', () => {
+        console.log('%c✅ canplaythrough: Audio can play through without buffering', 'background: #90EE90; color: #000; padding: 4px;');
+      });
 
-// Attempt to play
-console.log('🔊 Calling play()...');
-testAudio.play().then(() => {
-console.log('✅ Play promise resolved - playback started');
-}).catch(err => {
-console.error('❌ Play promise rejected:', err);
-alert(`Playback error: ${err.message}\n\nThe file may not exist or be accessible.`);
-});
+      testAudio.addEventListener('playing', () => {
+        console.log('%c✅ playing: Audio is now playing!', 'background: #00ff00; color: #000; font-weight: bold; padding: 4px;');
+      });
 
-} catch (error) {
-console.error('❌ Error in TEST button handler:', error);
-alert(`Error: ${error.message}\n\nCheck browser console for details.`);
-}
-});
+      testAudio.addEventListener('ended', () => {
+        console.log('%c✅ ended: Audio playback finished', 'background: #90EE90; color: #000; padding: 4px;');
+      });
 
-console.log('%c✅ TEST BUTTON EVENT LISTENER ATTACHED', 'background: #0f0; color: #000; font-size: 14px; font-weight: bold; padding: 8px;');
-console.log('✅ TEST button initialized (HTML5 Audio mode)');
-console.log('✅ Click the TEST button to play test.mp3');
+      testAudio.addEventListener('error', (e) => {
+        console.error('%c❌❌❌ AUDIO ERROR EVENT FIRED ❌❌❌', 'background: #ff0000; color: #fff; font-size: 14px; font-weight: bold; padding: 6px;');
+        console.error('❌ Error event:', e);
+        console.error('❌ testAudio.error object:', testAudio.error);
+        console.error('❌ Error code:', testAudio.error?.code);
+        console.error('❌ Error message:', testAudio.error?.message);
+        
+        const errorMessages = {
+          1: 'MEDIA_ERR_ABORTED - The user aborted the audio loading',
+          2: 'MEDIA_ERR_NETWORK - A network error occurred while loading',
+          3: 'MEDIA_ERR_DECODE - The audio file is corrupted or in an unsupported format',
+          4: 'MEDIA_ERR_SRC_NOT_SUPPORTED - The audio source was not found or is not supported'
+        };
+        
+        const errorMsg = errorMessages[testAudio.error?.code] || 'Unknown error';
+        console.error('❌ Interpreted error:', errorMsg);
+        
+        alert(`❌ Cannot play test.mp3!\n\nError: ${errorMsg}\n\nTried path: ${audioPath}\nResolved to: ${testAudio.src}\n\nMake sure:\n1. test.mp3 exists at: c:\\Users\\Scott\\Desktop\\test.mp3\n2. The file is a valid MP3\n3. Check browser console for details`);
+      });
+
+      testAudio.addEventListener('suspend', () => {
+        console.log('%c⚠️ suspend: Browser has suspended loading (file may not exist)', 'background: #ffaa00; color: #000; padding: 4px;');
+      });
+
+      testAudio.addEventListener('stalled', () => {
+        console.log('%c⚠️ stalled: Media download has stalled', 'background: #ffaa00; color: #000; padding: 4px;');
+      });
+
+      // Attempt to play
+      console.log('%c🔊 Calling testAudio.play()...', 'background: #00ffff; color: #000; font-weight: bold; padding: 4px;');
+      
+      const playPromise = testAudio.play();
+      console.log('🔊 play() returned:', playPromise);
+      console.log('🔊 Is Promise?', playPromise instanceof Promise);
+      
+      playPromise.then(() => {
+        console.log('%c✅✅✅ PLAY PROMISE RESOLVED - PLAYBACK STARTED ✅✅✅', 'background: #00ff00; color: #000; font-size: 14px; font-weight: bold; padding: 6px;');
+      }).catch(err => {
+        console.error('%c❌❌❌ PLAY PROMISE REJECTED ❌❌❌', 'background: #ff0000; color: #fff; font-size: 14px; font-weight: bold; padding: 6px;');
+        console.error('❌ Error object:', err);
+        console.error('❌ Error name:', err.name);
+        console.error('❌ Error message:', err.message);
+        console.error('❌ Error stack:', err.stack);
+        
+        alert(`❌ Playback error: ${err.name}\n${err.message}\n\nTried: ${audioPath}\nResolved to: ${testAudio.src}\n\nThe file may not exist or be accessible.\n\nMake sure test.mp3 is at:\nc:\\Users\\Scott\\Desktop\\test.mp3`);
+      });
+
+      console.log('%c🔊 Click handler execution completed (async operations still running)', 'background: #00ffff; color: #000; font-weight: bold; padding: 4px;');
+
+    } catch (error) {
+      console.error('%c❌❌❌ EXCEPTION IN TEST BUTTON HANDLER ❌❌❌', 'background: #ff0000; color: #fff; font-size: 14px; font-weight: bold; padding: 6px;');
+      console.error('❌ Exception object:', error);
+      console.error('❌ Exception name:', error.name);
+      console.error('❌ Exception message:', error.message);
+      console.error('❌ Exception stack:', error.stack);
+      alert(`❌ Exception: ${error.name}\n${error.message}\n\nCheck browser console for details.`);
+    }
+  }, { capture: false, once: false, passive: false });
+
+  console.log('%c✅✅✅ TEST BUTTON EVENT LISTENER ATTACHED SUCCESSFULLY ✅✅✅', 'background: #0f0; color: #000; font-size: 14px; font-weight: bold; padding: 8px;');
+  console.log('✅ TEST button initialized (HTML5 Audio mode)');
+  console.log('✅ Click the TEST button to play test.mp3');
+  
+  // Test button click programmatically
+  console.log('%c🔍 To test: Programmatically trigger click with: testAudioBtn.click()', 'background: #ffff00; color: #000; padding: 4px;');
+  
 } else {
-console.error('%c❌ TEST BUTTON NOT FOUND IN DOM!', 'background: #f00; color: #fff; font-size: 14px; font-weight: bold; padding: 8px;');
-console.error('❌ testAudioBtn element not found in DOM');
-console.error('❌ Looking for element with id="testAudioBtn"');
-console.error('❌ Check if the button exists in the HTML');
+  console.error('%c❌❌❌ TEST BUTTON NOT FOUND IN DOM! ❌❌❌', 'background: #f00; color: #fff; font-size: 14px; font-weight: bold; padding: 8px;');
+  console.error('❌ testAudioBtn element not found in DOM');
+  console.error('❌ Looking for element with id="testAudioBtn"');
+  console.error('❌ Check if the button exists in the HTML');
+  console.error('❌ Current DOM state:');
+  console.error('  - document.body:', document.body);
+  console.error('  - document.getElementById("play"):', document.getElementById('play'));
+  console.error('  - document.getElementById("playBtn"):', document.getElementById('playBtn'));
 }
+
+console.log('%c🔍 CHECKPOINT 4: TEST button initialization complete', 'background: #ff9800; color: #000; font-size: 14px; font-weight: bold; padding: 8px;');
+
+}, 100); // Wait 100ms for DOM to be ready
 
  
 
